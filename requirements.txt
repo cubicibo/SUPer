@@ -1,0 +1,3 @@
+Pillow>=9.1.0
+numpy>=1.22.1
+py-flags>=1.1.4
