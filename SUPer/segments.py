@@ -721,8 +721,9 @@ class ODS(PGSegment):
     
     @rle_len.setter
     def rle_len(self, n_len: int) -> None:
+        n_len += 4 # For some reason there is always 4 added to the RLE data length
         if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
-            self.payload = (__class__.ODSOff.DATA_LEN.value, pack(">I", n_len+4)[1:])
+            self.payload = (__class__.ODSOff.DATA_LEN.value, pack(">I", n_len)[1:])
         else:
             raise AttributeError("ODS is not first in sequence.")
 
@@ -777,7 +778,7 @@ class ODS(PGSegment):
     def update(self, tot_len: Optional[int] = None) -> None:
         if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
             if __class__.ODSFlags.SEQUENCE_LAST in self.flags:
-                self.rle_len = len(self.data)+4
+                self.rle_len = len(self.data)
             # elif tot_len is not None:
             #     self.rle_len = tot_len+4
             # else:
