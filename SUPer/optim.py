@@ -71,17 +71,18 @@ class Preprocess(ABC):
             logging.info("No known optimisation selected, skipping.")
             return events
         
+        n_event: list[ImageEvent] = []
+        
         if PalettizeMode.INDIV_QUANTIZE in PalettizeMode(flags):
             itcolors = colors if type(colors) is list else [colors] * len(events)
             
             for event, i_colors in zip(events, itcolors):
-                event.img = event.img.quantize(colors=i_colors,
+                n_event.append(ImageEvent(event.img.quantize(colors=i_colors,
                                                method=Image.Quantize.FASTOCTREE,
                                                palette=None,
-                                               dither=Image.Dither.NONE)
-                
-                event.img = event.img.convert('RGBA')
-                
+                                               dither=Image.Dither.NONE).convert('RGBA'),
+                                          event.event))
+        
         if PalettizeMode.MERGE_QUANTIZE in PalettizeMode(flags):
             #Allow to perform group-wise preprocessing
             itobj = events if type(events[0]) is list else [events]
@@ -109,11 +110,12 @@ class Preprocess(ABC):
                 
                 h_prev = 0
                 for event in i_events:
-                    event.img = Image.fromarray(np.asarray(qtevts)\
-                                                [h_prev:event.img.height+h_prev,:,:])
+                    n_event.append(ImageEvent(Image.fromarray(np.asarray(qtevts)\
+                                              [h_prev:event.img.height+h_prev,:,:])),
+                                              event.event)
                     h_prev += event.img.height
             
-        return events
+        return n_event
 
     @staticmethod
     def find_most_opaque(events: Union[list[ImageEvent], list[Image.Image]]) -> ImageEvent:

@@ -722,7 +722,7 @@ class ODS(PGSegment):
     @rle_len.setter
     def rle_len(self, n_len: int) -> None:
         if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
-            self.payload = (__class__.ODSOff.DATA_LEN.value, pack(">I", n_len)[1:])
+            self.payload = (__class__.ODSOff.DATA_LEN.value, pack(">I", n_len+4)[1:])
         else:
             raise AttributeError("ODS is not first in sequence.")
 
@@ -774,8 +774,15 @@ class ODS(PGSegment):
                      'rle_len': self.rle_len, 'width': self.width,
                      'height': self.height, 'data': self.data}, **super().__dict__)
     
-    def update(self) -> None:
-        self.rle_len = len(self.data)+4
+    def update(self, tot_len: Optional[int] = None) -> None:
+        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+            if __class__.ODSFlags.SEQUENCE_LAST in self.flags:
+                self.rle_len = len(self.data)+4
+            # elif tot_len is not None:
+            #     self.rle_len = tot_len+4
+            # else:
+            #     raise ValueError("Image is split across numerous ODS; "
+            #                      "provide the total length to the first.")
         super().update()
     
     @classmethod
@@ -789,6 +796,7 @@ class ODS(PGSegment):
         seg.o_id = o_id
         seg.flags = __class__.ODSFlags.SEQUENCE_FIRST
         seg.width, seg.height = width, height
+        seg.rle_len = len(data)
         
         MAXLEN_FIRST = 0xFFE4
         if len(data) <= MAXLEN_FIRST:
@@ -803,8 +811,8 @@ class ODS(PGSegment):
             for k in range(0, len(data[MAXLEN_FIRST:]), MAXLEN_OTHERS):
                 iseg = cls(cls.add_header(bytearray([0, 0, o_vn, 0]), cls._NAME, pts, dts))
                 iseg.o_id = o_id
-                iseg.data = data[MAXLEN_FIRST+k*MAXLEN_OTHERS:MAXLEN_FIRST+(k+1)*MAXLEN_OTHERS]
-                lseg.append(iseg)            
+                iseg.data = data[MAXLEN_FIRST+k:MAXLEN_FIRST+(k+MAXLEN_OTHERS)]
+                lseg.append(iseg)
             iseg.flags = __class__.ODSFlags.SEQUENCE_LAST
             return lseg
     
@@ -885,8 +893,10 @@ class Epoch:
 
     def inject(self, ds: DisplaySet) -> None:
         for k, ids in enumerate(self.ds):
-            if ds.t_in > ids.t_in:
+            if ids.t_in > ds.t_in:
                 self.ds.insert(k, ds)
+                return
+        self.ds.append(ds)
 
     def remove(self, pts: int, /, *, _tol=1e-4) -> DisplaySet:
         for k, ds in enumerate(self.ds.copy()):
