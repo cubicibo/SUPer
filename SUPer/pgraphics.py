@@ -10,8 +10,9 @@ This file is under GPLv2. You MUST read the licence before using this software.
 
 from numpy import typing as npt
 import numpy as np
-from typing import Union #, Optional
+from typing import Union
 from enum import Enum
+
 # from PIL import Image
 
 # from segments import CObject
@@ -116,6 +117,7 @@ class PGraphics:
                     line_l.extend([byte]*(-1*tmp))
                     decoder_state = RLEDecoderState.NEW_CODE
         return np.asarray(plane2d)
+
 
 # class GraphicsPlane:
 #     def __init__(self, shape: tuple[int, int]) -> None:
