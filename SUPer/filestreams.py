@@ -14,21 +14,20 @@ import os
 
 from PIL import Image
 from pathlib import Path
-from flags import Flags
-from datetime import timedelta
+#from flags import Flags
 from io import BytesIO
 from abc import ABC, abstractmethod
 from typing import Union, Optional, Type, Any
 
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, DisplaySet, Epoch
 from .utils import BDVideo, ImageEvent, TimeConv as TC
-
-class InjectFlags(Flags):
-    OVERWRITE_EPOCH = () # Overwrite the whole Epoch
-    OVERWRITE_DISPLAYSET = () # Overwrite the whole displayset with another
-    OVERWRITE_SEGMENT = () # Overwrite the segment of a given type in a given DS
-    APPEND_TO_EPOCH = () # Append to the local epoch (Adds a DS to the Epoch)
-    APPEND_TO_DISPLAYSET = () # Append to the closest displayset (in the Epoch)
+    
+# class InjectFlags(Flags):
+#     OVERWRITE_EPOCH = () # Overwrite the whole Epoch
+#     OVERWRITE_DISPLAYSET = () # Overwrite the whole displayset with another
+#     OVERWRITE_SEGMENT = () # Overwrite the segment of a given type in a given DS
+#     APPEND_TO_EPOCH = () # Append to the local epoch (Adds a DS to the Epoch)
+#     APPEND_TO_DISPLAYSET = () # Append to the closest displayset (in the Epoch)
 
 class SupStream:
     BUFFER_N_BYTES = 1048576
@@ -113,9 +112,9 @@ class SupStream:
                         self.close()
                     return
             except (ValueError, BufferError) as e:
-                pg_id = self._data[:-1].find(PGSegment.MAGIC)
+                pg_id = self._data.find(PGSegment.MAGIC)
                 if pg_id == -1:
-                    self._data = bytearray() if self._data[-1] != b'P' else bytearray(b'P')
+                    self._data = bytearray(b'P') if self._data[-1] == b'P' else bytearray()
                 else:
                     self._data = self._data[pg_id:]
                 if e == ValueError:
@@ -125,64 +124,115 @@ class SupStream:
         self.stream.close()
         self.s_index = -1
 
-
 class BaseEvent:
     """
-    Base class for any timed event witn an in/out time and associated file.
+    Container event for any graphic object displayed on screen for a given time duration.
     """
     def __init__(self, in_tc, out_tc, file, x, y) -> None:
         self._intc = in_tc
         self._outtc = out_tc
         self.gfxfile = file
-        self.x, self.y = x, y #top left of img
+        self.x, self.y = x, y
+        self._img, self._width, self._height = None, None, None
+        
+    @property
+    def width(self) -> int:
+        if self._width == -1:
+            self.load()
+            self.unload()
+        return self._width
     
+    @property
+    def height(self) -> int:
+        if self._height == -1:
+            self.load()
+            self.unload()
+        return self._height
+
     @property
     def pos(self) -> tuple[int]:
         return (self.x, self.y)
     
     @property
-    def intc(self) -> str:
+    def shape(self) -> tuple[int]:
+        return (self.height, self.width)
+
+    @property
+    def image(self):
+        if self._img is None:
+            self.load()
+        return self._img
+    
+    @property
+    def img(self):
+        # provided for courtesy & compatbility reasons
+        return self.image
+    
+    def load(self, fp: Union[str, Path] = None):
+        if self._img is not None:
+            self.unload()
+        self._open = True
+        if fp is None:
+            self._img = Image.open(self.gfxfile)
+        else:
+            self._img = Image.open(os.path.join(fp, self.gfxfile))
+        # Update wh
+        self._width = self._img.width
+        self._height = self._img.height
+        
+        return self.image
+        
+    def unload(self):
+        self._open = False
+        if self._img is not None:
+            self._img.close()
+        self._img = None
+    
+    @property
+    def tc_in(self) -> str:
         return self._intc
             
     @property
-    def outtc(self) -> str:
+    def tc_out(self) -> str:
         return self._outtc
-
+    
 
 class BDNXMLEvent(BaseEvent):
     """
-    Defines a BDNXML event with the associated flags. palette and fade flags may be missing
+    A BDNXML event can have numerous child elements such as fade timing and >1 gfx file.
     """
-    def __init__(self, event: ET.Element) -> None:
-        super().__init__(event.attrib['InTC'], event.attrib['OutTC'], event[0].text,
-                         int(event[0].attrib['X']), int(event[0].attrib['Y']))
-        self.forced = event.attrib.get('Forced', False)
-        self.gfx_w = event[0].attrib['Width']
-        self.gfx_h = event[0].attrib['Height']
-
-    def to_ts(tc, fps) -> int:
-        msec = tc.split(':')
-        msec = [int(s) for s in msec]
-        msec = 1000*(msec[0]*3600 + msec[1]*60 + msec[2] + msec[3]/fps)
-        return msec
-
-    def from_ts(ms, fps) -> str:
-        tc = str(timedelta(milliseconds=ms)).split('.')[0]
-        tc += f":{round((ms-int(ms))*fps)}"
-        if len(tc.split(':')[0]) == 1:
-            tc = '0' + tc
-        return tc
-
+    def __init__(self, te: dict[str, int], ie: dict[str, Any], others: dict[str, Any]) -> None:
+        super().__init__(te.get('InTC'), te.get('OutTC'), ie.get('fp'),
+                         int(ie.get('X')), int(ie.get('Y')))
+        self.forced = (te.get('Forced', 'False')).lower() == 'true'
+        self._width = int(ie.get('Width'))
+        self._height = int(ie.get('Height'))
+        
+        self.fade_in = dict()
+        self.fade_out = dict()
+        
+        #Apparently there's "Crop", "Position" and "Color" but only god knows how these are even structured and
+        # no commonly used program appears to generate any of those tags.
+        for e in others:
+            for inline_effect in e.get('InlineEffect', []):
+                if inline_effect.get('Type', None) == 'Fade':
+                    if inline_effect[0].attrib['FadeType'] == 'FadeIn':
+                        self.fade_in = inline_effect.attrib
+                    elif inline_effect[0].attrib['FadeType'] == 'FadeOut':
+                        self.fade_out = inline_effect.attrib
+                    else:
+                        raise ValueError(f"Unknown fade type {inline_effect[0].attrib['FadeType']}")
+        
 
 class SeqIO(ABC):
-    def __init__(self, file: Union[str, Path], img_folder: Optional[Union[str, Path]] = None) -> None:
+    def __init__(self, file: Union[str, Path], folder: Optional[Union[str, Path]] = None) -> None:
         self._file = file
         self.events = []
         
-        if img_folder is None:
+        if folder is None:
             self.folder = self.file[:self.file.rfind('/')]
         else:
-            self.folder = img_folder
+            self.folder = folder
     
     @abstractmethod
     def parse(self) -> None:
@@ -204,7 +254,29 @@ class SeqIO(ABC):
 
     def __len__(self):
         return len(self.events)
-
+    
+    @property
+    def format(self) -> BDVideo.VideoFormat:
+        return self._format
+    
+    @format.setter
+    def format(self, nf: str) -> None:
+        if type(nf) is tuple or type(nf) is BDVideo.VideoFormat:
+            self._format = BDVideo.VideoFormat(nf)
+        elif type(nf) is str:
+            dc = {480: 720, 576: 720, 720: 1280, 1080: 1920}
+            try:
+                # Quick and dirty 16/9 look-up table for BDNXML format
+                ord(nf[-1])
+                nf_rs = int(nf[:-1])
+                self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
+            except TypeError:
+                try:
+                    nf_rs = int(nf)
+                    self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
+                except ValueError:
+                    raise TypeError("Don't know how to parse format string.")
+    
     @property
     def fps(self) -> float:
         return self._fps.value
@@ -272,8 +344,8 @@ class SeqIO(ABC):
         return g_imlist
 
 class BDNXML(SeqIO):
-    def __init__(self, file: Union[str, Path], img_folder: Optional[Union[str, Path]] = None) -> None:
-        super().__init__(file, img_folder)
+    def __init__(self, file: Union[str, Path], folder: Optional[Union[str, Path]] = None) -> None:
+        super().__init__(file, folder)
         
         self.events: list[BDNXMLEvent] = []
         self.parse()
@@ -288,9 +360,24 @@ class BDNXML(SeqIO):
             self.dropframe = hformat.attrib['DropFrame']
             self.format = hformat.attrib['VideoFormat']
             
-            self.events = [BDNXMLEvent(event) for event in events]
+            # Parse global effects here then LTU wwhile cycling the events
+            #  https://forum.doom9.org/showthread.php?t=146493&page=9
+            
+            for event in events:
+                cnt = 0
+                while event[cnt:]:
+                    assert event[cnt].tag == 'Graphic',"Expected a 'Graphic' first."
+                    isolated_event = []
+                    for k, subevent in enumerate(event[cnt+1:]):
+                        if subevent.tag == 'Graphic':
+                            break
+                        isolated_event.append(subevent)                    
+                    self.events.append(BDNXMLEvent(event.attrib,
+                                       dict(event[cnt].attrib, fp=os.path.join(self.folder, event[cnt].text)),
+                                       isolated_event))
+                    cnt += k+2
 
-
+                    
 class ImgSequence(SeqIO):
     """
     Used to define a sequence of image with very basic timing provided in a csv file.
@@ -306,9 +393,9 @@ class ImgSequence(SeqIO):
     EXTS = ['.png', '.gif', '.jpg', 'tiff', '.tif', 'jpeg', 'webp']
     
     def __init__(self, file: Union[str, Path],
-                 img_folder: Optional[Union[str, Path]] = None, delimiter: str = ','):
+                 folder: Optional[Union[str, Path]] = None, delimiter: str = ','):
         
-        super().__init__(file, img_folder)
+        super().__init__(file, folder)
         self.delimiter = delimiter
 
         self.parse(False)
@@ -330,15 +417,18 @@ class ImgSequence(SeqIO):
         
         if not skip_header:
             if rows == []:
-                logging.warning("No timing file provided: assuming 23.976, 1 fpi, 0 pts.")
-                self.fps, self._type_ts, self.t_start, self.t_sep, x, y = (23.976, 'f', 0, 'f', -1, -1)
+                logging.warning("No timing file provided: assuming:"
+                                "1080p23.976, 1 fpi, 0 pts, 16/9.")
+                self.fps, self._type_ts, self.t_start, self.t_sep, x, y, vw, vh =\
+                    (23.976, 'f', 0, 'f', -1, -1, 1920, 1080)
             else:
                 temp_fps, self._type_ts, self.t_start, self.t_sep = rows[0][:4]
-                if len(rows[0]) == 6:
-                    x, y = rows[0][4:6]
+                if len(rows[0]) == 8:
+                    x, y, vw, vh = rows[0][4:6]
                 else:
-                    x, y = -1, -1
+                    x, y, vw, vh = -1, -1, 1920, 1080
             self.fps = float(temp_fps)
+            self.format = (vw, vh)
             
         if rows == []:
             rows = [1] * (len(dc)+1)
@@ -363,7 +453,7 @@ class ImgSequence(SeqIO):
         self.events = []
         for key, event in zip(sorted(list(dc.keys())), rows[1:]):
             t_out = offset_fn(t_in, event[0])
-            self.events.append(BaseEvent(t_in, t_out, dc[key], x, y))
+            self.events.append(BaseEvent(t_in, t_out, os.path.join(self.folder, dc[key]), x, y))
             t_in = t_out
         
     @property
