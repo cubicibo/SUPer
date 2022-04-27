@@ -214,15 +214,15 @@ class BDNXMLEvent(BaseEvent):
         #Apparently there's "Crop", "Position" and "Color" but only god knows how these are even structured and
         # no commonly used program appears to generate any of those tags.
         for e in others:
-            for inline_effect in e.get('InlineEffect', []):
-                if inline_effect.get('Type', None) == 'Fade':
-                    if inline_effect[0].attrib['FadeType'] == 'FadeIn':
-                        self.fade_in = inline_effect.attrib
-                    elif inline_effect[0].attrib['FadeType'] == 'FadeOut':
-                        self.fade_out = inline_effect.attrib
-                    else:
-                        raise ValueError(f"Unknown fade type {inline_effect[0].attrib['FadeType']}")
-        
+            if e.get('Type', None) == 'Fade':
+                if e.find('Fade').attrib['FadeType'] == 'FadeIn':
+                    self.fade_in = e.attrib
+                elif e.find('Fade').attrib['FadeType'] == 'FadeOut':
+                    self.fade_out = e.attrib
+                else:
+                    raise ValueError(f"Unknown fade type {e.attrib['FadeType']}")
+            # Do you notice how the implementers of BDNXML thought that people would anchor
+            #  fade-in at the end????
 
 class SeqIO(ABC):
     def __init__(self, file: Union[str, Path], folder: Optional[Union[str, Path]] = None) -> None:
@@ -246,10 +246,34 @@ class SeqIO(ABC):
                 break
         return default
     
+    # Very roughly, if we have to set up two 1920x1080 compositon objects with two
+    #  windows of the same size, we need to initialise 4 planes -> about 6 frames.
+    def groups(self, nf_split: Optional[float] = 0.25, tc_in: Optional[str] = None,
+               tc_out: Optional[str] = None, /, *, _hard: bool = True) -> list[Type[BaseEvent]]:
+        le = []
+        
+        for event in self.fetch(tc_in, tc_out):
+            if le == []:
+                le = [event]
+                continue
+            td = TC.tc2ms(event.tc_in, self.fps) - TC.tc2ms(le[-1].tc_out, self.fps)
+                
+            if _hard and td < 0:
+                raise Exception("Events are not ordered in time: {event.tc_in},"
+                                "{event.gfxfile.split(os.path.sep)[-1]} predates previous event.")
+            if le == [] or abs(td) < nf_split*1000:
+                le.append(event)
+            else:
+                yield le
+                le = [event]
+        if le != []:
+            yield le
+        return       
+    
     def fetch(self, tc_in: Optional[str] = None, tc_out: Optional[str] = None):
         for e in self.events:
-         if tc_in is None or TC.tc2ms(e.intc, self.fps) >= TC.tc2ms(tc_in, self.fps):
-          if tc_out is None or TC.tc2ms(e.outtc, self.fps) <= TC.tc2ms(tc_out, self.fps):
+         if tc_in is None or TC.tc2ms(e.tc_in, self.fps) >= TC.tc2ms(tc_in, self.fps):
+          if tc_out is None or TC.tc2ms(e.tc_out, self.fps) <= TC.tc2ms(tc_out, self.fps):
            yield e
 
     def __len__(self):
@@ -363,11 +387,14 @@ class BDNXML(SeqIO):
             # Parse global effects here then LTU wwhile cycling the events
             #  https://forum.doom9.org/showthread.php?t=146493&page=9
             
+            #BDNXML have n>=1 graphical object in each event but we don't want to
+            # group images together because that breaks genericness of ImgSeq classes
+            # so, split the BDN image-wise (object) rather than event-wise (timecode)
             for event in events:
                 cnt = 0
                 while event[cnt:]:
                     assert event[cnt].tag == 'Graphic',"Expected a 'Graphic' first."
-                    isolated_event = []
+                    isolated_event, k = [], 0
                     for k, subevent in enumerate(event[cnt+1:]):
                         if subevent.tag == 'Graphic':
                             break
@@ -376,8 +403,9 @@ class BDNXML(SeqIO):
                                        dict(event[cnt].attrib, fp=os.path.join(self.folder, event[cnt].text)),
                                        isolated_event))
                     cnt += k+2
+            # for event
 
-                    
+
 class ImgSequence(SeqIO):
     """
     Used to define a sequence of image with very basic timing provided in a csv file.
@@ -418,7 +446,7 @@ class ImgSequence(SeqIO):
         if not skip_header:
             if rows == []:
                 logging.warning("No timing file provided: assuming:"
-                                "1080p23.976, 1 fpi, 0 pts, 16/9.")
+                                "1920x1080p23.976, 1 fpi, 0 pts.")
                 self.fps, self._type_ts, self.t_start, self.t_sep, x, y, vw, vh =\
                     (23.976, 'f', 0, 'f', -1, -1, 1920, 1080)
             else:

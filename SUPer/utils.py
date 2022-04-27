@@ -18,6 +18,7 @@ from collections import namedtuple
 from enum import Enum, IntEnum
 
 ImageEvent = namedtuple("ImageEvent", "img event")
+Shape = namedtuple("Shape", "width height")
 
 class BDVideo:
     class FPS(Enum):
@@ -30,6 +31,7 @@ class BDVideo:
         
     class VideoFormat(Enum):
         HD1080    = (1920, 1080)
+        HD1080_43 = (1440, 1080)
         HD720     = (1280, 720)
         SD576_169 = (1024, 576) #Probably illegal
         SD480_169 = (856,  480) #Probably illegal

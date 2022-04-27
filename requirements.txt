@@ -1,3 +1,5 @@
 Pillow>=9.1.0
 numpy>=1.22.1
 py-flags>=1.1.4
+SSIM-PIL>=1.0.14
+pyopencl>=2022.1.3
