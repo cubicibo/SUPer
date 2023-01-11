@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (C) 2022 cibo 
+# Copyright (C) 2023 cibo
 # This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 #
 # SUPer is free software: you can redistribute it and/or modify
@@ -39,8 +39,8 @@ from .palette import Palette
 logging = get_super_logger('SUPer')
 
 ####### We need to fix the get_wds function missing when called with an Epoch
-# As suggested in the US patent 2009/0185789 
-def decode_duration(ds: DisplaySet, epoch: Optional[Epoch] = None) -> int:    
+# As suggested in the US patent 2009/0185789
+def decode_duration(ds: DisplaySet, epoch: Optional[Epoch] = None) -> int:
     def plane_initialization_time(ds: DisplaySet):
         if PCS.CompositionState.EPOCH_START & ds.pcs.composition_state:
             init_d = _pinit_fn(ds.pcs)
@@ -62,10 +62,10 @@ def decode_duration(ds: DisplaySet, epoch: Optional[Epoch] = None) -> int:
         return wd
 
     dd = plane_initialization_time(ds)
-    
+
     if ds.pcs.n_objects > 0:
         dd += wait(ds, ds.pcs.cobjects[0], dd)
-    
+
     if ds.pcs.n_objects == 2:
         if ds.pcs.cobjects[0].window_id == ds.pcs.cobjects[1].window_id:
             dd += wait(ds, ds.pcs.cobjects[1], dd)
@@ -107,7 +107,7 @@ def box_hull(region: Union[tuple[Pos, Dim], tuple[slice, slice]],
         rg._label_image = Generic()
         rg._label_image.shape = [..., 2400, 2400]
         region = rg
-        
+
     if hull is None:
         return (Pos(region.slice[2].start, region.slice[1].start),
                 Dim(region.slice[2].stop - region.slice[2].start,
@@ -115,21 +115,21 @@ def box_hull(region: Union[tuple[Pos, Dim], tuple[slice, slice]],
     a = np.zeros((2400, 2400), dtype=np.uint16)
     a[region.slice[1:]] = 1
     a[hull[0].y:hull[0].y+hull[1].h, hull[0].x:hull[0].x+hull[1].w] = 1
-    
+
     vocc = np.where(a.sum(axis=1) > 0)[0]
     hocc = np.where(a.sum(axis=0) > 0)[0]
     return (Pos(hocc[0], vocc[0]), Dim(hocc[-1]-hocc[0]+1, vocc[-1]-vocc[0]+1))
-    
+
 #%%
 def group_event_alikes(group: list[BaseEvent], **kwargs) -> list[list[list[...]]]: #YES
-    regions, gs_map, gs_origs, box = coarse_grouping(group, **kwargs)        
+    regions, gs_map, gs_origs, box = coarse_grouping(group, **kwargs)
     #Refine groups from the blurs (find smallest bounding box - agressively)
     for region in regions:
         cntXl = 0
         while np.all(gs_origs[region.slice[0], region.slice[1],
                               region.slice[2].start+cntXl:region.slice[2].start+1+cntXl] == 0):
             cntXl += 1
-        
+
         cntXr = -1
         while np.all(gs_origs[region.slice[0], region.slice[1],
                               region.slice[2].stop+cntXr:region.slice[2].stop+1+cntXr] == 0):
@@ -139,27 +139,27 @@ def group_event_alikes(group: list[BaseEvent], **kwargs) -> list[list[list[...]]
         while np.all(gs_origs[region.slice[0], region.slice[1].start+cntYt:region.slice[1].start+cntYt+1,
                               region.slice[2]] == 0):
             cntYt += 1
-        
+
         cntYb = -1
         while np.all(gs_origs[region.slice[0], region.slice[1].stop+cntYb:region.slice[1].stop+cntYb+1,
                               region.slice[2]] == 0):
             cntYb -= 1
         cntYb += 1
-        
+
         region.slice = tuple([region.slice[0],
                              slice(region.slice[1].start+cntYt, region.slice[1].stop+cntYb),
                              slice(region.slice[2].start+cntXl, region.slice[2].stop+cntXr)])
-    
+
     ebox = np.zeros((len(regions), *gs_map.shape[1:]), dtype=np.uint8)
     for k, region in enumerate(regions):
         ebox[k, region.slice[1], region.slice[2]] = 1
-    
+
     ods_reserved = np.zeros((len(regions),len(gs_origs)), dtype=np.uint8)
     ods_id = -1*np.ones((len(regions),), dtype=np.uint8)
     ods_id[0] = 0 #First object always get ods 0
     ods_metadata = {0: box_hull(regions[0])}
     overlap = np.ones((len(gs_origs),), dtype=np.uint8)
-    
+
     for k, region in enumerate(regions):
         did_set = []
         for l, other_region in enumerate(regions):
@@ -182,11 +182,11 @@ def group_event_alikes(group: list[BaseEvent], **kwargs) -> list[list[list[...]]
                 ods_metadata[ods_id[k]] = box_hull(regions[pset], ods_metadata.get(ods_id[k], None))
         ods_reserved[ods_id[k], region.slice[0]] = 1
         overlap = overlap & ods_reserved[ods_id[k]]
-    
+
     #A bit hacky
     if np.sum(overlap) == len(overlap):
         return ([[regions]], box)
-    
+
     #Perform hard grouping. Higher quality output but constraining
     candidates = {}
     if np.max(ods_id) >= kwargs.get('num_ods_max', 2) and len(np.unique(ods_id)) != len(ods_id): #if we have more than 2 objects on screen, we need to be careful.
@@ -200,16 +200,16 @@ def group_event_alikes(group: list[BaseEvent], **kwargs) -> list[list[list[...]]
                     continue
                 if hard_merge(odsr, other_odsr):
                     candidates[l+k+1] = candidates.get(l+k+1, []) + [(k, odsr | other_odsr)]
-    
+
     elif np.max(ods_id) == 1 and hard_merge(ods_reserved[0], ods_reserved[1]):
         #If the two subtitles overlap by more than 30% of the time -> merge together in one bitmap
         if np.sum(ods_reserved[0].astype(np.bool_) & ods_reserved[1].astype(np.bool_)) > 0.3*len(ods_reserved[0]) \
             or kwargs.get('merge_nonoverlap', False):
             return ([[regions]], box) # Both ODS are compatible together -> merge because this is cheaper
-        
+
     elif len(ods_id) == 1 or len(ods_id) > 1 and np.max(ods_id) == 0:
         return ([[regions]], box)
-    
+
     elif len(np.unique(ods_id)) == len(ods_id):
         if np.sum(overlap) >= np.floor(0.8*len(overlap)):
             return [[regions]], box
@@ -225,28 +225,28 @@ def group_event_alikes(group: list[BaseEvent], **kwargs) -> list[list[list[...]]
         kmeans = KMeans(kwargs.get('num_ods_max', 2), n_init=10).fit(coords)
         potential = np.zeros((kwargs.get('num_ods_max', 2), len(gs_origs)), dtype=np.uint8)
         regions_mapped = [[[]], [[]]]
-        
+
         labels_ = kmeans.labels_.copy()
 
         assert kwargs.get('num_ods_max', 2) <= 2, "Next statements need to be modified to support N(ODS) > 2."
 
         if regions[np.argwhere(labels_ == 0)[0][0]].slice[0].start > regions[np.argwhere(labels_ == 1)[0][0]].slice[0].start:
             labels_ = 1 - labels_
-        
+
         #hulls = [box_hull(regions[np.argwhere(kmeans.labels_ == k)[0][0]], None) for k in range(kwargs.get('num_ods_max', 2))],
         hulls = [box_hull(regions[np.argwhere(labels_ == 0)[0][0]], None),
                  box_hull(regions[np.argwhere(labels_ == 1)[0][0]], None)]
-        
+
         for k, label_id in enumerate(labels_):
             potential[label_id] = potential[label_id] | ods_reserved[k]
             regions_mapped[label_id][0].append(regions[k])
             hulls[label_id] = box_hull(regions[k], hulls[label_id])
-        
+
         area_max = np.zeros((len(hulls),))
         for k, hull in enumerate(hulls):
             area_max[k] = np.multiply(*hull[1])
         area_max = np.sum(area_max)
-        
+
         if kwargs.get('merge_nonoverlap', False) \
             or np.sum(potential[0].astype(np.bool_) & potential[1].astype(np.bool_)) > 35*(1-2.5*area_max/(1920*1080)):
             logging.debug("Merging all events to a single bitmap.")
@@ -267,12 +267,12 @@ def hard_merge(odsr, other_odsr):
     idx_theirs=np.where(other_odsr==1)[0]
     first_id = np.max([idx_ours[0], idx_theirs[0]])
     last_id  = np.min([idx_ours[-1], idx_theirs[-1]])
-    
+
     #We use diff to find the number of transitions, as we can merge events that do not start
     # exactly at the same frame
     resulting_transitions = np.zeros(odsr.shape, dtype=np.bool_)
     resulting_transitions[first_id:last_id] = ~(odsr[first_id:last_id] & other_odsr[first_id:last_id]).astype(np.bool_)
-    
+
     if np.sum(np.diff(~resulting_transitions & odsr).astype(np.bool_)) == nt_ours:
         if np.sum(np.diff(~resulting_transitions & other_odsr).astype(np.bool_)) == nt_theirs:
             return True
@@ -290,26 +290,26 @@ def cross_merge(ods_id, candidates, ods_reserved, **kwargs):
     """
     histogram = np.zeros((np.max(ods_id)+1,), dtype=np.uint8)
     for id_other, candidate_merges in candidates.items():
-        for id_main, candidate_merge in candidate_merges:   
+        for id_main, candidate_merge in candidate_merges:
             histogram[id_other] += 1
-    
+
     num_ods_max = kwargs.get('num_ods_max', 2)
     assert len(histogram) - np.count_nonzero(histogram) <= num_ods_max,\
         "Too many different overlapping objects over time. Please synchronise more in/out times"\
         " or move slightly subtitles so they spatially overlap less with previous/next lines."\
         " THIS IS NOT A BUG, WHAT YOU WANT TO RENDER IS IMPOSSIBLE!"
-    
+
     #Pick the base ODS to which we will merge all other events
     event_chain = Node(name='root', value=ods_reserved[np.any(ods_reserved, axis=1)][histogram==0])
     ods_ids_used = list(np.where(histogram==0)[0])
     event_chain.chain = [[k] for k in np.where(histogram==0)[0]]
-    
+
     depth=0
 
     for ods_idx in ods_id:
         if ods_idx in ods_ids_used:
             continue
-        for leaf in findall_by_attr(event_chain, depth, 'depth'): 
+        for leaf in findall_by_attr(event_chain, depth, 'depth'):
             for o_k, main_ods_id in enumerate(ods_ids_used):
                 if hard_merge(leaf.value[o_k], ods_reserved[ods_idx]):
                     event_masks = leaf.value.copy()
@@ -335,9 +335,9 @@ def count_ods_updates(objplane, c_hull, regions, ods_id):
     for k, ods_idx in enumerate(ods_id):
         if ods_idx not in objplane:
             continue
-        
+
         new_range = np.arange(regions[k].slice[0].start, regions[k].slice[0].stop)
-        
+
         if np.any(emap[regions[k].slice[1:]]) or (np.intersect1d(prev_range, new_range).size == 0 and not isFirst):
             emap[:] = 0 #ODS update, clear plane
             updates += 1
@@ -353,9 +353,9 @@ def count_ods_updates(objplane, c_hull, regions, ods_id):
         groups.append(current_group)
     return updates, groups
 
-#%%    
+#%%
 def find_best_groups(tree, regions, ods_reserved, ods_metadata, ods_id):
-    #We've got the end leaves, they contain the partial possible sequences -> ODS mappings  
+    #We've got the end leaves, they contain the partial possible sequences -> ODS mappings
     """
     This function is not really good as it does not take into account any time the plane
     may not be refreshed. This needs to be implemented before hand.
@@ -371,7 +371,7 @@ def find_best_groups(tree, regions, ods_reserved, ods_metadata, ods_id):
             for obj in objplane:
                 c_hull = box_hull(ods_metadata[obj], c_hull)
             areas[k] = np.multiply(*c_hull[1])
-            
+
             n_refresh[k], groups[k] = count_ods_updates(objplane, c_hull, regions, ods_id)
         if best_area > np.sum(np.multiply(areas, n_refresh)):
             best_area = np.sum(np.multiply(areas, n_refresh))
@@ -391,12 +391,12 @@ def merge_events(group: list[BaseEvent], pos, dim, out_format: str = 'RGBA') -> 
 #%%
 def coarse_grouping(group, blur_mul=1, blur_c=1.5, **kwargs):
     no_blur = kwargs.get('noblur_grouping', False)
-    
+
     # SD content should be blurred with lower coeffs. Remove constant.
     if no_blur:
         blur_c = 0.0
         blur_mul = 1
-    
+
     ptl, dims = min_enclosing_cube(group)
     (pxtl, pytl), (w, h) = ptl, dims
     ratio_woh = abs(w/h)
@@ -410,7 +410,7 @@ def coarse_grouping(group, blur_mul=1, blur_c=1.5, **kwargs):
         img_blurred[img_blurred <= 0.5] = 0
         img_blurred[img_blurred > 0.5] = 1
         ne_imgs.append(img_blurred)
-        
+
     gs_graph = np.zeros((len(group), h, w), dtype=np.uint8)
     gs_orig = np.zeros((len(group), h, w), dtype=np.uint8)
     for k, (event, b_img) in enumerate(zip(group, ne_imgs)):
@@ -448,7 +448,7 @@ def get_ods_dim(ods_region, box) -> tuple[list[range], Pos, Dim]:
             time_act[:] = np.min([time_act[0], area.slice[0].start]), np.max([time_act[1], area.slice[0].stop])
             sly, slx = area.slice[1:]
             postl[:] = np.min([postl[0], slx.start]), np.min([postl[1], sly.start])
-            posbr[:] = np.max([posbr[0], slx.stop]), np.max([posbr[1], sly.stop])           
+            posbr[:] = np.max([posbr[0], slx.stop]), np.max([posbr[1], sly.stop])
         time_act_list.append(range(*time_act.astype(np.uint16)))
     postl = (postl + [box[0].x-1, box[0].y]).astype(np.uint16)
     posbr = (posbr + [box[0].x, box[0].y]).astype(np.uint16)
@@ -460,10 +460,10 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
     last_dbbw = 0
     compliant = True
     warnings = 0
-    
+
     coded_bw_ra_pts = [-1] * round(fps)
     coded_bw_ra = [0] * round(fps)
-    
+
     for ke, epoch in enumerate(epochs):
         ods_acc = 0
         window_area = {}
@@ -479,7 +479,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 last_cbbw, last_dbbw, last_rc = [0]*3
             else:
                 logging.warning(f"Two displaysets at {current_pts} [s] (internal rendering error?)")
-                
+
             for seg in ds.segments:
                 size_ds += len(bytes(seg))
                 n_obj = 0
@@ -506,15 +506,15 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 elif seg.type == 'END' and n_obj == 0 and ds.pcs.pal_flag \
                     and int(ds.pcs.composition_state) == 0 and ds.segments[1].type == 'WDS':
                     logging.warning(f"Bad END segment, graphics may not be undisplayed properly at {seg.pts} [s].")
-    
+
             ####
             ods_acc += decoded_this_ds
             coded_this_ds *= 8
             decoded_this_ds *= 8
-            
+
             coded_buffer_pts = last_cbbw + coded_this_ds
             decoded_buffer_pts = last_dbbw + decoded_this_ds
-            
+
             if prev_pts != seg.pts:
                 coded_buffer_bandwidth = coded_buffer_pts/abs(seg.pts-prev_pts)
                 decoded_buffer_bandwidth = decoded_buffer_pts/abs(seg.pts-prev_pts)
@@ -524,7 +524,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 last_cbbw = coded_buffer_pts
                 last_dbbw = decoded_buffer_pts
                 coded_buffer_bandwidth, decoded_buffer_bandwidth = 0, 0
-                
+
             # This is probably the hardest constraint to meet: ts_packet are read at, at most Rx=16Mbps
             if coded_buffer_bandwidth > (max_rate := 16*(1024**2)):
                 if coded_buffer_bandwidth/max_rate >= 2:
@@ -532,35 +532,35 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 else:
                     logging.info(f"High coded bandwidth at {seg.pts:.03f} [s] (not critical - fair warning).")
                 # This is not an issue unless it happens very frequently, so we don't mark as not compliant
-            
+
             if prev_pts != seg.pts:
                 coded_bw_ra = coded_bw_ra[1:round(fps)]
                 coded_bw_ra_pts = coded_bw_ra_pts[1:round(fps)]
                 coded_bw_ra.append(coded_buffer_pts)
                 coded_bw_ra_pts.append(seg.pts)
-            
+
             if (rate:=sum(coded_bw_ra)/abs(coded_bw_ra_pts[-1]-coded_bw_ra_pts[0])) > (max_rate:=16*(1024**2)):
                 logging.warning(f"Exceeding coded bandwidth at ~{seg.pts:.03f} [s] {100*rate/max_rate:.03f}%.")
                 warnings += 1
-            
+
             if decoded_buffer_bandwidth > 128*(1024**2):
                 logging.warning(f"Exceeding decoded buffer bandwidth at {seg.pts} [s].")
                 compliant = False
-                
+
             # Decoded object plane is 4 MiB
             if ods_acc >= 4*(1024**2):
                 logging.warning(f"Decoded obect buffer overrun at {seg.pts} [s].")
                 compliant = False
-            
+
             #We clear the plane (window area) and copy the objects to window. This is done at 32MiB/s
             Rc = fps*(sum(window_area.values()) + np.min([ods_acc, sum(window_area.values())]))
             nf = TC.s2f(seg.pts, fps) - TC.s2f(prev_pts, fps)
             if nf == 0:
-                last_rc += Rc 
+                last_rc += Rc
             elif (last_rc+Rc)/nf > 1920*1080/4*29.97*2:
                 logging.warning(f"Graphic plane overloaded. Graphics may flicker at {seg.pts} [s].")
                 warnings += 1
-            
+
     if warnings == 0 and compliant:
         logging.info("Output PGS stream seems compliant.")
     if warnings > 0 and compliant:
@@ -582,13 +582,13 @@ def render(bdn, group, time_box, nb_ods_onscreen, **kwargs) -> list[BaseEvent]:
                 kwargs['colors'] = gfx_colors
                 graphics.append((Optimise.solve_sequence(*Optimise.prepare_sequence(nev, **kwargs), **kwargs), nev, gfx_colors, (pos, dim)))
                 nev = []
-            
+
             img_fs = np.zeros((*bdn.format.value[::-1], 4), dtype=np.uint8)
             img_fs[event.y:event.y+event.height, event.x:event.x+event.width, :] = np.asarray(event.img).astype(np.uint8)
             img = Image.fromarray(img_fs[pos.y:pos.y+dim.h, pos.x:pos.x+dim.w].astype(np.uint8), mode='RGBA')
             props = (Pos(event.x+pos.x, event.y+pos.y), Dim(*img.size))
             nev.append(BDNXMLEvent.copy_custom(event, img, props))
-            
+
             if np.sum(np.sum(np.asarray(img).astype(np.uint32))) == 0:
                 logging.warning(f"Renderer produced an additional empty frame at {event.tc_in}. Output should be OK.")
                 nev.pop()
@@ -608,7 +608,7 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
         window_map = []
         lds = []
         sds = epochs.copy()
-        
+
         while np.any(np.array(sds, dtype=object)):
             collection = []
             first_pts = np.inf
@@ -617,23 +617,23 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
                     continue
                 if ds[0].pcs.pts < first_pts:
                     first_pts = ds[0].pcs.pts
- 
+
             for l, ds in enumerate(sds):
                 if not ds:
                     continue
                 if ds[0].pcs.pts == first_pts:
                     collection.append(ds.pop(0))
             # collected all equal PTS, generate Display Set
-            
+
             #Two epochs at pts, merge them together
             if len(collection) > 1:
                 pcs_new = PCS.from_scratch(**collection[0].pcs.__dict__)
-                
+
                 segs = {}
                 for ds in collection:
                     for seg in ds.segments:
                         segs[seg.__class__] = segs.get(seg.__class__, []) + [seg]
-                
+
                 out_ds_dict = {}
                 for seg_family, items in segs.items():
                     if seg_family._NAME == 'END':
@@ -674,7 +674,7 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
                                     if w1 == w2:
                                         nf = False
                                         break
-                                if nf: 
+                                if nf:
                                     wds_new.windows.append(nwin)
                         wds_new.update()
                         out_ds_dict['WDS'] = [wds_new]
@@ -682,10 +682,10 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
                 if out_ds_dict.get('ODS', False):
                     out_ds.extend(out_ds_dict['ODS'])
                 out_ds.append(out_ds_dict['END'])
-                out_ds = DisplaySet(out_ds)                
+                out_ds = DisplaySet(out_ds)
             else:
                 out_ds = collection[0]
-                            
+
             if out_ds.segments[1].type == 'WDS':
                 for window in out_ds.segments[1].windows:
                     nf = True
@@ -695,14 +695,14 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
                         if w1 == w2:
                             nf = False
                             break
-                    if nf: 
+                    if nf:
                         window_map.append(window)
-            
+
             if len(out_ds.segments) > 3 and lds != []:
                 out_ds.pcs.composition_state = PCS.CompositionState.ACQUISITION
             lds.append(out_ds)
         ####while
-        
+
         # Some corrections and asserts
         lds_out = []
         for ds in lds:
@@ -737,12 +737,12 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
         assert seq == ['PCS', 'WDS', 'END'] and not pcs.pal_flag
         return Epoch(lds_out)
     ####
-    
+
     #Set missing parameters in kwargs
     params = {'colors': 256, 'norm_thresh': 0}
     params |= kwargs
     epochs = []
-    
+
     nb_ods_onscreen = np.zeros((len(group),), dtype=np.uint16)
     for ods_map in regions_ods_mapping:
         for events_in_ods in ods_map:
@@ -750,13 +750,13 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
             for event in events_in_ods[1:]:
                 components = np.union1d(np.arange(event.slice[0].start, event.slice[0].stop), components)
             nb_ods_onscreen[components] += 1
-    
+
     for ods_id, ods_region in enumerate(regions_ods_mapping):
         time_box = get_ods_dim(ods_region, box)
         #render function generates all graphics element for a given ODS ID in an epoch
         graphics = render(bdn, group, time_box, nb_ods_onscreen, **params)
         temp_epochs = []
-        
+
         #to_sup2 generate individual epochs for all graphic object.
         # Those are then chained together in a single epoch
         for o_vn, graphic in enumerate(graphics):
@@ -769,17 +769,17 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
         epochs.append(chain_epochs(temp_epochs))
     #Parallel merge of all objects ID in a single epoch.
     return merge_epochs(epochs), epochs
-    
+
 #%%
 def to_sup(bdn: BDNXML, cmap: npt.NDArray[np.uint8], cluts: npt.NDArray[np.uint8], events, time_box, **kwargs):
     ods_id = kwargs.pop('ods_id', 0)
     w_id = kwargs.pop('w_id', ods_id)
     o_vn = kwargs.pop('o_vn', 0)
-    
+
     cobject = CObject.from_scratch(o_id=ods_id, window_id=w_id,
                                    h_pos=time_box[0].x, v_pos=time_box[0].y,
                                    forced=kwargs.pop('forced', False))
-    
+
     vw, vh = bdn.format.value
     pcs_fn = lambda cn,cs,pf,pts,dts=None,show=True : PCS.from_scratch(width=vw,
                                                              height=vh,
@@ -790,42 +790,42 @@ def to_sup(bdn: BDNXML, cmap: npt.NDArray[np.uint8], cluts: npt.NDArray[np.uint8
                                                              pal_id=0,
                                                              cobjects=[cobject]*show,
                                                              pts=pts, dts=dts)
-    
+
     l_timestamps = [TC.tc2s(img.tc_in, bdn.fps) for img in events]
     closing_ts = TC.tc2s(events[-1].tc_out, bdn.fps)
-    
+
     l_pcs = [pcs_fn(k+1, PCS.CompositionState(0), True, ts) for k, ts in enumerate(l_timestamps[1:])]
     l_pcs.insert(0, pcs_fn(0, PCS.CompositionState.EPOCH_START, False, l_timestamps[0]))
     l_pcs.append(pcs_fn(len(l_pcs), PCS.CompositionState(0), False, closing_ts, show=False))
-    
+
     gfx_colors = kwargs.get('gfx_colors')
-    
+
     if gfx_colors != 256:
         if (pal_offset := kwargs.pop('offset_pal', 0)) > 0 and pal_offset < 255:
             assert 0 <= np.max(cmap) + pal_offset < 256, "Palette entries OOB. Can't export to SUP."
             cmap += pal_offset
     else:
         pal_offset = 0
-    
+
     l_pds = [PDS.from_scratch(pal, pts=ts, offset=pal_offset) for ts, pal in zip(l_timestamps, Optimise.diff_cluts(cluts, matrix=kwargs.get('bt_colorspace', 'bt709')))]
 
     ods = ODS.from_scratch(ods_id, o_vn, time_box[1].w, time_box[1].h,
                            PGraphics.encode_rle(cmap), pts=l_timestamps[0])
     if type(ods) is not list:
         ods = [ods]
-    
+
     w_data = kwargs.pop('window')
     window  = WindowDefinition.from_scratch(w_id, w_data[0].x, w_data[0].y, w_data[1].w, w_data[1].h)
     wds_in  = WDS.from_scratch([window], pts=l_timestamps[0])
     wds_out = WDS.from_scratch([], pts=closing_ts)
-    
+
     ds = [DisplaySet([l_pcs[0], wds_in, l_pds[0], *ods, ENDS.from_scratch(l_pcs[0].pts)])]
-    
+
     # for palette updates
     for pcs, pds in zip(l_pcs[1:-1], l_pds[1:]):
         ds.append(DisplaySet([pcs, pds, ENDS.from_scratch(pcs.pts)]))
-    
+
     # Closing DS, clearing off display
     ds.append(DisplaySet([l_pcs[-1], wds_out, ENDS.from_scratch(l_pcs[-1].pts)]))
-    
+
     return Epoch(ds)

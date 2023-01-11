@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Created on Sat Nov 12 18:27:29 2022
-
-@author: cibo
-"""
+# Copyright (C) 2023 cibo
+# This file is part of SUPer <https://github.com/cubicibo/SUPer>.
+#
+# SUPer is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# SUPer is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 import gc
 import numpy as np
@@ -29,12 +39,15 @@ class BDNRender:
 
     def optimise(self) -> None:
         kwargs = self.kwargs
-        
+
         bdn = BDNXML(path.expanduser(self.bdn_file))
         logger.info("Finding epochs...")
-        
+
+        #Empirical max: we need <=6 frames @23.976 to clear the buffers and windows.
+        # This is doing coarse epoch definitions, without any consideration to
+        # what's being displayed on screen.
         delay_refresh = 0.01+0.25*np.multiply(*bdn.format.value)/(1920*1080)
-        
+
         for group in bdn.groups(delay_refresh):
             offset = len(group)-1
             subgroups = []
@@ -42,12 +55,14 @@ class BDNRender:
             largest_shape = Shape(0, 0)
 
             #Backward pass for fine epochs definition
+            # We consider the delay between events and the size of the overall
+            # graphic that we want to display.
             for k, event in enumerate(reversed(group[1:])):
                 offset -= 1
                 if np.multiply(*group[offset].shape) > np.multiply(*largest_shape):
                     largest_shape = event.shape
                 nf = TC.tc2f(event.tc_in, bdn.fps) - TC.tc2f(group[offset].tc_out, bdn.fps)
-                
+
                 if nf > 0 and nf/bdn.fps > 3*_pinit_fn(largest_shape)/90e3:
                     subgroups.append(group[offset+1:last_split])
                     last_split = offset + 1
@@ -57,7 +72,7 @@ class BDNRender:
                 subgroups[-1].insert(0, group[0])
             else:
                 subgroups = [[group[0]]]
-                
+
             #Epoch generation (each subgroup will be its own epoch)
             for subgroup in reversed(subgroups):
                 logger.info(f"Generating epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}...")
@@ -106,7 +121,7 @@ class BDNRender:
                     cnt += 1
             epochs.extend(self._epochs)
             self._epochs = epochs
- 
+
     def write_output(self, fp: str) -> None:
         if self._epochs:
             with open(fp, 'wb') as f:

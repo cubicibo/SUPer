@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (C) 2022 cibo 
+# Copyright (C) 2023 cibo
 # This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 #
 # SUPer is free software: you can redistribute it and/or modify

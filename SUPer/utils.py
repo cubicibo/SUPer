@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (C) 2022 cibo 
+# Copyright (C) 2023 cibo
 # This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 #
 # SUPer is free software: you can redistribute it and/or modify
@@ -69,28 +69,28 @@ class BDVideo:
         PALp  = 25
         FILM  = 24
         FILM_NTSC = 23.976
-    
+
         @property
         def exact_value(self):
             if int(self.value) != self.value:
                 return (np.ceil(self.value)*1e3)/1001
             return self.value
-        
+
         def __truediv__(self, other):
             value = self.exact_value
             return value/other
-        
+
         def __rtruediv__(self, other):
             value = self.exact_value
             return other/value
-        
+
         def __mul__(self, other):
             value = self.exact_value
             return other*value
-        
+
         def __rmul__(self, other):
-            return self.__mul__(other)            
-        
+            return self.__mul__(other)
+
     class VideoFormat(Enum):
         HD1080    = (1920, 1080)
         HD1080_43 = (1440, 1080)
@@ -99,7 +99,7 @@ class BDVideo:
         SD480_169 = (856,  480) #Probably illegal
         SD576_43  = (720,  576)
         SD480_43  = (720,  480)
-        
+
     class PCSFPS(IntEnum):
         FILM_NTSC_P = 0x10
         FILM_24P    = 0x20
@@ -107,11 +107,11 @@ class BDVideo:
         NTSC_P      = 0x40
         PAL_I       = 0x60
         NTSC_I      = 0x70
-        
+
         @classmethod
         def from_fps(cls, other: float):
             return BDVideo.LUT_PCS_FPS[np.round(other, 3)]
-        
+
     LUT_PCS_FPS = {
         23.976:0x10,
         24:    0x20,
@@ -134,23 +134,23 @@ class PGSTarget:
     @property
     def pos(self) -> tuple[int]:
         return (self.h_pos, self.v_pos)
-    
+
     @property
     def width(self):
         return self.dim.value[0]
-    
+
     @property
     def height(self):
         return self.dim.value[1]
-    
+
     @property
     def fps(self):
         return self._fps
-    
+
     @property
     def readable_fps(self):
         return self._fps_true.value
-        
+
     @fps.setter
     def fps(self, nfps: float) -> None:
         if isinstance(nfps, BDVideo.PCSFPS):
@@ -175,7 +175,7 @@ class TimeConv:
     @staticmethod
     def f2s(f: int, fps: float, ndigits: int = 6) -> float:
         return round(f/fps, ndigits=ndigits)
-                    
+
     @staticmethod
     def s2tc(s: float, fps: float) -> str:
         h = int(s//3600)
@@ -183,18 +183,18 @@ class TimeConv:
         sec = int((s % 60))
         fc = round((s-int(s))*fps)
         return f"{h:02}:{m:02}:{sec:02}:{fc:02}"
- 
+
     @classmethod
     def tc2s(cls, tc: str, fps: float, *, ndigits: int = 6) -> float:
         dt =  tc[:(fpos := tc.rfind(':'))]
         dtts = datetime.strptime(dt, '%H:%M:%S').timestamp()
         dtts += cls.f2s(int(tc[fpos+1:]), fps, ndigits=ndigits)
         return round(dtts-datetime.strptime('0:0:0', '%H:%M:%S').timestamp(), ndigits=ndigits)
-        
+
     @classmethod
     def ms2tc(cls, ms: int, fps: float) -> str:
         return cls.s2tc(ms/1000, fps)
-    
+
     @classmethod
     def tc2ms(cls, tc: str, fps: float) -> int:
         return int(cls.tc2s(tc, fps)*1000)
@@ -202,31 +202,31 @@ class TimeConv:
     @classmethod
     def tc2f(cls, tc: str, fps: float, *, add_one: bool = False) -> int:
         return cls.s2f(cls.tc2s(tc, fps), fps)
-    
+
     @classmethod
     def f2tc(cls, f: int, fps: float, *, add_one: bool = False) -> str:
         return cls.s2tc(cls.f2s(f, fps), fps)
-    
+
     @classmethod
     def tc_addf(cls, tc: str, f: int, fps: float) -> str:
         return cls.f2tc(cls.tc2f(tc, fps) + f, fps)
-      
+
     @classmethod
     def tc_adds(cls, tc: str, s: float, fps: float) -> str:
         return cls.s2tc(cls.tc2s(tc, fps) + s, fps)
-    
+
     @classmethod
     def tc_addtc(cls, tc1: str, tc2: str, fps: float) -> str:
         return cls.f2tc(cls.tc2f(tc1, fps)+cls.tc2f(tc2, fps), fps)
-    
+
     @classmethod
     def tc_addms(cls, tc: str, ms: int, fps: float) -> str:
         return __class__.ms2tc(__class__.tc2ms(tc, fps) + ms, fps)
-    
+
     @staticmethod
     def pgs2ms(pgts: int, *, _round = lambda x: int(round(x))) -> int:
         return int(_round(pgts/90))
-    
+
     @staticmethod
     def ms2pgs(ms: float, *, _round = lambda x: int(round(x))) -> int:
         return int(_round(ms*90))
@@ -234,7 +234,7 @@ class TimeConv:
     @classmethod
     def tc2pgs(cls, tc: str, fps: float) -> int:
         return cls.ms2pgs(cls.tc2ms(tc, fps))
-    
+
     @classmethod
     def pgs2tc(cls, pgts: int, fps: float) -> str:
         return cls.ms2tc(cls.pgs2ms(pgts, _round=lambda a: a), fps)
@@ -243,7 +243,7 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """
     Getter of colorspace conversion matrix, BT ITU, limited or full
     :param matrix:       Conversion (BTxxx)
-    :param range:        'limited' or 'full'       
+    :param range:        'limited' or 'full'
     :return:             Matrix
     """
 
@@ -295,11 +295,11 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
 
 def get_super_logger(name: str, level: int = logging.INFO):
   """ Example of a custom logger.
-  
+
     This function takes in two parameters: name and level and logs to console.
     The place to log in this case is defined by the handler which we set
     to logging.StreamHandler().
-    
+
     Args:
       name: Name for the logger.
       level: Minimum level for messages to be logged

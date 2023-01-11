@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (C) 2022 cibo 
+# Copyright (C) 2023 cibo
 # This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 #
 # SUPer is free software: you can redistribute it and/or modify
@@ -36,14 +36,14 @@ logging = get_super_logger('SUPer')
 class SupStream:
     BUFFER_N_BYTES = 1048576
     SEGMENTS = { 'PCS': PCS, 'WDS': WDS, 'PDS': PDS, 'ODS': ODS, 'END': ENDS }
-    
+
     def __init__(self, data: Union[str, Path, BytesIO, bytes], auto_close: Optional[bool] = True) -> None:
         """
         Manage a Sup Stream from a file, bytestring or an actual data stream.
          Stop iterating once the buffer is consumed.
-         If the 
+         If the
         :param auto_close: If the stream is a file, autoclose it when done reading.
-                         
+
         :return:          PGSegment (that is, any child class)
         """
         self._is_file = type(data) in [Path, str]
@@ -52,25 +52,25 @@ class SupStream:
         self._data = bytearray()
         self.auto_close = auto_close
         self._pending_segs = []
-        
+
     def renew(self) -> None:
         len_before = len(self._data)
         self._data += self.stream.read(__class__.BUFFER_N_BYTES)
         read_back = len(self._data) - len_before
         self.s_index += read_back
         return read_back
-    
+
     def epochs(self, epoch: Optional[Epoch] = Epoch()) -> Epoch:
         """
         Generator of Epoch for the given stream.
          This function is stupid and can fail.
         :param: epoch_ds : DSs to add to the first Epoch (catching behaviour)
                             if dealing with a live bytestream
-            
+
         :yields: Epoch containing a list of DS.
         :return: An incomplete Epoch.
         """
-        
+
         for ds in self.fetch_displayset():
             if PCS.CompositionState.EPOCH_START == ds.pcs.composition_state:
                 if epoch.ds:
@@ -78,34 +78,34 @@ class SupStream:
                     epoch = Epoch()
             epoch.append(ds)
         yield epoch #Return a probably incpmplete Epoch (EOS reached)
-    
-    def fetch_displayset(self) -> DisplaySet:        
+
+    def fetch_displayset(self) -> DisplaySet:
         for segment in self.fetch_segment(_watch_for_pending=False):
             self._pending_segs.append(segment)
             if segment.type == 'END':
                 yield DisplaySet(self._pending_segs)
                 self._pending_segs = []
         return # Ran out of segments to generate a DS.
-            
+
     def fetch_segment(self, *, _watch_for_pending: bool = True) -> PGSegment:
         """
         Generator of PGS segment in the specified stream.
          Stop iterating once the buffer is consumed.
          Can be used after fetch_displayset() to retrieve orphaned segments.
-                         
+
         :return:          PGSegment (that is, any child class)
         """
         if self.s_index == -1 or self.stream.closed:
             raise Exception("Attempting to use a closed datastream.")
-        
+
         while True:
             if self._pending_segs != [] and _watch_for_pending:
                 yield self._pending_segs.pop(0) # yield oldest segment pending
                 continue
-            
+
             if len(self._data) == 0 and not self.renew():
                 return
-            
+
             try:
                 seg = __class__.SEGMENTS[PGSegment(self._data).type](self._data)
                 self._data = self._data[len(seg):]
@@ -139,14 +139,14 @@ class BaseEvent:
         self.x, self.y = x, y
         self._img, self._width, self._height = None, None, None
         self._custom = False
-        
+
     @property
     def width(self) -> int:
         if self._width == -1:
             self.load()
             self.unload()
         return self._width
-    
+
     @property
     def height(self) -> int:
         if self._height == -1:
@@ -157,7 +157,7 @@ class BaseEvent:
     @property
     def pos(self) -> tuple[int]:
         return (self.x, self.y)
-    
+
     @property
     def shape(self) -> tuple[int]:
         return Shape(self.width, self.height)
@@ -167,20 +167,20 @@ class BaseEvent:
         if self._img is None:
             self.load()
         return self._img
-    
+
     @property
     def img(self) -> Image.Image:
         # provided for courtesy & compatbility reasons
         return self.image
-    
+
     def set_custom_image(self, img: npt.NDArray[np.uint8]) -> None:
         self._img = img.convert('RGBA')
         self._custom = True
-        
+
     def load(self, fp: Union[str, Path] = None) -> None:
         if self._custom:
             return
-        
+
         self._open = True
         if fp is None:
             self._img = Image.open(self.gfxfile).convert('RGBA')
@@ -189,24 +189,24 @@ class BaseEvent:
         # Update wh
         self._width = self._img.width
         self._height = self._img.height
-        
+
         return self._img
-        
+
     def unload(self) -> None:
         if not self._custom:
             self._open = False
             if self._img is not None:
                 self._img.close()
                 self._img = None
-    
+
     @property
     def tc_in(self) -> str:
         return self._intc
-            
+
     @property
     def tc_out(self) -> str:
         return self._outtc
-    
+
 
 class BDNXMLEvent(BaseEvent):
     """
@@ -229,16 +229,16 @@ class BDNXMLEvent(BaseEvent):
         self.forced = (te.get('Forced', 'False')).lower() == 'true'
         self._width = int(ie.get('Width'))
         self._height = int(ie.get('Height'))
-        
+
         self.fade_in = dict()
         self.fade_out = dict()
         self._custom = False
-        
+
         # Internal raw data
         self.__te = te
         self.__ie = ie
         self.__others = others
-        
+
         #Apparently there's "Crop", "Position" and "Color" but god knows how these are even structured and
         # no commonly used program appears to generate any of those tags.
         for e in others:
@@ -251,7 +251,7 @@ class BDNXMLEvent(BaseEvent):
                     raise ValueError(f"Unknown fade type {e.attrib['FadeType']}")
             # Do you notice how the implementers of BDNXML thought that people would
             #  consider to anchor fade-in at the end????
-        
+
     @classmethod
     def copy_custom(cls, other: Type['BDNXMLEvent'], image: Optional[Image.Image] = None,
                     props: Optional[tuple[Pos, Dim]] = None) -> Type['BDNXMLEvent']:
@@ -277,16 +277,16 @@ class SeqIO(ABC):
     def __init__(self, file: Union[str, Path], folder: Optional[Union[str, Path]] = None) -> None:
         self._file = file
         self.events = []
-        
+
         if folder is None:
             self.folder = self.file[:self.file.rfind('/')]
         else:
             self.folder = folder
-    
+
     @abstractmethod
     def parse(self) -> None:
         raise NotImplementedError
-    
+
     def get(self, tc_in: str, default = None) -> Optional[Type[BaseEvent]]:
         for e in self.events:
             if e.intc == tc_in:
@@ -294,19 +294,19 @@ class SeqIO(ABC):
             elif TC.tc2f(e.intc, self.fps) > TC.tc2f(tc_in, self.fps):
                 break
         return default
-    
+
     # Very roughly, if we have to set up two 1920x1080 compositon objects with two
     #  windows of the same size, we need to initialise 4 planes -> about 6 frames at 24p.
     def groups(self, nf_split: Optional[float] = 0.26, tc_in: Optional[str] = None,
                tc_out: Optional[str] = None, /, *, _hard: bool = True) -> list[Type[BaseEvent]]:
         le = []
-        
+
         for event in self.fetch(tc_in, tc_out):
             if le == []:
                 le = [event]
                 continue
             td = TC.tc2ms(event.tc_in, self.fps) - TC.tc2ms(le[-1].tc_out, self.fps)
-                
+
             if _hard and td < 0:
                 raise Exception("Events are not ordered in time: {event.tc_in},"
                                 "{event.gfxfile.split(os.path.sep)[-1]} predates previous event.")
@@ -317,8 +317,8 @@ class SeqIO(ABC):
                 le = [event]
         if le != []:
             yield le
-        return       
-    
+        return
+
     def fetch(self, tc_in: Optional[str] = None, tc_out: Optional[str] = None):
         for e in self.events:
          if tc_in is None or TC.tc2ms(e.tc_in, self.fps) >= TC.tc2ms(tc_in, self.fps):
@@ -327,11 +327,11 @@ class SeqIO(ABC):
 
     def __len__(self):
         return len(self.events)
-    
+
     @property
     def format(self) -> BDVideo.VideoFormat:
         return self._format
-    
+
     @format.setter
     def format(self, nf: str) -> None:
         if type(nf) is tuple or type(nf) is BDVideo.VideoFormat:
@@ -349,19 +349,19 @@ class SeqIO(ABC):
                     self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
                 except ValueError:
                     raise TypeError("Don't know how to parse format string.")
-    
+
     @property
     def fps(self) -> float:
         return self._fps.exact_value
-    
+
     @fps.setter
     def fps(self, nfps: float) -> None:
         self._fps = BDVideo.FPS(nfps)
-        
+
     @property
     def file(self) -> Union[str, Path]:
         return self._file
-      
+
     @file.setter
     def file(self, newf: Union[str, Path]) -> None:
         if not os.path.exists(newf):
@@ -372,13 +372,13 @@ class SeqIO(ABC):
     @property
     def folder(self) -> Union[str, Path]:
         return self._folder
-      
+
     @folder.setter
     def folder(self, newf: Union[str, Path]) -> None:
         if not os.path.exists(newf):
             raise OSError("Folder not found.")
         self._folder = newf
-    
+
     def get_target(self) -> PGSTarget:
         return PGSTarget(BDVideo.VideoFormat(self.format), BDVideo.FPS(self.fps))
 
@@ -386,10 +386,10 @@ class SeqIO(ABC):
 class BDNXML(SeqIO):
     def __init__(self, file: Union[str, Path], folder: Optional[Union[str, Path]] = None) -> None:
         super().__init__(file, folder)
-        
+
         self.events: list[BDNXMLEvent] = []
         self.parse()
-        
+
     def parse(self) -> None:
         """
         BDNXML just repesents events with PNG images. But the way those PNG images are
@@ -404,20 +404,20 @@ class BDNXML(SeqIO):
         with open(self._file, 'r') as f:
             content = ET.parse(f).getroot()
             header, events = content[0:2]
-            
+
             hformat = header.find('Format')
             self.fps = float(hformat.attrib['FrameRate'])
             self.dropframe = bool(1 if hformat.attrib['DropFrame'].lower() == 'true' else 0)
             self.format = hformat.attrib['VideoFormat']
-            
+
             # Parse global effects here then LTU wwhile cycling the events
             #  https://forum.doom9.org/showthread.php?t=146493&page=9
-            
+
             #BDNXML have n>=1 graphical object in each event but we don't want to
             # have subgroup for a given timestamp to not break the SeqIO class
             # so, we merge sub-evnets on the same plane.
             prev_f_out = -1
-            
+
             for event in events:
                 cnt = 0
                 while event[cnt:]:
@@ -427,7 +427,7 @@ class BDNXML(SeqIO):
                         if subevent.tag == 'Graphic':
                             gevents.append(subevent)
                         else:
-                            effects.append(subevent) 
+                            effects.append(subevent)
                     # Event.attrib contains the <Event> tag params
                     # Event[cnt] features the internal content of the <event> tag.
                     # i.e <Graphic>, <Fade ...>
@@ -440,18 +440,18 @@ class BDNXML(SeqIO):
                         image_info['fp'] = os.path.join(self.folder, 'temp', event[cnt].text)
                         ea = BDNXMLEvent(event.attrib, image_info, others=effects)
                         ea.set_custom_image(image)
-                    else: 
+                    else:
                         ea = BDNXMLEvent(event.attrib, dict(event[cnt].attrib, fp=os.path.join(self.folder, event[cnt].text)), effects)
                     self.events.append(ea)
                     assert prev_f_out <= TC.tc2f(ea.tc_out, self.fps), "Event ahead finish before last event!"
                     prev_f_out = TC.tc2f(ea.tc_out, self.fps)
                     cnt += k+2
             # for event
-    
+
     @property
     def dropframe(self) -> bool:
         return self._dropframe
-    
+
     @dropframe.setter
     def dropframe(self, dropframe: bool) -> None:
         if dropframe:
@@ -468,18 +468,18 @@ class ImgSequence(SeqIO):
     -dt_type: format for on-screen time of each image, specified on the next lines.
         can be either 'ms' or 'f'. One number per line (associated to each image)
     """
-    
+
     # :)
     EXTS = ['.png', '.gif', '.jpg', 'tiff', '.tif', 'jpeg', 'webp']
-    
+
     def __init__(self, file: Union[str, Path],
                  folder: Optional[Union[str, Path]] = None, delimiter: str = ','):
-        
+
         super().__init__(file, folder)
         self.delimiter = delimiter
 
         self.parse(False)
-        
+
     def parse(self, skip_header: bool = True):
         import csv
 
@@ -487,14 +487,14 @@ class ImgSequence(SeqIO):
         for fn in sorted(os.listdir(self.folder)):
             if fn.lower()[-4:] in __class__.EXTS:
                 dc[int(fn.split('.')[0])] = fn
-        
+
         if os.path.exists(self.file):
             with open(os.path.join(self.file), 'r') as csvfile:
                 csvre = csv.reader(csvfile, delimiter=self.delimiter, quotechar='|')
                 rows = [row for row in csvre]
         else:
             raise OSError("Cannot find CSV timing file.")
-        
+
         if not skip_header:
             if rows == []:
                 logging.warning("No timing file provided: assuming:"
@@ -509,47 +509,47 @@ class ImgSequence(SeqIO):
                     x, y, vw, vh = -1, -1, 1920, 1080
             self.fps = float(temp_fps)
             self.format = (vw, vh)
-            
+
         if rows == []:
             rows = [1] * (len(dc)+1)
-        
+
         dcf = {
             'f': lambda tc, f : TC.tc_addf(tc, int(f), self.fps),
             'ms': lambda tc, ms : TC.tc_addms(tc, int(ms), self.fps),
             's': lambda tc, s : TC.tc_adds(tc, float(s), self.fps),
             'tc': lambda tc1, tc2 : TC.tc_addtc(tc1, tc2, self.fps),
         }
-        
+
         if self._type_ts == 'ms':
             self.t_start = TC.ms2tc(int(self.t_start), self.fps)
         elif self._type_ts == 'f':
             self.t_start = TC.f2tc(int(self.t_start), self.fps)
         else:
             raise NotImplementedError(f"Unknown timestamp format {self._type_ts}.")
-        
+
         offset_fn = dcf[self.t_sep]
-        
+
         t_in = self.t_start
         self.events = []
         for key, event in zip(sorted(list(dc.keys())), rows[1:]):
             t_out = offset_fn(t_in, event[0])
             self.events.append(BaseEvent(t_in, t_out, os.path.join(self.folder, dc[key]), x, y))
             t_in = t_out
-        
+
     @property
     def type_ts(self) -> str:
         return self._type_ts
-    
+
     @property
     def t_out(self) -> str:
         return self.events[-1].event.outtc
-    
+
     @property
     def t_in(self) -> float:
         if self._type_ts == 'ms':
             return TC.tc2ms(self.t_start, self.fps)
         return self.t_start
-    
+
     @t_in.setter
     def t_in(self, ts):
         """
