@@ -22,7 +22,7 @@ import logging
 import numpy as np
 from numpy import (typing as npt)
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import namedtuple
 from enum import Enum, IntEnum
 from PIL import Image
@@ -187,9 +187,9 @@ class TimeConv:
     @classmethod
     def tc2s(cls, tc: str, fps: float, *, ndigits: int = 6) -> float:
         dt =  tc[:(fpos := tc.rfind(':'))]
-        dtts = datetime.strptime(dt, '%H:%M:%S').timestamp()
+        dtts = datetime.strptime(dt, '%H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
         dtts += cls.f2s(int(tc[fpos+1:]), fps, ndigits=ndigits)
-        return round(dtts-datetime.strptime('0:0:0', '%H:%M:%S').timestamp(), ndigits=ndigits)
+        return round(dtts-datetime.strptime('0:0:0', '%H:%M:%S').replace(tzinfo=timezone.utc).timestamp(), ndigits=ndigits)
 
     @classmethod
     def ms2tc(cls, ms: int, fps: float) -> str:

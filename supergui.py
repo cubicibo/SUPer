@@ -138,7 +138,8 @@ if __name__ == '__main__':
     
     signal.signal(signal.SIGINT, terminate)
     signal.signal(signal.SIGTERM, terminate)
-    signal.signal(signal.SIGQUIT, terminate)
+    if sys.platform != 'win32':
+        signal.signal(signal.SIGQUIT, terminate)
     
     app = App(title=f"SUPer {SUPVERS}", layout='grid')    
     
