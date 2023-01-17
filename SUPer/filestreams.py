@@ -28,7 +28,7 @@ from abc import ABC, abstractmethod
 from typing import Union, Optional, Type, Any
 
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, DisplaySet, Epoch
-from .utils import (BDVideo, PGSTarget, TimeConv as TC, get_super_logger,
+from .utils import (BDVideo, TimeConv as TC, get_super_logger,
                     min_enclosing_cube, merge_events, Shape, Pos, Dim)
 
 logging = get_super_logger('SUPer')
@@ -378,9 +378,6 @@ class SeqIO(ABC):
         if not os.path.exists(newf):
             raise OSError("Folder not found.")
         self._folder = newf
-
-    def get_target(self) -> PGSTarget:
-        return PGSTarget(BDVideo.VideoFormat(self.format), BDVideo.FPS(self.fps))
 
 
 class BDNXML(SeqIO):

@@ -70,6 +70,10 @@ class BDVideo:
         FILM  = 24
         FILM_NTSC = 23.976
 
+        @classmethod
+        def from_pcsfps(self, pcsfps: int) -> 'BDVideo.FPS':
+            return next((k for k in BDVideo.LUT_PCS_FPS if BDVideo.LUT_PCS_FPS[k] == pcsfps), None)
+
         @property
         def exact_value(self):
             if int(self.value) != self.value:
@@ -120,44 +124,6 @@ class BDVideo:
         50:    0x60,
         59.94: 0x70,
     }
-
-@dataclass
-class PGSTarget:
-    dim:    BDVideo.VideoFormat
-    fps:    BDVideo.FPS
-    h_pos:  int  = -1
-    v_pos:  int  = -1
-    forced: bool = False
-    pal_id: int  = 0
-    voffset:int  = 100
-
-    @property
-    def pos(self) -> tuple[int]:
-        return (self.h_pos, self.v_pos)
-
-    @property
-    def width(self):
-        return self.dim.value[0]
-
-    @property
-    def height(self):
-        return self.dim.value[1]
-
-    @property
-    def fps(self):
-        return self._fps
-
-    @property
-    def readable_fps(self):
-        return self._fps_true.value
-
-    @fps.setter
-    def fps(self, nfps: float) -> None:
-        if isinstance(nfps, BDVideo.PCSFPS):
-            self._fps = nfps
-        else:
-            self._fps = BDVideo.PCSFPS(BDVideo.LUT_PCS_FPS.get(getattr(nfps, 'value', nfps)))
-        self._fps_true = BDVideo.FPS(nfps)
 
 class TimeConv:
     @staticmethod

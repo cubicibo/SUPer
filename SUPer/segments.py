@@ -643,12 +643,12 @@ class PDS(PGSegment):
         self.payload = (__class__.PDSOff.PAL_VERS_N.value, p_vn & 0xFF)
 
     @property
-    def size(self) -> int:
+    def n_entries(self) -> int:
         return len(self.entries)
 
     @property
     def __dict__(self) -> dict[str, Any]:
-        return dict({ 'p_id': self.p_id, 'p_vn': self.p_vn, 'size': self.size,
+        return dict({ 'p_id': self.p_id, 'p_vn': self.p_vn, 'n_entries': self.n_entries,
                       'palette': self.to_palette() }, **super().__dict__)
 
     def to_palette(self) -> Palette:

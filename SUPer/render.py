@@ -715,12 +715,12 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
                     seg.composition_n = pcs_cnt & 0xFFFF
                     pcs_cnt += 1
                     assert not (len(ds.segments) > 3 and int(seg.composition_state) == 0)
-                    assert not (len(ds.segments) == 3 and len(seg.cobjects) > 1), f"{len(ds.segments)} {seg.composition_state} {len(seg.cobjects)} {ds.segments[1].type} {ds.pcs.pal_flag} {ds.segments[1].size}"
+                    assert not (len(ds.segments) == 3 and len(seg.cobjects) > 1), f"{len(ds.segments)} {seg.composition_state} {len(seg.cobjects)} {ds.segments[1].type} {ds.pcs.pal_flag} {ds.segments[1].n_entries}"
                 if seg.type == 'WDS':
                     seg.windows = window_map
                     seg.update()
                 if seg.type == 'PDS':
-                    if seg.size == 0:
+                    if seg.n_entries == 0:
                         if len(ds.segments) == 3:
                             assert pcs.pal_flag is True, "Critical rendering error, unknown reason (effect too complex?)"
                             addOut = False

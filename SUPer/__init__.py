@@ -22,6 +22,6 @@ from .palette import Palette, PaletteEntry
 from .segments import PCS, WDS, ODS, PDS, ENDS, WindowDefinition, CObject, PGSegment, DisplaySet, Epoch
 from .filestreams import SupStream, BDNXML, ImgSequence
 from .optim import Preprocess, Optimise, PalettizeMode, FadeCurve
-from .utils import BDVideo, PGSTarget, TimeConv, get_super_logger
+from .utils import BDVideo, TimeConv, get_super_logger
 from .pgraphics import PGraphics
 from .interface import BDNRender
