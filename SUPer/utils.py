@@ -16,12 +16,11 @@
 # You should have received a copy of the GNU General Public License
 # along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
-from typing import Optional, Callable, TypeVar
+from typing import Optional, Callable, TypeVar, Union
 
 import logging
 import numpy as np
 from numpy import (typing as npt)
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections import namedtuple
 from enum import Enum, IntEnum
@@ -80,20 +79,48 @@ class BDVideo:
                 return (np.ceil(self.value)*1e3)/1001
             return self.value
 
-        def __truediv__(self, other):
+        @classmethod
+        def _missing_(cls, value: Union[float, int]) -> 'BDVideo.FPS':
+            """
+            Find the closest framerate with < 0.1 tolerance (60 -> 59.94...)
+            If the user writes 23.988=(24+23.976)/2, which could be both 24 or 23.976,
+            the final value is rounded up (so 24 is chosen).
+            """
+            candidates = [fps.value for fps in __class__]
+            best_fit = list(map(lambda x: abs(x-value), candidates))
+            best_idx = best_fit.index(min(best_fit))
+            if best_fit[best_idx] < 0.07:
+                return cls(candidates[best_idx])
+            raise ValueError("Framerate is not BD compliant.")
+
+        def __truediv__(self, other) -> float:
             value = self.exact_value
             return value/other
 
-        def __rtruediv__(self, other):
+        def __rtruediv__(self, other) -> float:
             value = self.exact_value
             return other/value
 
-        def __mul__(self, other):
+        def __mul__(self, other) -> float:
             value = self.exact_value
             return other*value
 
-        def __rmul__(self, other):
+        def __rmul__(self, other) -> float:
             return self.__mul__(other)
+
+        def __float__(self) -> float:
+            return float(self.value)
+
+        def __eq__(self, other) -> bool:
+            if isinstance(other, (float, int)):
+                try:
+                    return __class__(other).value == self.value
+                except ValueError:
+                    return False
+            elif isinstance(other, __class__):
+                return other.value == self.value
+            else:
+                return NotImplemented
 
     class VideoFormat(Enum):
         HD1080    = (1920, 1080)

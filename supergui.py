@@ -16,6 +16,7 @@
 # You should have received a copy of the GNU General Public License
 # along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
+print("Loading...")
 
 import sys
 import multiprocessing as mp
@@ -137,22 +138,24 @@ def from_bdnxml(queue: mp.Queue) -> None:
 
 if __name__ == '__main__':
     logger = get_super_logger('SUPui')
-    logger.info(f"Loading SUPer {SUPVERS}...")
+    logger.info(f"SUPer v{SUPVERS}")
 
     signal.signal(signal.SIGINT, terminate)
     signal.signal(signal.SIGTERM, terminate)
     if sys.platform != 'win32':
         signal.signal(signal.SIGQUIT, terminate)
+    else:
+        signal.signal(signal.SIGBREAK, terminate)
 
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
 
-    PushButton(app, command=get_sup, text="Select SUP to inject (opt.)", grid=[0,0], align='left', width=13)
+    PushButton(app, command=get_sup, text="Select SUP to inject (opt.)", grid=[0,0], align='left', width=15)
     supname = Text(app, grid=[1,0], align='left')
 
-    PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,1],align='left', width=13)
+    PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,1],align='left', width=15)
     bdnname = Text(app, grid=[1,1], align='left')
 
-    PushButton(app, command=set_outputsup, text="Set SUP output", grid=[0,2], align='left', width=13)
+    PushButton(app, command=set_outputsup, text="Set SUP output", grid=[0,2], align='left', width=15)
     supout = Text(app, grid=[1,2], align='left')
 
     do_super = PushButton(app, command=wrapper_mp, text=SUPER_STRING, grid=[0,3,2,1], align='left', enabled=False)
