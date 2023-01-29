@@ -34,8 +34,7 @@ Pos = namedtuple("Pos", "x y")
 _BaseEvent = TypeVar('BaseEvent')
 
 # Elementary plane initialisation time function
-_pinit_fn = lambda shape: np.ceil(90e3*(shape.width*shape.height/(32*1e6)))
-
+_pinit_fn = lambda shape, *, _coeff=1: np.ceil(90e3*(shape.width*shape.height/(_coeff*32*1e6)))
 
 def min_enclosing_cube(group: list[_BaseEvent], *, _retwh=True) -> npt.NDArray[np.uint8]:
     pxtl, pytl = np.inf, np.inf

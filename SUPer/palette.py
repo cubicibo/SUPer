@@ -39,25 +39,24 @@ def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
 
     :return: Clipped values according to range. If 'full' generally input=output.
     """
-    squeeze = False
-    if ycbcra.ndim == 1:
+    squeeze = ycbcra.ndim == 1
+    if squeeze:
         ycbcra = np.expand_dims(ycbcra, 0)
-        squeeze = True
-
+    
     if ycbcra.shape[1] != 4 and ycbcra.shape[0] == 4:
         ycbcra = ycbcra.T
-
+    
     if 'full' not in s_range:
         logging.debug("Clipping values to limited range.")
         ycbcra[:, :3][ycbcra[:, :3] <  16] = 16
         ycbcra[:,  0][ycbcra[:,  0] > 235] = 235
-        ycbcra[:,1:3][ycbcra[:,1:3] > 240] = 240
+        ycbcra[:,1:3][ycbcra[:,1:3] > 240] = 240            
     ycbcra[ycbcra > 255] = 255
     ycbcra[ycbcra < 0] = 0
-
+    
     if squeeze:
         ycbcra = ycbcra.squeeze()
-
+    
     return ycbcra.astype(np.uint8)
 
 
