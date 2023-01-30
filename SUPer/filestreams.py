@@ -16,16 +16,18 @@
 # You should have received a copy of the GNU General Public License
 # along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
-import xml.etree.ElementTree as ET
 import os
+import xml.etree.ElementTree as ET
+import numpy as np
 
 from numpy import typing as npt
-import numpy as np
 from PIL import Image
 from pathlib import Path
 from io import BytesIO
+
 from abc import ABC, abstractmethod
-from typing import Union, Optional, Type, Any
+from collections.abc import Generator
+from typing import Union, Optional, Type, Any, Callable
 
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, DisplaySet, Epoch
 from .utils import (BDVideo, TimeConv as TC, get_super_logger,
@@ -33,9 +35,148 @@ from .utils import (BDVideo, TimeConv as TC, get_super_logger,
 
 logging = get_super_logger('SUPer')
 
+#%%
+class SUPFile:
+    def __init__(self, fp: Union[Path, str], **kwargs) -> None:
+        self.file = fp
+        self.bytes_per_read = int(kwargs.pop('bytes_per_read', 1*1024**2))
+
+        # self._fhash = None
+        # self._fmtime = -1
+        # self._segments = [] #cached result
+        assert self.bytes_per_read > 0
+
+
+    @property
+    def file(self) -> str:
+        return str(self._file)
+
+
+    @file.setter
+    def file(self, file: Union[Path, str]) -> None:
+        if (file := Path(file)).exists():
+            self._file = file
+
+            # #Filename has changed -> we assume it is a new file to parse
+            # if self._fhash != (nfh := hash(str(file))):
+            #     self._fhash = nfh
+            #     self._segments = []
+
+            # #Modification timestamp has changed -> should reparse
+            # if self._fmtime != (nmt := os.path.getmtime(file)):
+            #     self._fmtime = nmt
+            #     self._segments = []
+        else:
+            raise OSError("File does not exist.")
+
+
+    def gen_segments(self) -> Generator[Type[PGSegment], None, None]:
+        with open(self.file, 'rb') as f:
+            buff = f.read(self.bytes_per_read)
+            while buff:
+                renew = False
+                try:
+                    yield (pseg := PGSegment(buff).specialise())
+                    buff = buff[len(pseg):]
+                except (BufferError, EOFError):
+                    renew = True
+                except ValueError:
+                    buff = buff[buff.find(PGSegment.MAGIC):]
+                    #if b'P' is not at pos 0, then we can discard the last byte.
+                    if buff[0] != PGSegment.MAGIC[0]:
+                        buff = bytearray()
+                if renew or not buff:
+                    if not (new_data := f.read(self.bytes_per_read)):
+                        break
+                    buff = buff + new_data
+            ####while
+        ####with
+        return
+
+
+    def get_fps(self) -> BDVideo.FPS:
+        pcs = next(self.gen_segments())
+        assert isinstance(pcs, PCS)
+        return BDVideo.FPS(BDVideo.FPS.from_pcsfps(pcs.fps))
+
+
+    def get_video_format(self) -> BDVideo.VideoFormat:
+        pcs = next(self.gen_segments())
+        assert isinstance(pcs, PCS)
+        return BDVideo.VideoFormat((pcs.width, pcs.height))
+
+
+    def gen_displaysets(self) -> Generator[DisplaySet, None, None]:
+        condition = lambda seg: isinstance(seg, PCS)
+        yield from __class__._gen_group(self.gen_segments(), condition, DisplaySet)
+
+
+    def gen_epochs(self) -> Generator[Epoch, None, None]:
+        condition = lambda ds: ds.pcs.composition_state & ds.pcs.CompositionState.EPOCH_START
+        yield from __class__._gen_group(self.gen_displaysets(), condition, Epoch)
+
+
+    def check_infos(self) -> tuple[BDVideo.VideoFormat, BDVideo.FPS]:
+        displaysets = self.gen_displaysets()
+        ds0 = next(displaysets)
+
+        width, height = ds0.pcs.width, ds0.pcs.height
+        fps = ds0.pcs.fps
+
+        for ds in displaysets:
+            assert width == ds.pcs.width, "Width is not constant in SUP."
+            assert height == ds.pcs.height, "Height is not constant in SUP."
+            assert fps == ds.pcs.fps, "FPS is not constant in SUP."
+
+        return BDVideo.VideoFormat((width, height)), BDVideo.FPS(BDVideo.FPS.from_pcsfps(fps))
+
+
+    def segments(self) -> list[Type[PGSegment]]:
+        return list(self.gen_segments())
+
+
+    def displaysets(self) -> list[DisplaySet]:
+        """
+        Get all displaysets in the file.
+        """
+        return list(self.gen_displaysets())
+
+
+    def epochs(self) -> list[Epoch]:
+        """
+        Get all epochs in the given file.
+        """
+        return list(self.gen_epochs())
+
+
+    @staticmethod
+    def _gen_group(elements: Generator[..., None, None],
+                   condition: Callable[[...], bool],
+                   group_class: Type[object]) -> Generator[..., None, None]:
+        """
+        Generate groups (of type group_class) from elements using condition.
+        """
+        group = [next(elements)]
+        while True:
+            try:
+                elem = next(elements)
+            except StopIteration:
+                if group:
+                    yield group_class(group)
+                return
+            else:
+                if condition(elem):
+                    yield group_class(group)
+                    group = []
+                group.append(elem)
+        ####while True
+####SUPFile
+
+#%%
 class SupStream:
     BUFFER_N_BYTES = 1048576
     SEGMENTS = { 'PCS': PCS, 'WDS': WDS, 'PDS': PDS, 'ODS': ODS, 'END': ENDS }
+    DEPRECATED_SHOWN = False
 
     def __init__(self, data: Union[str, Path, BytesIO, bytes], auto_close: Optional[bool] = True) -> None:
         """
@@ -52,6 +193,10 @@ class SupStream:
         self._data = bytearray()
         self.auto_close = auto_close
         self._pending_segs = []
+
+        if not __class__.DEPRECATED_SHOWN:
+            logging.warning("SupStream class will be deprecated in the future. Use SUPFile")
+            __class__.DEPRECATED_SHOWN = True
 
     def renew(self) -> None:
         len_before = len(self._data)
@@ -127,7 +272,9 @@ class SupStream:
     def close(self) -> None:
         self.stream.close()
         self.s_index = -1
+####SupStream
 
+#%%
 class BaseEvent:
     """
     Container event for any graphic object displayed on screen for a given time duration.

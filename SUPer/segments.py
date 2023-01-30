@@ -907,6 +907,9 @@ class DisplaySet:
         else:
             raise Exception("Unknown setitem operation.")
 
+    def __len__(self) -> int:
+        return len(self.segments)
+
     @property
     def t_in(self) -> float:
         return self.segments[0].pts
@@ -989,6 +992,9 @@ class Epoch:
             self.ds[0:0] = [ds]
         else:
             raise Exception("Unknown setitem operation.")
+
+    def __len__(self) -> int:
+        return len(self.ds)
 
     def __bytes__(self) -> bytes:
         return bytes(b''.join([bytes(ds) for ds in self.ds]))
