@@ -22,7 +22,7 @@ from os import path
 
 from .utils import Shape, TimeConv as TC, _pinit_fn, get_super_logger
 from .render import group_event_alikes, to_epoch2, is_compliant
-from .filestreams import BDNXML, SupStream
+from .filestreams import BDNXML, SUPFile
 
 logger = get_super_logger('SUPer')
 
@@ -109,7 +109,7 @@ class BDNRender:
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps))
 
     def merge(self, input_sup) -> None:
-        epochs = [epoch for epoch in SupStream(input_sup).epochs()]
+        epochs = SUPFile(input_sup).epochs()
         if not self._epochs:
             self._epochs = epochs
         else:

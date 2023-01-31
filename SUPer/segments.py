@@ -835,15 +835,14 @@ class ODS(PGSegment):
         seg.width, seg.height = width, height
         seg.rle_len = len(data)
 
-        MAXLEN_FIRST = 0xFFE4
+        lseg = [seg]
+        MAXLEN_FIRST, MAXLEN_OTHERS = 0xFFE4, 0xFFEB
+
         if len(data) <= MAXLEN_FIRST:
             seg.flags |= __class__.ODSFlags.SEQUENCE_LAST
             seg.data = data
-            return [seg]
         else:
-            MAXLEN_OTHERS = 0xFFEB
             seg.data = data[:MAXLEN_FIRST]
-            lseg = [seg]
 
             for k in range(0, len(data[MAXLEN_FIRST:]), MAXLEN_OTHERS):
                 iseg = cls(cls.add_header(bytearray([0, 0, o_vn & 0xFF, 0]), cls._NAME, pts, dts))
@@ -851,7 +850,7 @@ class ODS(PGSegment):
                 iseg.data = data[MAXLEN_FIRST+k:MAXLEN_FIRST+(k+MAXLEN_OTHERS)]
                 lseg.append(iseg)
             iseg.flags = __class__.ODSFlags.SEQUENCE_LAST
-            return lseg
+        return lseg
 
 class ENDS(PGSegment):
     _NAME = 'END'
@@ -868,12 +867,12 @@ class ENDS(PGSegment):
 class DisplaySet:
     def __init__(self, segments: list[Type[PGSegment]]) -> None:
         self.segments = segments
-        self.pds = [s for s in self.segments if s.type == 'PDS']
-        self.ods = [s for s in self.segments if s.type == 'ODS']
-        if self.segments[0].type != 'PCS':
+        self.pds = [s for s in self.segments if isinstance(s, PDS)]
+        self.ods = [s for s in self.segments if isinstance(s, ODS)]
+        if not isinstance(self.segments[0], PCS):
             raise ValueError("First segment is not a PCS.")
-        self.wds = [s for s in self.segments if s.type == 'WDS']
-        if segments[-1].type == 'END':
+        self.wds = [s for s in self.segments if isinstance(s, WDS)]
+        if isinstance(segments[-1], ENDS):
             self.end = segments[-1]
         else:
             self.end = ENDS.from_scratch(self._pcs.pts, self._pcs.dts)
@@ -924,8 +923,10 @@ class DisplaySet:
 
     @pcs.setter
     def pcs(self, new_pcs: PCS) -> None:
-        if new_pcs.type == 'PCS':
+        if isinstance(new_pcs, PCS):
             self.segments[0] = new_pcs
+        else:
+            raise TypeError("Not a PCS.")
 
     @property
     def pts(self) -> float:

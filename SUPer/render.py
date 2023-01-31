@@ -433,7 +433,7 @@ def chain_epochs(epochs: list[Epoch]) -> Epoch:
         #Remove END segments that are overwritten by the ACQUISITIONs.
         if eo != [] and eo[-1].pcs.pts == tepoch.ds[0].pcs.pts:
             prev = eo.pop()
-            assert len(prev.segments) == 3 and prev.segments[1].type == 'WDS', "Popped actual data, oops!"
+            assert len(prev.segments) == 3 and isinstance(prev.segments[1], WDS), "Popped actual data, oops!"
         eo.extend(tepoch.ds)
     return eo
 
@@ -486,25 +486,25 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 if seg.pts != current_pts and current_pts != -1 and _cnt_pts:
                     logging.warning(f"Display set has non-constant pts at {seg.pts} or {current_pts} [s].")
                     current_pts = -1
-                if seg.type == 'PCS' and int(seg.composition_state) != 0:
+                if isinstance(seg, PCS) and int(seg.composition_state) != 0:
                     # On acquisition, the object buffer is flushed
                     ods_acc = 0
                     n_obj = len(seg.cobjects)
-                elif seg.type == 'WDS':
+                elif isinstance(seg, WDS):
                     for w in seg.windows:
                         window_area[w.window_id] = w.width*w.height
-                elif seg.type == 'ODS' and int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST):
+                elif isinstance(seg, ODS) and int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST):
                     decoded_this_ds += seg.width * seg.height
                     coded_this_ds += seg.rle_len
-                elif seg.type == 'PDS':
+                elif isinstance(seg, PDS):
                     if n_obj > 1 and seg.pal_flag:
                         logging.warning(f"Undefined behaviour: palette update with 2+ objects at {seg.pts}.")
                         compliant = False
                     if seg.p_id >= 8:
                         logging.warning(f"Using an undefined palette ID at {seg.pts} [s].")
                         compliant = False
-                elif seg.type == 'END' and n_obj == 0 and ds.pcs.pal_flag \
-                    and int(ds.pcs.composition_state) == 0 and ds.segments[1].type == 'WDS':
+                elif isinstance(seg, ENDS) and n_obj == 0 and ds.pcs.pal_flag \
+                    and int(ds.pcs.composition_state) == 0 and isinstance(ds.segments[1], WDS):
                     logging.warning(f"Bad END segment, graphics may not be undisplayed properly at {seg.pts} [s].")
 
             ####
@@ -686,7 +686,7 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
             else:
                 out_ds = collection[0]
 
-            if out_ds.segments[1].type == 'WDS':
+            if isinstance(out_ds.segments[1], WDS):
                 for window in out_ds.segments[1].windows:
                     nf = True
                     for other_window in window_map:
@@ -711,15 +711,15 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
             addOut = True
             for seg in ds.segments.copy():
                 seq.append(seg.type)
-                if seg.type == 'PCS':
+                if isinstance(seg, PCS):
                     seg.composition_n = pcs_cnt & 0xFFFF
                     pcs_cnt += 1
                     assert not (len(ds.segments) > 3 and int(seg.composition_state) == 0)
                     assert not (len(ds.segments) == 3 and len(seg.cobjects) > 1), f"{len(ds.segments)} {seg.composition_state} {len(seg.cobjects)} {ds.segments[1].type} {ds.pcs.pal_flag} {ds.segments[1].n_entries}"
-                if seg.type == 'WDS':
+                if isinstance(seg, WDS):
                     seg.windows = window_map
                     seg.update()
-                if seg.type == 'PDS':
+                if isinstance(seg, PDS):
                     if seg.n_entries == 0:
                         if len(ds.segments) == 3:
                             assert pcs.pal_flag is True, "Critical rendering error, unknown reason (effect too complex?)"

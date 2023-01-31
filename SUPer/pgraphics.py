@@ -18,12 +18,22 @@
 
 from numpy import typing as npt
 import numpy as np
-from typing import Union, TypeVar, Optional
+from typing import Union, Optional
 from enum import Enum
 
-_ODS = TypeVar('ODS')
+from .segments import ODS
 
 class PGraphics:
+    @classmethod
+    def bitmap_to_ods(cls, bitmap: npt.NDArray[np.uint8], o_id: int, **kwargs) -> list[ODS]:
+        assert bitmap.dtype == np.uint8
+        height, width = bitmap.shape
+        o_vn = kwargs.pop('o_vn', 0)
+        data = cls.encode_rle(bitmap)
+
+        return ODS.from_scratch(o_id, o_vn, width, height, data, **kwargs)
+
+    @staticmethod
     def encode_rle(bitmap: npt.NDArray[np.uint8]) -> bytes:
         """
         Encode a 2D map using the RLE defined in 'US 7912305 B1' patent.
@@ -65,10 +75,12 @@ class PGraphics:
             i += k
         return bytes(rle_data)
 
-    def decode_rle(rle_data: Union[bytes, bytearray, _ODS, list[_ODS]]) -> npt.NDArray[np.uint8]:
+    @staticmethod
+    def decode_rle(rle_data: Union[bytes, bytearray, ODS, list[ODS]], o_id: Optional[int] = None) -> npt.NDArray[np.uint8]:
         """
         Decode a RLE object, as defined in 'US 7912305 B1' patent.
         :param rle_data:  Data to decode
+        :param o_id:      Optional object ID to display, if rle_data is packed ODSes from a DS
         :return:          2D map to associate with the proper palette
         """
         class RLEDecoderState(Enum):
@@ -79,11 +91,14 @@ class PGraphics:
             SMALL_CCO = 2
             LARGE_CCO = 3
 
-        if getattr(rle_data, 'type', None) == 'ODS':
+        if isinstance(rle_data, ODS):
             rle_data = [rle_data]
 
         if isinstance(rle_data, list):
-            rle_data = b''.join(map(lambda x: x.data, rle_data))
+            if o_id is not None:
+                rle_data = b''.join(map(lambda x: x.data, filter(lambda x: o_id == x.o_id, rle_data)))
+            else:
+                rle_data = b''.join(map(lambda x: x.data, rle_data))
 
         plane2d, line_l = [], []
         decoder_state = RLEDecoderState.NEW_CODE
@@ -129,7 +144,8 @@ class PGraphics:
                     decoder_state = RLEDecoderState.NEW_CODE
         return np.asarray(plane2d)
 
-    def show(l_ods: list[_ODS], palette: Optional[npt.NDArray[np.uint8]] = None) -> None:
+    @staticmethod
+    def show(l_ods: list[ODS], palette: Optional[npt.NDArray[np.uint8]] = None) -> None:
         """
         Show the ODS with or without a provided palette. If no palette are provided,
         one is generated that illustrates the encoded animation in the bitmap.
@@ -160,28 +176,3 @@ class PGraphics:
             from PIL import Image
             Image.fromarray(palette[bitmap], 'RGB').show()
 ####
-
-# def rgba_to_cmap(img: Image, palette: Optional[Palette] = None, colors: Optional[np.uint8] = 250) -> Image:
-#     """
-#     Converts a RGBA image to a color map usable in a PGS stream
-#     :param img:      RGBA PIL Image object
-#     :param palette:  RGBA palette to use to quantize the RGBA image.
-#                         If not provided PIL will find the palette itself.
-#     :param colors:   Number of colors to use.
-#                         PGS supports 255 + 1 but you may constrain it to 250.
-
-#     :return:          "P" Image with palette array in 'palette' attribute.
-#     """
-
-#     if 2 <= colors > 255:
-#         raise ValueError("Too few/many colors to quantize to. Expected value to lie within [2;255].")
-
-#     pal = bytes(palette) if palette is not None else palette
-#     return img.quantize(colors=colors, method=Image.Quantize.FASTOCTREE, palette=pal, dither=Image.Dither.NONE)
-
-# def cmap_to_img(cmap: npt.NDArray[np.uint8], palette: Palette, matrix: str = 'bt709') -> Image:
-#     alpha = Image.fromarray(palette.get_alpha(), mode='L')
-#     img = Image.fromarray(cmap, mode='P')
-#     img.putpalette(palette.to_rgb(matrix))
-#     img.putalpha(alpha)
-#     return img

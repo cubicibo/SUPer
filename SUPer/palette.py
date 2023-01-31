@@ -281,6 +281,7 @@ class Palette:
             for k, v in rgba.items():
                 tmp = clip_ycbcr(np.matmul(cmat, np.asarray(v).T) + offset, s_range)
                 new_pal[k] = PaletteEntry(*tmp)
+                new_pal[k].swap_cbcr()
 
         elif type(rgba) in [list, bytes, bytearray]:
             assert len(rgba) % 5 == 0,"Expected [Id1 Y Cb Cr A Id2 Y ...] structure."
