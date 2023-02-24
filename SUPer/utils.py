@@ -84,7 +84,7 @@ class BDVideo:
             """
             Find the closest framerate with < 0.1 tolerance (60 -> 59.94...)
             If the user writes 23.988=(24+23.976)/2, which could be both 24 or 23.976,
-            the final value is rounded up (so 24 is chosen).
+            the final value is rounded up (24 is chosen).
             """
             candidates = [fps.value for fps in __class__]
             best_fit = list(map(lambda x: abs(x-value), candidates))
@@ -124,7 +124,7 @@ class BDVideo:
 
     class VideoFormat(Enum):
         HD1080    = (1920, 1080)
-        HD1080_43 = (1440, 1080)
+        HD1080_43 = (1440, 1080) #Probably illegal
         HD720     = (1280, 720)
         SD576_169 = (1024, 576) #Probably illegal
         SD480_169 = (856,  480) #Probably illegal

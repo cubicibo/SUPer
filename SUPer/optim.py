@@ -376,7 +376,7 @@ class Optimise:
         l_pal = []
 
         for j, clut in enumerate(stacked_cluts):
-            pal = Palette(0, 0, {})
+            pal = Palette()
             for k, pal_entry in enumerate(clut):
                 n_e = PE_fn(pal_entry)
                 if j == 0: # For t0, set the entire palette regardless
@@ -468,7 +468,7 @@ class Optimise:
         for k, alphas in enumerate(alphas_per_frame[:].T):
             pal_tsp[:,3] = alphas
             if isinstance(palette, Palette):
-                pals.append(Palette(-1, k, dict(zip(palette.palette.keys(), pal_tsp))))
+                pals.append(Palette(dict(zip(palette.palette.keys(), pal_tsp))))
             else:
                 pals.append(ImagePalette.ImagePalette('RGBA',
                                             pal_tsp.reshape((np.dot(*pal_tsp.shape)))))

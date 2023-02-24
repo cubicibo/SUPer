@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from .utils import get_super_logger
 from .palette import PaletteEntry, Palette
 
+#%%
 logging = get_super_logger('SUPer')
 
 class PGSegment:
@@ -115,7 +116,9 @@ class PGSegment:
             offset = nf[0] + __class__.HEADER_LEN
         else:
             raise TypeError("Expected a slice or an integer for the index.")
+
         self._bytes[offset] = nf[1]
+        self.update()
 
     def __str__(self):
         return f"{self.type} at {self.pts}[s], {self.size} bytes."
@@ -598,6 +601,7 @@ class WDS(PGSegment):
 
 class PDS(PGSegment):
     _NAME = 'PDS'
+    __STEP = 5
     class PDSOff(Enum):
         PAL_ID      = 0
         PAL_VERS_N  = 1
@@ -612,19 +616,12 @@ class PDS(PGSegment):
     def __init__(self, data: bytes) -> None:
         super().__init__(data)
 
-        STEP = 5
-        if len(self.payload[__class__.PDSOff.PAL_ENTRIES.value]) % STEP != 0:
+        if len(self.payload[__class__.PDSOff.PAL_ENTRIES.value]) % __class__.__STEP != 0:
             raise Exception("PDS payload appears to be incorrect.")
 
-        if len(self.payload[__class__.PDSOff.PAL_ENTRIES.value])//STEP > 256:
+        if len(self.payload[__class__.PDSOff.PAL_ENTRIES.value])//__class__.__STEP > 256:
             logging.warning("More than 256 PAL entries defined in a PDS."
                             "Consider re-exporting or re-evaluating this segment.")
-
-        p_data = self.payload[__class__.PDSOff.PAL_ENTRIES.value]
-
-        self.entries = {}
-        for i in range(0, len(p_data), STEP):
-            self.entries[p_data[i]] = PaletteEntry(*p_data[i+1:i+STEP])
 
     @property
     def p_id(self) -> int:
@@ -644,7 +641,7 @@ class PDS(PGSegment):
 
     @property
     def n_entries(self) -> int:
-        return len(self.entries)
+        return int((len(self.payload) - __class__.PDSOff.PAL_ENTRIES.value.start)/5)
 
     @property
     def __dict__(self) -> dict[str, Any]:
@@ -652,52 +649,26 @@ class PDS(PGSegment):
                       'palette': self.to_palette() }, **super().__dict__)
 
     def to_palette(self) -> Palette:
-        return Palette(self.p_id, self.p_vn, self.entries)
+        p_data = self.payload[__class__.PDSOff.PAL_ENTRIES.value]
 
-    def get(self, idx, default = None):
-            return self.entries.get(idx, default)
+        entries = {}
+        for i in range(0, len(p_data), __class__.__STEP):
+            entries[p_data[i]] = PaletteEntry(*p_data[i+1:i+__class__.__STEP])
+        return Palette(entries)
 
-    def pop(self, idx: int) -> PaletteEntry:
-        if self[idx]:
-
-            raise NotImplementedError("Cannot pop a palette entry at this time.")
-            super().update()
-
-    def insert(self, idx: int, entry: Union[PaletteEntry, bytes, bytearray, list]) -> None:
-        if not isinstance(entry, PaletteEntry) and len(entry) !=  4:
-            raise ValueError("Bad format. Expected [Y Cb Cr A].")
-
-        if 0 < idx > 255:
-            raise IndexError("Palette entry index is out of bounds.")
-
-        if idx not in self.entries.keys():
-            raise NotImplementedError("Cannot append a palette entry at this time.")
-            self.payload = (slice(None, None), bytes(entry))
-            super().update()
-
-        self[idx] = PaletteEntry(*entry)
-
-    def __getitem__(self, idx) -> PaletteEntry:
-        return self.entries[idx]
-
-    def __setitem__(self, idx, entry: PaletteEntry) -> None:
-        if 0 <= idx <= 255:
-            self.entries[idx] = entry
-        else:
-            raise IndexError("Out of bounds [0;255].")
+    def set_palette(self, palette: Palette) -> None:
+        assert len(palette) <= 256
+        self.payload = (__class__.PDSOff.PAL_ENTRIES.value, bytes(palette))
 
     @classmethod
-    def from_scratch(cls, palette: Palette, p_vn: Optional[int] = None, p_id: Optional[int] = None,
+    def from_scratch(cls, palette: Palette, p_vn: Optional[int] = None, p_id: int = 0,
                      pts: Optional[float] = None, dts: Optional[float] = None, **kwargs):
-        if p_vn is None:
-            p_vn = palette.v_num
         p_vn = p_vn & 0xFF
-        if p_id is None:
-            p_id = palette.id
+        p_id = p_id & 0xFF
         if (offval := kwargs.get('offset', 0)) > 0:
             palette.offset(offval)
         assert p_id < 8, "Attempting to use palette ID >= 8 (undefined behaviour)"
-        return cls(cls.add_header(bytearray([p_id & 0xFF, p_vn]) + bytes(palette), cls._NAME, pts, dts))
+        return cls(cls.add_header(bytearray([p_id, p_vn]) + bytes(palette), cls._NAME, pts, dts))
 
 class ODS(PGSegment):
     _NAME = 'ODS'
@@ -715,11 +686,16 @@ class ODS(PGSegment):
         SEQUENCE_FIRST = 0x80
         SEQUENCE_LAST  = 0x40
 
+    class RLEMaxLength(IntEnum):
+        FIRST  = 0xFFE4
+        OTHERS = 0xFFEB
+
     def __init__(self, data: bytes) -> None:
         super().__init__(data)
 
         if self.flags == __class__.ODSFlags.SEQUENCE_FIRST | __class__.ODSFlags.SEQUENCE_LAST:
-            assert self.rle_len - 4 == len(self.data), "ODS length does not match payload."
+            #4 more bytes because width and length are part of the RLE data
+            assert self.rle_len == len(self.data) + 4, "ODS length does not match payload."
 
     @property
     def o_id(self) -> int:
@@ -757,7 +733,7 @@ class ODS(PGSegment):
 
     @rle_len.setter
     def rle_len(self, n_len: int) -> None:
-        n_len += 4 # For some reason there is always 4 added to the RLE data length
+        n_len += 4 #Width and Height (2x2 bytes) are part of the RLE length
         if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
             self.payload = (__class__.ODSOff.DATA_LEN.value, pack(">I", n_len)[1:])
         else:
@@ -799,10 +775,11 @@ class ODS(PGSegment):
     def data(self, n_data: bytes) -> None:
         assert len(n_data) > 0, "Got zero length RLE data for ODS."
         if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+            assert len(n_data) <= __class__.RLEMaxLength.FIRST
             self.payload = (__class__.ODSOff.OBJ_DATA_FIRST.value, n_data)
         else:
+            assert len(n_data) <= __class__.RLEMaxLength.OTHERS
             self.payload = (__class__.ODSOff.OBJ_DATA_OTHERS.value, n_data)
-
         self.update()
 
     @property
@@ -811,15 +788,17 @@ class ODS(PGSegment):
                      'rle_len': self.rle_len, 'width': self.width,
                      'height': self.height, 'data': self.data}, **super().__dict__)
 
-    def update(self, tot_len: Optional[int] = None) -> None:
+    def update(self, total_rle_len: Optional[int] = None) -> None:
+        """
+        Set the encoded bitmap RLE length for a first in sequence ODS.
+        if the bitmap is split across numerous ODS, provide the total RLE length
+        +4 will be added internally by the code to account for the width and height.
+        """
         if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
             if __class__.ODSFlags.SEQUENCE_LAST in self.flags:
                 self.rle_len = len(self.data)
-            # elif tot_len is not None:
-            #     self.rle_len = tot_len+4
-            # else:
-            #     raise ValueError("Image is split across numerous ODS; "
-            #                      "provide the total length to the first.")
+            elif total_rle_len is not None:
+                self.rle_len = total_rle_len
         super().update()
 
     @classmethod
@@ -836,7 +815,7 @@ class ODS(PGSegment):
         seg.rle_len = len(data)
 
         lseg = [seg]
-        MAXLEN_FIRST, MAXLEN_OTHERS = 0xFFE4, 0xFFEB
+        MAXLEN_FIRST, MAXLEN_OTHERS = __class__.RLEMaxLength.FIRST, __class__.RLEMaxLength.OTHERS
 
         if len(data) <= MAXLEN_FIRST:
             seg.flags |= __class__.ODSFlags.SEQUENCE_LAST
@@ -851,6 +830,7 @@ class ODS(PGSegment):
                 lseg.append(iseg)
             iseg.flags = __class__.ODSFlags.SEQUENCE_LAST
         return lseg
+
 
 class ENDS(PGSegment):
     _NAME = 'END'

@@ -16,7 +16,7 @@
 # You should have received a copy of the GNU General Public License
 # along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import namedtuple
 from typing import Optional, Union
 
@@ -142,12 +142,13 @@ class PaletteEntry:
         ret.swap_cbcr()
 
         return ret
-
+#%%
 @dataclass
 class Palette:
-    id : int
-    v_num : int
-    palette : dict[int, PaletteEntry]
+    palette : dict[int, PaletteEntry] = field(default_factory=lambda: dict())
+
+    def __post_init__(self) -> None:
+        self.sort()
 
     def __len__(self):
         return len(self.palette)
@@ -173,6 +174,7 @@ class Palette:
 
 
     def __bytes__(self):
+        self.sort()
         bpal = bytearray()
         for idx, entry in self.palette.items():
             bpal += bytes([idx]) + bytes(entry)
@@ -181,16 +183,32 @@ class Palette:
 
     def __setitem__(self, id: int, entry: PaletteEntry) -> None:
         if 0 <= id <= 255:
-            if id == 0:
-                logging.debug("Changing default transparent color to something else.")
-            if min(*entry[:3]) < 16 or entry.y > 235 or max(*entry[1:3]) > 240:
-                logging.warning("Palette clamps outside limited YCbCr range.")
+            if min(*entry[:3]) < 16 or entry[0] > 235 or max(*entry[1:3]) > 240:
+                logging.warning("Palette clamps outside limited YCrCb range.")
             if isinstance(entry, PaletteEntry):
                 self.palette[id] = entry
             else:
                 self.palette[id] = PaletteEntry(*entry)
         else:
             raise KeyError(f"Tried to set {id} entry, outside of [0;255].")
+
+
+    def __or__(self, other) -> 'Palette':
+        """
+        OR two palette togethers. The output inherits:
+        - palette id and (version number + 1) of the left operand.
+        - entries from both palette, with the right operand values for the dupe keys.
+        """
+        if isinstance(other, self.__class__):
+            return self.__class__(self.palette | other.palette)
+        elif isinstance(other, dict):
+            return self.__class__(self.palette | other)
+        else:
+            return NotImplemented
+
+
+    def sort(self) -> None:
+        self.palette = dict(sorted(self.palette.items(), key=lambda x: x[0]))
 
 
     def get(self, idx: int, default = None):
@@ -224,7 +242,7 @@ class Palette:
         :return: (len(pal),3+1) shape array
         """
         if _no_key:
-         return np.array([(p.y, p.cb, p.cr) for p in self.palette.values()])
+            return np.array([(p.y, p.cb, p.cr) for p in self.palette.values()])
         return np.array([(k, p.y, p.cb, p.cr) for k, p in self.palette.items()])
 
 
@@ -235,7 +253,7 @@ class Palette:
         :return: (len(pal),4+1) shape array
         """
         if _no_key:
-         return np.array([(p.y, p.cb, p.cr, p.alpha) for p in self.palette.values()])
+            return np.array([(p.y, p.cb, p.cr, p.alpha) for p in self.palette.values()])
         return np.array([(k, p.y, p.cb, p.cr) for k, p in self.palette.items()])
 
 
@@ -266,14 +284,9 @@ class Palette:
         :param kwargs: Additional parameters for palette version and number.
         :return: Palette object
         """
-
         cmat = get_matrix(matrix, False, s_range)
-        if prev_pal is not None:
-            kwargs['id'] = prev_pal.id
-            kwargs['v_num'] = (prev_pal.v_num + 1) & 0xFF
 
-        new_dc = {} if not prev_pal else prev_pal.palette
-        new_pal = cls(kwargs.get('id', 0), kwargs.get('v_num', 0), new_dc)
+        new_pal = cls({} if not prev_pal else prev_pal.palette)
 
         offset = np.asarray([0 if 'full' in s_range else 16, 128, 128, 0]).T
 

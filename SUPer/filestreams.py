@@ -37,13 +37,12 @@ logging = get_super_logger('SUPer')
 
 #%%
 class SUPFile:
+    """
+    Represents a .SUP file that contains a (valid) PGS stream.
+    """
     def __init__(self, fp: Union[Path, str], **kwargs) -> None:
         self.file = fp
         self.bytes_per_read = int(kwargs.pop('bytes_per_read', 1*1024**2))
-
-        # self._fhash = None
-        # self._fmtime = -1
-        # self._segments = [] #cached result
         assert self.bytes_per_read > 0
 
 
@@ -56,21 +55,17 @@ class SUPFile:
     def file(self, file: Union[Path, str]) -> None:
         if (file := Path(file)).exists():
             self._file = file
-
-            # #Filename has changed -> we assume it is a new file to parse
-            # if self._fhash != (nfh := hash(str(file))):
-            #     self._fhash = nfh
-            #     self._segments = []
-
-            # #Modification timestamp has changed -> should reparse
-            # if self._fmtime != (nmt := os.path.getmtime(file)):
-            #     self._fmtime = nmt
-            #     self._segments = []
         else:
             raise OSError("File does not exist.")
 
 
     def gen_segments(self) -> Generator[Type[PGSegment], None, None]:
+        """
+        Returns a generator of PG segments. Stops when all segments in the
+        file have been consumed. This is the main parsing function.
+
+        :yield: Every segment, in order, as they appear in the SUP file.
+        """
         with open(self.file, 'rb') as f:
             buff = f.read(self.bytes_per_read)
             while buff:
@@ -107,6 +102,12 @@ class SUPFile:
 
 
     def gen_displaysets(self) -> Generator[DisplaySet, None, None]:
+        """
+        Returns a generator of DisplaySets. Stops when all DisplaySets in the
+        file have been consumed.
+
+        :yield: DisplaySet, in order, as they appear in the SUP file.
+        """
         condition = lambda seg: isinstance(seg, PCS)
         yield from __class__._gen_group(self.gen_segments(), condition, DisplaySet)
 
@@ -117,6 +118,9 @@ class SUPFile:
 
 
     def check_infos(self) -> tuple[BDVideo.VideoFormat, BDVideo.FPS]:
+        """
+        Verify FPS and Video Format consistancy across the entire file.
+        """
         displaysets = self.gen_displaysets()
         ds0 = next(displaysets)
 
@@ -132,12 +136,15 @@ class SUPFile:
 
 
     def segments(self) -> list[Type[PGSegment]]:
+        """
+        Get all PG segments contained in the file.
+        """
         return list(self.gen_segments())
 
 
     def displaysets(self) -> list[DisplaySet]:
         """
-        Get all displaysets in the file.
+        Get all displaysets in the given file.
         """
         return list(self.gen_displaysets())
 
@@ -154,7 +161,14 @@ class SUPFile:
                    condition: Callable[[...], bool],
                    group_class: Type[object]) -> Generator[..., None, None]:
         """
-        Generate groups (of type group_class) from elements using condition.
+        Generate groups (of type group_class) from elements w.r.t. condition.
+
+        :param elements:  Iterable containing elements that must be grouped.
+        :param condition: Callable that returns true when a new group should be
+                          started with the analyzed element as its first entry.
+        :param group_class: A Callable that instanciate the group (from a list)
+                            passed as the sole argument.
+        :yield:           Group of type group_class
         """
         group = [next(elements)]
         while True:
@@ -212,7 +226,7 @@ class SupStream:
         :param: epoch_ds : DSs to add to the first Epoch (catching behaviour)
                             if dealing with a live bytestream
 
-        :yields: Epoch containing a list of DS.
+        :yield:  Epoch containing a list of DS.
         :return: An incomplete Epoch.
         """
 
@@ -227,7 +241,7 @@ class SupStream:
     def fetch_displayset(self) -> DisplaySet:
         for segment in self.fetch_segment(_watch_for_pending=False):
             self._pending_segs.append(segment)
-            if segment.type == 'END':
+            if isinstance(segment, ENDS):
                 yield DisplaySet(self._pending_segs)
                 self._pending_segs = []
         return # Ran out of segments to generate a DS.
@@ -536,14 +550,13 @@ class BDNXML(SeqIO):
 
     def parse(self) -> None:
         """
-        BDNXML just repesents events with PNG images. But the way those PNG images are
-        generated differs vastly depending of the program. Some will just generate one PNG
-        images for overlapping events while others will generate two images with different
-        properties. THis is a problem for consistency because the two are entirely different
-        SUPer choose to just stack events one after the other, as such as:
-            [E1, ... En, .... EN] where E(n).tc_in <= E(n+1).tc_in
-        Fortunately if the above condition catch a ==, we also have E(n+1).tc_out == E(n).tc_out
-        thnaks to BDNXML properties.
+        BDNXML repesents events with PNG images. But the way those PNG images
+        are generated differs vastly. Some have one image for overlapping
+        events [in time] while others will generate two images with different
+        spatial properties. This is a problem for consistency because the two
+        are entirely different in term.
+        SUPer assumes the worst case and always assumes there's a single bitmap
+        per BDNXMLEvent. (2+ images are merged to have one image).
         """
         with open(self._file, 'r') as f:
             content = ET.parse(f).getroot()
@@ -599,7 +612,7 @@ class BDNXML(SeqIO):
     @dropframe.setter
     def dropframe(self, dropframe: bool) -> None:
         if dropframe:
-            logging.warning("Drop frame timecodes are not implemented properly.")
+            logging.warning("Drop frame timecodes are not implemented.")
         self._dropframe = dropframe
 
 class ImgSequence(SeqIO):

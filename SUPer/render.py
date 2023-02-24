@@ -648,7 +648,7 @@ def to_epoch2(bdn, group, regions_ods_mapping, box, **kwargs):
                         palette_dict = {}
                         for pds in items:
                             palette_dict |= pds.to_palette().palette
-                        palette = Palette(0, 0, palette_dict)
+                        palette = Palette(palette_dict)
                         out_ds_dict['PDS'] = [PDS.from_scratch(palette, pts=pcs_new.pts)]
                     elif seg_family._NAME == 'PCS':
                         # For PCS, we need to fill the composition objects
@@ -807,7 +807,7 @@ def to_sup(bdn: BDNXML, cmap: npt.NDArray[np.uint8], cluts: npt.NDArray[np.uint8
     else:
         pal_offset = 0
 
-    l_pds = [PDS.from_scratch(pal, pts=ts, offset=pal_offset) for ts, pal in zip(l_timestamps, Optimise.diff_cluts(cluts, matrix=kwargs.get('bt_colorspace', 'bt709')))]
+    l_pds = [PDS.from_scratch(pal, p_vn=pk, pts=ts, offset=pal_offset) for pk, (ts, pal) in enumerate(zip(l_timestamps, Optimise.diff_cluts(cluts, matrix=kwargs.get('bt_colorspace', 'bt709'))))]
 
     ods = ODS.from_scratch(ods_id, o_vn, time_box[1].w, time_box[1].h,
                            PGraphics.encode_rle(cmap), pts=l_timestamps[0])
