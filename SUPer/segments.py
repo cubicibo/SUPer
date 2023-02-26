@@ -357,8 +357,8 @@ class PCS(PGSegment):
         N_OBJ_DEFS = 10
         LENGTH_SEG = N_OBJ_DEFS # must be last
 
-    class CompositionState(Flags):
-        #NORMAL = 0x00     #Update
+    class CompositionState(IntEnum):
+        NORMAL      = 0x00 #Update
         ACQUISITION = 0x40 #Update current composition with new objects
         EPOCH_START = 0x80 #Display update (new "group of DSs")
 
@@ -416,12 +416,14 @@ class PCS(PGSegment):
         self.payload = (__class__.PCSOff.COMP_NB.value, pack(">H", nc_n))
 
     @property
-    def composition_state(self) -> Flags:
+    def composition_state(self) -> int:
         return __class__.CompositionState(self.payload[__class__.PCSOff.COMP_STATE.value])
 
     @composition_state.setter
-    def composition_state(self, cs: Flags) -> None:
-        for flag in __class__.CompositionState:
+    def composition_state(self, cs: int) -> None:
+        flags = [flag for flag in __class__.CompositionState]
+        assert cs in flags, f"Unknown state value: '{cs}'."
+        for flag in flags:
             self.payload = (__class__.PCSOff.COMP_STATE.value,
                             self.payload[__class__.PCSOff.COMP_STATE.value] & (~int(flag)))
             self.payload = (__class__.PCSOff.COMP_STATE.value,
