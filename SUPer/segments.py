@@ -118,7 +118,7 @@ class PGSegment:
             raise TypeError("Expected a slice or an integer for the index.")
 
         self._bytes[offset] = nf[1]
-        self.update()
+        __class__.update(self)
 
     def __str__(self):
         return f"{self.type} at {self.pts}[s], {self.size} bytes."
