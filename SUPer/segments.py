@@ -858,7 +858,9 @@ class DisplaySet:
         self.ods = [s for s in self.segments if isinstance(s, ODS)]
         if not isinstance(self.segments[0], PCS):
             raise ValueError("First segment is not a PCS.")
-        self.wds = [s for s in self.segments if isinstance(s, WDS)]
+        self._wds = [s for s in self.segments if isinstance(s, WDS)]
+        if len(self._wds) > 1:
+            raise ValueError("More than one WDS in a DisplaySet?!")
         if isinstance(segments[-1], ENDS):
             self.end = segments[-1]
         else:
@@ -914,6 +916,14 @@ class DisplaySet:
             self.segments[0] = new_pcs
         else:
             raise TypeError("Not a PCS.")
+    
+    @property
+    def wds(self) -> Optional[WDS]:
+        return self._wds[0] if self._wds else None
+        
+    @wds.setter
+    def wds(self, wds: Optional[WDS]) -> None:
+        self._wds = [wds] * (wds is not None)
 
     @property
     def pts(self) -> float:

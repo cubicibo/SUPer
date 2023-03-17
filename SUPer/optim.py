@@ -274,7 +274,7 @@ class Optimise:
         """
 
         N_SEQUENCES_MAX = kwargs.get('colors', 256)
-        THRESH = kwargs.get('norm_thresh', 13)
+        THRESH = kwargs.get('norm_thresh', 0)
 
         if THRESH > 0:
             logging.warning("Enabled color merging, this is buggy.")
