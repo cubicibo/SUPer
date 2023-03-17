@@ -643,7 +643,7 @@ class PDS(PGSegment):
 
     @property
     def n_entries(self) -> int:
-        return int((len(self.payload) - __class__.PDSOff.PAL_ENTRIES.value.start)/5)
+        return int((len(self.payload) - __class__.PDSOff.PAL_ENTRIES.value.start)/__class__.__STEP)
 
     @property
     def __dict__(self) -> dict[str, Any]:
@@ -835,6 +835,11 @@ class ODS(PGSegment):
 
 
 class ENDS(PGSegment):
+    """
+    The END segment closes a DS. It may be preceeded by any other segment but
+    it always follows the last ODS in a DS.
+    MPEG2 standard recommends to have END.pts = END.dts
+    """
     _NAME = 'END'
     def __init__(self, data: bytes) -> None:
         super().__init__(data)

@@ -8,7 +8,7 @@ Created on Mon Dec  5 21:45:37 2022
 
 import numpy as np
 
-from typing import Any, TypeVar, Optional
+from typing import Any, TypeVar, Optional, Type
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -19,15 +19,18 @@ from skimage.filters import gaussian
 from skimage.measure import regionprops, label
 
 #%%
-from SUPer.utils import get_super_logger, Pos, Dim, Shape
+from SUPer.utils import get_super_logger, Pos, Dim, Shape, BDVideo
 from SUPer.filestreams import BDNXMLEvent
-from SUPer.segments import DisplaySet, PCS, WDS, ODS
+from SUPer.segments import DisplaySet, PCS, WDS, ODS, WindowDefinition
+from SUPer.optim import Optimise, Preprocess
+from SUPer.pgraphics import PGraphics
+
 
 
 _Region = TypeVar('Region')
 _BaseEvent = TypeVar('BaseEvent')
 
-logger = get_super_logger('SUPer')        
+logger = get_super_logger('SUPer')
 
 #%%
 @dataclass(frozen=True)
@@ -36,15 +39,15 @@ class Box:
     dy: int
     x : int
     dx: int
-    
+
     @property
     def x2(self) -> int:
         return self.x + self.dx
-    
+
     @property
     def y2(self) -> int:
         return self.y + self.dy
-    
+
     @property
     def area(self) -> int:
         return self.dx * self.dy
@@ -52,24 +55,24 @@ class Box:
     @property
     def coords(self) -> tuple[Pos, Pos]:
         return (Pos(self.x, self.y), Pos(self.x2, self.y2))
-    
+
     @property
     def dims(self) -> Dim:
         return Dim(self.dx, self.dy)
-    
+
     @property
     def shape(self) -> tuple[int, int]:
         return (self.dy, self.dx)
-    
+
     @property
     def posdim(self) -> tuple[Pos, Dim]:
         return Pos(self.x, self.y), Dim(self.dx, self.dy)
-    
+
     @property
     def slice(self) -> tuple[slice]:
         return (slice(self.y, self.y+self.dy),
                 slice(self.x, self.x+self.dx))
-    
+
     @property
     def slice_x(self) -> slice:
         return slice(self.x, self.x+self.dx)
@@ -77,11 +80,11 @@ class Box:
     @property
     def slice_y(self) -> slice:
         return slice(self.y, self.y+self.dy)
-    
+
     @classmethod
     def from_region(cls, region: _Region) -> 'Box':
         return cls.from_slices(region.slice)
-    
+
     @classmethod
     def from_slices(cls, slices: tuple[slice]) -> 'Box':
         if len(slices) == 3:
@@ -90,7 +93,7 @@ class Box:
             slyx = slices
         f_ZWz = lambda slz : (int(slz.start), int(slz.stop-slz.start))
         return cls(*f_ZWz(slyx[0]), *f_ZWz(slyx[1]))
-    
+
     @classmethod
     def from_hulls(cls, *hulls: list[...]) -> 'Box':
         final_hull = cls(*([None]*4))
@@ -98,7 +101,7 @@ class Box:
             final_hull
             raise NotImplementedError
         return final_hull
-    
+
     @classmethod
     def from_events(cls, events: list[_BaseEvent]) -> 'Box':
         """
@@ -116,7 +119,7 @@ class Box:
             pytl = min(pytl, event.y)
             pybr = max(pybr, event.y + event.height)
         return cls(int(pytl), int(pybr-pytl), int(pxtl), int(pxbr-pxtl))
-    
+
     @classmethod
     def from_coords(cls, x1: int, y1: int, x2 : int, y2: int) -> 'Box':
         return cls(min(y1, y2), abs(y2-y1), min(x1, x2), abs(x2-x1))
@@ -132,40 +135,40 @@ class ScreenRegion(Box):
     def from_slices(cls, slices: tuple[slice], region: Optional[_Region] = None) -> 'ScreenRegion':
         f_ZWz = lambda slz : (int(slz.start), int(slz.stop-slz.start))
         X, Y, T = f_ZWz(slices[2]), f_ZWz(slices[1]), f_ZWz(slices[0])
-        
+
         if len(slices) != 3:
             raise ValueError("Expected 3 slices (t, y, x).")
         return cls(*Y, *X, *T, region)
-    
+
     @property
     def temporal_slice(self) -> slice:
         return slice(self.t, self.t2)
-    
+
     @property
     def temporal_range(self) -> range:
         return range(self.t, self.t2)
-    
+
     @property
     def spatial_slice(self) -> tuple[slice]:
         return (slice(self.y, self.y2),
                 slice(self.x, self.x2))
-    
+
     @property
     def slice(self) -> tuple[slice]:
         return (slice(self.t, self.t2),
                 slice(self.y, self.y2),
                 slice(self.x, self.x2))
-    
+
     @property
     def range(self) -> tuple[range]:
         return (range(self.t, self.t2),
                 range(self.y, self.y2),
                 range(self.x, self.x2))
-    
+
     @property
     def t2(self) -> int:
         return self.t + self.dt
-    
+
     @classmethod
     def from_region(cls, region: _Region) -> 'ScreenRegion':
         return cls.from_slices(region.slice, region)
@@ -177,23 +180,23 @@ class WindowOnBuffer:
     def __init__(self, screen_regions: list[ScreenRegion], id: Optional[int] = None) -> None:
         self.srs = screen_regions
         self.id = id
-        
+
     @classmethod
     def set_default_duration(cls, duration: Optional[int]) -> None:
         if duration > 0:
             cls.DURATION = duration
         else:
             cls.DURATION = None
-    
+
     @classmethod
     def get_default_duration(cls) -> Optional[int]:
         return cls.DURATION
-    
+
     @property
     def duration(self) -> int:
         if __class__.USE_DEFAULT_DURATION:
             return __class__.get_default_duration()
-        
+
         return max(map(lambda sr: sr.t2, self.srs))
 
 
@@ -207,10 +210,10 @@ class WindowOnBuffer:
         """
         if not (0 <= overlap_threshold <= 1):
             raise ValueError(f"Overlap threshold not within [0;1], got '{overlap_threshold}'")
-            
+
         update_mask = np.zeros(self.duration, np.uint8)
         buffer = np.zeros(main_box.shape, dtype=np.uint8)
-        
+
         #we want to have the time of appearance in order
         srs = sorted(self.srs, key=lambda sr: sr.t)
         active_until = -1
@@ -225,27 +228,27 @@ class WindowOnBuffer:
                 active_until = max(active_until, sr.t + sr.dt)
                 buffer[sr.spatial_slice] |= sr.region.image[ctime-sr.t]
         return update_mask
-        
-            
+
+
     def delay_chain(self, events: list[_BaseEvent], fps, box: Box = None) -> npt.NDArray[np.uint8]:
         """
-        Takes 
+        Takes
         """
         #imgs = np.zeros((2,*box.shape,4), dtype=np.int32)
         mask = np.zeros(self.duration, dtype=np.uint32)
         assert len(mask) == len(events)
-        
+
         prev_fcnt = TC.tc2f(events[0].tc_in, fps)
         #imgs[0,:,:,:] = np.asarray(events[0].img, dtype=np.uint8)
-        
+
         for k, event in enumerate(events[1:]):
             new_fcnt = TC.tc2f(event.tc_in, fps)
             mask[k] = new_fcnt - prev_fnct
             prev_fcnt = new_fcnt
         mask[-1] = TC.tc2f(events[-1].tc_out, fps) - new_fcnt
         return mask
-        
-        
+
+
     def event_mask(self, boolean: bool = True) -> npt.NDArray[np.uint8]:
         """
         event mask defines the times during which the window displays a composition.
@@ -259,7 +262,8 @@ class WindowOnBuffer:
             for sr in self.srs:
                 mask[sr.temporal_slice] += 1
         return mask
-    
+
+
     def get_window(self) -> Box:
         mxy = np.asarray([np.inf, np.inf])
         Mxy = np.asarray([-1, -1])
@@ -268,10 +272,10 @@ class WindowOnBuffer:
             Mxy[:] = np.max([np.asarray((sr.y2, sr.x2)), Mxy], axis=0)
         mxy, Mxy = np.uint32((mxy, Mxy))
         return Box(mxy[0], Mxy[0]-mxy[0], mxy[1], Mxy[1]-mxy[1])
-    
+
     def area(self) -> int:
         return self.get_window().area
-    
+
     def update_mask(self, boolean: bool = True) -> npt.NDArray[np.uint16]:
         """
         Update mask defines roughly when the buffer associated to the window should
@@ -279,7 +283,7 @@ class WindowOnBuffer:
         """
         mask = np.zeros((self.duration,), dtype=np.uint16)
         assert_str = "Caught an empty event."
-        
+
         if boolean:
             for sr in self.srs:
                 assert sr.dt > 0, assert_str
@@ -296,7 +300,7 @@ class PGDecoder:
     RD = 16*1024**2
     RC = 32*1024**2
     FREQ = 90e3
-    
+
     @classmethod
     def gplane_write_time(cls, *shape, coeff: int = 1):
         return cls.FREQ * np.ceil(coeff*shape[0]*shape[1]/cls.RC)
@@ -336,18 +340,18 @@ class PGDecoder:
                 break
         assert window is not None, "Did not find window definition."
         return Shape(window.width, window.height)
-    
+
     @staticmethod
     def object_areas(ods: list[ODS]) -> int:
         return sum(map(lambda o: o.width*o.height if o.flags & o.ODSFlags.SEQUENCE_FIRST else 0, ods))
-    
+
     @staticmethod
     def window_areas(wds: WDS) -> int:
         return sum(map(lambda window: window.width * window.height, wds.windows))
-    
+
     @classmethod
     def rc_coeff(cls, ods: list[ODS], wds: WDS) -> int:
-        return cls.object_areas(ods) + cls.window_areas(wds)        
+        return cls.object_areas(ods) + cls.window_areas(wds)
 
     @classmethod
     def decode_duration(cls, ds: DisplaySet) -> int:
@@ -366,14 +370,14 @@ class PGDecoder:
             decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
         return decode_duration
     ####
-        
+
     @classmethod
     def displayset_transfer(cls, display_set: DisplaySet,
                             wds: Optional[WDS] = None,
                             ods: Optional[list[ODS]] = None) -> bool:
         """
         More precise, taking into account the transfer time at 128 Mbps.
-        This function does not consider 
+        This function does not consider
         """
         raise NotImplementedError("This function does not consider decoder multitasking.")
         dd = 0
@@ -384,22 +388,106 @@ class PGDecoder:
             dd += cls.object_areas(display_set.ods)/cls.RD
         if wds is None:
             assert display_set.wds, "Cannot compute the transfer time without windows."
-            wds = display_set.wds[0]            
+            wds = display_set.wds[0]
         return dd + (cls.rc_coeff(ods, wds)/cls.RC)
 
 #%%
 class PGConvert:
-	def __init__(self, wobs: tuple[WindowOnBuffer]) -> None:
-		self.wobs = wobs
+    def __init__(self, windows: dict[int, WindowOnBuffer], events: list[Type[_BaseEvent]]) -> None:
+        self.windows = windows
 
-	def get_composition_states(self) -> tuple[PCS.CompositionState]:
-		active_mask = self.wobs[0].event_mask()
-		for wob in self.wobs[1:]:
-			active_mask |= wob.event_mask()
-		
-		lcs = map(lambda t_mask: PCS.CompositionState.ACQUISITION if t_mask > 1 else PCS.CompositionState.NORMAL, active_mask)
-		lcs[0] = PCS.CompostionState.EPOCH_START
-		return lcs
+    @property
+    def windows(self) -> dict[int, WindowOnBuffer]:
+        return self._windows
+
+    @windows.setter
+    def windows(self, windows: dict[int, WindowOnBuffer]) -> None:
+        #Always keep windows sorted, and then generate all objects to show up
+        self._windows = dict(sorted(windows.items()))
+
+    def get_wds(self, pts: float) -> WDS:
+        windows = []
+        for w_id, window in self.windows.items():
+            box = window.get_window()
+            windows.append(WindowDefinition.from_scratch(w_id, box.x, box.y, box.dx, box.dy))
+        return WDS.from_scratch(windows, pts=pts)
+
+    def get_composition_states(self, acq_on_change: bool = True) -> tuple[PCS.CompositionState]:
+        active_mask = self.windows[0].event_mask()
+        for wob in self.windows[1:]:
+            active_mask |= wob.event_mask()
+
+        lcs = map(lambda t_mask: PCS.CompositionState.ACQUISITION if t_mask > 1 else PCS.CompositionState.NORMAL, active_mask)
+        if acq_on_change:
+            #Force an acquisition when the object count decreases to 1.
+            cs_prev = lcs[0] #at this point t0 is supposed to be an acquisition or a normal case
+            for k, cs in enumerate(lcs[1:], start=1):
+                if cs_prev == PCS.CompositionState.ACQUISITION and cs == PCS.CompositionState.NORMAL:
+                    lcs[k] = PCS.CompositionState.ACQUISITION
+                cs_prev = cs
+        lcs[0] = PCS.CompostionState.EPOCH_START #t0 is epoch start (set now to simplify above's logic)
+        return lcs
+
+    def render(self, events: list[Type[_BaseEvent]]) -> list[...]:
+        for
+
+    def render_single(self, box: Box, event: Type[_BaseEvent], window_id: int) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+        assert window_id in self.windows, "Unknown window ID."
+
+        bitmap, palette, padding = self._quantize_adapt_palette(event.img)
+
+        bitmap_box = padding*np.ones(box.shape, dtype=np.uint8)
+        bitmap_box[event.y-box.y:event.y-box.y+event.height, event.x-box.x:event.x-box.x+event.width] = bitmap
+
+        return palette, bitmap_box[self.windows[window_id].get_window().slice]
+
+    @staticmethod
+    def _find_most_transparent(palette: dict[tuple[int], int]) -> tuple[npt.NDArray[np.uint8], Optional[int]]:
+        padding_entry = None
+        min_alpha = (256, None)
+        if len(palette) >= 256:
+            assert len(palette) == 256, "More than 256 colors."
+            for entry, k in palette.items():
+                if entry[-1] == 0 and padding_entry is None:
+                    padding_entry = k
+                if min_alpha[0] < entry[-1]:
+                    min_alpha = (entry[-1], k)
+            if padding_entry is None:
+                return None, None #Do another turn with 255 colors
+        else:
+            if (0, 0, 0, 0) in palette:
+                padding_entry = palette[(0, 0, 0, 0)]
+            else:
+                padding_entry = len(palette)
+                palette[(0, 0, 0, 0)] = padding_entry
+        return np.asarray(list(palette.keys()), dtype=np.uint8), padding_entry
+
+    def _quantize_adapt_palette(self, img) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8], int]:
+        padding, k = None, 0
+        while padding is None:
+            bitmap, palette = Preprocess.quantize(img, 256-k, kmeans_quant=self.kwargs.get('kmeans_quant', False))
+            palette, padding = __class__._find_most_transparent(palette)
+            k+=1
+        return bitmap, palette, padding
+
+    def render_multiple(self,
+          box: Box,
+          event: Type[_BaseEvent],
+        ) -> tuple[npt.NDArray[np.uint8], tuple[npt.NDArray[np.uint8]]]:
+        """
+        Essentially find the PDS and CLU-bitmaps when 2+ compositions
+        are on screen simultaneously (they share the same palette)
+        """
+        bitmap, palette, padding = self._quantize_adapt_palette(event.img)
+
+        bitmap_box = padding*np.ones(box.shape, dtype=np.uint8)
+        bitmap_box[event.y-box.y:event.y-box.y+event.height, event.x-box.x:event.x-box.x+event.width] = bitmap
+
+        imgs = [bitmap_box[wob.get_window().slice] for wob in self.windows.values()]
+        return (palette, tuple(imgs))
+
+    def encode(*bitmaps) -> tuple[bytes]:
+        return tuple(map(PGraphics.encode_rle, bitmaps))
 
 #%%
 
@@ -409,16 +497,16 @@ class GroupingEngine:
             logger.warning("Number of groups is not Blu-Ray compliant.")
         self.n_groups = n_groups
         self.options = options
-    
+
     @staticmethod
     def coarse_grouping(group, /, *, blur_mul=1, blur_c=1.5, **kwargs):
         no_blur = kwargs.get('noblur_grouping', False)
-        
+
         # SD content should be blurred with lower coeffs. Remove constant.
         if no_blur:
             blur_c = kwargs.get('noblur_bc_c', 0.0)
             blur_mul = kwargs.get('noblur_bm_c', 1.0)
-        
+
         box = Box.from_events(group)
         (pxtl, pytl), (w, h) = box.posdim
         ratio_woh = abs(w/h)
@@ -432,7 +520,7 @@ class GroupingEngine:
             img_blurred[img_blurred <= 0.5] = 0
             img_blurred[img_blurred > 0.5] = 1
             ne_imgs.append(img_blurred)
-            
+
         gs_graph = np.zeros((len(group), h, w), dtype=np.uint8)
         gs_orig = np.zeros((len(group), h, w), dtype=np.uint8)
         for k, (event, b_img) in enumerate(zip(group, ne_imgs)):
@@ -452,24 +540,22 @@ class GroupingEngine:
 
         n_regions = len(srs)
         region_ids = range(n_regions)
-        
+
         if n_regions == 1:
             return [(WindowOnBuffer(srs),)]
-        
+
         #If we have two composition objects, we want to find out the smallest 2 areas
         # that englobes all the screen regions. We generate all possible arrangement
         arrangements = map(lambda combination: set(filter(lambda region_id: region_id >= 0, combination)),
                            set(combinations(list(region_ids) + [-1]*(n_regions-2), n_regions-1)))
-        
-        union = set(region_ids)
+
         for key, arrangement in enumerate(arrangements):
-            other = union - arrangement
             arr_sr, other_sr = [], []
             for k, sr in enumerate(srs):
                 (arr_sr if k in arrangement else other_sr).append(sr)
             windows[key] = (WindowOnBuffer(arr_sr), WindowOnBuffer(other_sr))
             areas[key] = sum(map(lambda wb: wb.area(), windows[key]))
-            
+
         #Here, we can sort by ascending area – the one that is the "cheapest" for the buffer
         return [windows[k] for k, _ in sorted(areas.items(), key=lambda x: x[1])]
 
@@ -481,17 +567,17 @@ class GroupingEngine:
         """
         windows = {}
         areas = {}
-        
+
         if len(srs) == 1:
             return [(WindowOnBuffer(srs),)]
-        
+
         mask = set(range(len(srs)))
         processed = []
 
-        for k, sr in enumerate(srs[1:], 1):            
+        for k, sr in enumerate(srs[1:], 1):
             t_main = Node(0, chain=[0], srl=[srs[0]])
             t_other = Node(k, chain=[k], srl=[sr])
-            
+
             for l, sr_other in enumerate(srs[1:], 1):
                 if l == k: continue
                 for root in [t_main, t_other]:
@@ -502,7 +588,7 @@ class GroupingEngine:
             #We can use t_main.leaves and t_other.descendants (?)
             main_leaves = list(t_main.descendants) + [t_main]
             other_leaves = list(t_other.descendants) + [t_other]
-            
+
             for leaf in main_leaves:
                 # Filter duplicate sets
                 if (lset := set(leaf.chain)) in processed:
@@ -515,24 +601,24 @@ class GroupingEngine:
 
         #Here, we can sort by ascending area – the one that is the "cheapest" for the buffer
         return [windows[k] for k, _ in sorted(areas.items(), key=lambda x: x[1])]
-        
+
 
     def group(self, subgroup: list[BDNXMLEvent], **kwargs) -> list[list[list[_Region]]]:
         cls = self.__class__
         regions, gs_map, gs_origs, box = cls.coarse_grouping(subgroup, **kwargs)
-        
+
         tbox = []
         for region in regions:
             region.slice = cls.crop_region(region, gs_origs)
             tbox.append(ScreenRegion.from_region(region))
-            
+
         wobs = cls.group_and_sort2(tbox)
         return cls.select_best_wob(wobs, box), box
-                
+
     @classmethod
     def select_best_wob(cls, wobs: list[tuple[WindowOnBuffer]], box: Box) -> tuple[WindowOnBuffer]:
         scores = []
-        
+
         #wobs is a list of pairs of wob
         for wobp in wobs[:20]:
             area_refreshed = 0
@@ -541,21 +627,21 @@ class GroupingEngine:
                 area_refreshed += wob.area()*np.sum(mask)
             scores.append(area_refreshed)
         return wobs[scores.index(min(scores))]
-        
+
     def feedback(self, sregs: list[ScreenRegion]) -> Any:
         assert len(sregs) <= self.n_groups, "Region count mismatch with settings."
         for sreg in sregs:
             ...
         return False
-    
+
     @staticmethod
     def crop_region(region: _Region, gs_origs: npt.NDArray[np.uint8]) -> _Region:
-        #Mask out object outside of the active region. 
+        #Mask out object outside of the active region.
         gs_origs = gs_origs.copy()
         #Apply blurred mask  so we don't catch nearby graphics by working with just rectangles
         gs_origs[region.slice] &= region.image
-        
-        cntXl = 0 
+
+        cntXl = 0
         while np.all(gs_origs[region.slice[0], region.slice[1],
                               region.slice[2].start+cntXl:region.slice[2].start+1+cntXl] == 0):
             cntXl += 1
@@ -568,19 +654,18 @@ class GroupingEngine:
         while np.all(gs_origs[region.slice[0], region.slice[1].start+cntYt:region.slice[1].start+cntYt+1,
                               region.slice[2]] == 0):
             cntYt += 1
-        
+
         cntYb = -1
         while np.all(gs_origs[region.slice[0], region.slice[1].stop+cntYb:region.slice[1].stop+cntYb+1,
                               region.slice[2]] == 0):
             cntYb -= 1
         cntYb += 1
-        
+
         f_region = tuple([region.slice[0],
                       slice(region.slice[1].start+cntYt, region.slice[1].stop+cntYb),
                       slice(region.slice[2].start+cntXl, region.slice[2].stop+cntXr)])
-        
+
         # Refine image mask, this is a bit hacky as we modify the internal variable
         #(but it is what is returned by the .image property so we're good)
         region._cache['image'] = gs_origs[f_region] != 0
         return f_region
-
