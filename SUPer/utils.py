@@ -123,12 +123,13 @@ class BDVideo:
 
     class VideoFormat(Enum):
         HD1080    = (1920, 1080)
-        HD1080_43 = (1440, 1080) #Probably illegal
         HD720     = (1280, 720)
-        SD576_169 = (1024, 576) #Probably illegal
-        SD480_169 = (856,  480) #Probably illegal
         SD576_43  = (720,  576)
         SD480_43  = (720,  480)
+        HD1080_43 = (1440, 1080) #Probably illegal
+        SD576_169 = (1024, 576) #Probably illegal
+        SD480_169 = (856,  480) #Probably illegal
+
 
     class PCSFPS(IntEnum):
         FILM_NTSC_P = 0x10
@@ -140,7 +141,7 @@ class BDVideo:
 
         @classmethod
         def from_fps(cls, other: float):
-            return BDVideo.LUT_PCS_FPS[np.round(other, 3)]
+            return cls(BDVideo.LUT_PCS_FPS[np.round(other, 3)])
 
     LUT_PCS_FPS = {
         23.976:0x10,
@@ -150,6 +151,29 @@ class BDVideo:
         50:    0x60,
         59.94: 0x70,
     }
+
+    LUT_FPS_PCSFPS = {
+        0x10: 23.976,
+        0x20: 24,
+        0x30: 25,
+        0x40: 29.97,
+        0x60: 50,
+        0x70: 59.94,
+    }
+
+    def __init__(self, fps: float, height: int, width: Optional[int] = None) -> None:
+        self.fps = __class__.FPS(fps)
+        self.pcsfps = __class__.PCSFPS.from_fps(self.fps.value)
+        if width is None:
+            self.format = None
+            for vf in __class__.VideoFormat:
+                if vf.value[1] == height:
+                    self.format = vf
+                    break
+            assert self.format is not None
+        else:
+            self.format = __class__.VideoFormat((height, width))
+
 
 class TimeConv:
     @staticmethod

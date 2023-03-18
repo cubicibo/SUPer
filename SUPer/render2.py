@@ -417,19 +417,32 @@ class PGDecoderStats:
 
     def ds_comply(self, ds) -> bool:
         self._ds_action(ds)
+        details = f"{TC.s2tc(ds.pcs.pts, LUT_FPS_PCSFPS[ds.pcs.fps]}: "
         valid = True
         valid &= self.db_usage < PGDecoder.DECODED_BUF_SIZE
-        #TODO: try to implement buffering here with the 1 MiB buffer at the input
-        valid &= self.stream_bandwidth() < PGDecoder.RX + int(PGDecoder.CODED_BUF_SIZE/2)
+        if not valid:
+            details += "ERR: Object buffer overrun, "
+
+        valid &= self.stream_bandwidth() < PGDecoder.RX + PGDecoder.CODED_BUF_SIZE
+        if not valid:
+            details += "ERR: Excessive BDAV PG bandwidth, "
+        else:
+            #TODO: try to implement buffering here with the 1 MiB buffer at the input
+            valid &= self.stream_bandwidth() < PGDecoder.RX + int(PGDecoder.CODED_BUF_SIZE/1.8)
+            if not valid:
+                # This is not a critical error because we have a 1 MiB PG buffer
+                # if it triggers for a long time there will be an overrun.
+                details += "WARN: High BDAV bandwidth, "
+
         valid &= self.coded_bandwidth() < PGDecoder.RD
-        # This check is probably useless without cropping as last_rc is more strict
-        #valid &= self.decoded_bandwidth() < PGDecoder.RC
+        if not valid:
+            details += "ERR: Excessive object bandwidth, "
+
         valid &= self.last_rc() < PGDecoder.RC
-        try:
-            #Also check the displayset for illegal structures and arrangements.
-            self.test_diplayset()
-        except:
-            valid = False
+        if not valid:
+            details += "WARN: Flickering"
+        self.test_diplayset()
+        logging.warning(details)
         return valid
 
     def _save_usage(self, pgbytes: int, coded: int, decoded: int, pts: float) -> None:
@@ -564,7 +577,13 @@ class PGConvert:
         #TODO: return acq_on_change mask. In case remaining bitmap does not change, we can just do a normal case.
         return lcs
 
-    def render(self, events: list[Type[BaseEvent]], box: Box) -> list[...]:
+    def render(self,
+           events: list[Type[BaseEvent]],
+           box: Box
+        ) -> list[list[...], list[Type[BaseEvent]]]:
+        """
+        Performs the conversion from T[BaseEvents] to bitmaps with palette.
+        """
         window_active_mask = np.zeros((len(self.window), len(events)), dtype=np.uint8)
         min_update_mask = window_active_mask.copy() #Bare minimum
         interm_update_mask = min_update_mask.copy() #Add some updates here and there when we can
@@ -574,39 +593,57 @@ class PGConvert:
 
         for w_id, window in self.windows.items():
             window_active_mask[w_id] = window.event_mask()
-            min_update_mask[w_id] = window.bitmap_update_mask()
+            min_update_mask[w_id] = window.bitmap_update_mask() | (delays > 20).astype(np.uint8)
             interm_update_mask[w_id] = min_update_mask[w_id] | (delays > 9).astype(np.uint8) #seek for 6 frames for refresh
             max_update_mask[w_id] = interm_update_mask[w_id] | window.update_mask()
 
         k = 0
         output = []
+        output_events = []
+        tc_prev = events[0].tc_in
+
         while k < len(events):
-            if np.sum(window_active_mask[:, k]) > 1:
+            if tc_prev != events[k].tc_in:
+                #prev(out) != current(in) -> clear display at prev(out)
+                output.append((None, None))
+                output_events.append(tc_prev)
+
+            n_objs = np.sum(window_active_mask[:, k])
+            if n_objs > 1:
                 output.append(self.render_multiple(box, events[k]))
+                output_events.append(events[k])
                 ke = 1
-            else:
+            elif n_objs == 1:
                 active_window = np.argmax(window_active_mask[:, k])
                 ke = 0
                 while k+ke < len(events) and np.sum(window_active_mask[:, k+ke]) == 1 and window_active_mask[active_window, k+ke] == 1:
                     ke += 1
-                    if interm_update_mask[w_id, k+ke] != 0:
+                    if interm_update_mask[w_id, k+ke] != 0 or events[k+ke].tc_in != events[k+ke-1].tc_out:
                         break
                 e_group = events[k:k+ke]
                 if len(e_group) == 1:
                     output.append(self.render_single(box, e_group[0], active_window))
+                    output_events.append(e_group[0])
                 else:
                     #Create an event chain and send it to the palette sequence optimiser
                     nev = []
                     wd = self.windows[active_window].get_window()
                     for eig in e_group:
-                        img_fs = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
+                        img_fs = np.zeros((wd.dy, wd.dx, 4), dtype=np.uint8)
                         img_fs[eig.y-wd.y:eig.y+eig.height-wd.y, eig.x-wd.x:eig.x+eig.width-wd.x, :] = np.asarray(eig.img, np.uint8)
                         img = Image.fromarray(img_fs, mode='RGBA')
-                        props = (Pos(eig.x+pos.x, eig.y+pos.y), Dim(*img.size))
+                        props = (Pos(wd.x, wd.y), Dim(*img.size))
                         nev.append(BDNXMLEvent.copy_custom(eig, img, props))
                     output.append(Optimise.solve_sequence(*Optimise.prepare_sequence(nev))[::-1])
+                    output_events.append(nev)
+            else:
+                logging.warning("This should never happen.")
+                output.append((None, None))
+                output_events.append(tc_prev)
+            ####
+            tc_prev = events[k+ke-1].tc_out
             k += ke
-        return output
+        return output, output_events
 
 
     def render_single(self, box: Box, event: Type[BaseEvent], window_id: int) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
@@ -664,8 +701,67 @@ class PGConvert:
         imgs = [bitmap_box[wob.get_window().slice] for wob in self.windows.values()]
         return (palette, tuple(imgs))
 
-    def encode(*bitmaps) -> tuple[bytes]:
-        return tuple(map(PGraphics.encode_rle, bitmaps))
+    def convert(self, events: list[Type[BaseEvent]], box: Box, bdv: BDVideo) -> Epoch:
+        output_ip, nevs = self.render(events, box)
+        windows = {w_id: wobw.get_window() for w_id, wobw in self.windows.items()}
+
+        epoch = []
+        pds_v = 0
+        kds = 0
+
+        for (palette, images), nev in zip(output_ip, nevs):
+            #ACQUISITION
+            if type(image) is tuple or kds == 0 or type(palette) == type(image) is not tuple:
+                pts = TC.tc2s(nev.tc_in, bdv.fps.value)
+                if type(image) is not tuple:
+                    image == (image,)
+                cobjects = []
+                ods = []
+                for o_id, img in enumerate(images):
+                    ods.extend(PGraphics.bitmap_to_ods(image, o_id,
+                                                       pts=TC.tc2s(nev.tc_in, bdv.fps.value)))
+                    cobjects.append(CObject.from_scratch(o_id, o_id,
+                                                         h_pos=windows[o_id].x,
+                                                         v_pos=windows[o_id].y,
+                                                         forced=getattr(nev, 'forced', False))
+
+                pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
+                                       PCS.CompositionState.ACQUISITION, False, 0,
+                                       cobjects=cobjects, pts=pts)
+                end = ENDS.from_scratch(pts=pts)
+                pds = PDS.from_scratch(dict(zip(range(len(palette)), palette)), pds_v, 0, pts=pts)
+                epoch.append(DisplaySet([pcs, self.get_wds(pts)] + [pds] + ods + [end]))
+
+                kds += 1
+                pds_v += 1
+            elif type(palette) is tuple: #NORMAL CASE with palette effect
+                palups = Optimise.diff_cluts(cluts, matrix=self.kwargs.get('bt_colorspace', 'bt709'))
+
+                pcs_f = lambda pts, kdsu: PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kdsu,
+                                                     PCS.CompositionState.NORMAL, True, 0,
+                                                     cobjects=cobjects, pts=pts)
+
+                cobject
+                for kdp, (palup, snev) in enumerate(zip(palups, nev)):
+                    pts = TC.tc2s(snev.tc_in, bdv.fps.value)
+                    pds = PDS.from_scratch(palup, pds_v, 0, pts=pts)
+
+                    epoch.append(DisplaySet([pcs_f(pts, kdp+kds), pds, ENDS.from_scratch(pts=pts)]))
+                kds += kdp + 1
+            else:
+                pts = TC.tc2s(nev.tc_in, bdv.fps.value)
+                assert palette is None and images is None, "Not an empty NORMAL case."
+                pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
+                                       PCS.CompositionState.NORMAL, False, 0,
+                                       cobjects=[], pts=pts)
+                epoch.append(DisplaySet([pcs, self.get_wds(pts), ENDS.from_scratch(pts=pts)]))
+
+            pts = TC.tc2s(nev.tc_out, bdv.fps.value)
+            pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
+                                   PCS.CompositionState.NORMAL, False, 0,
+                                   cobjects=[], pts=pts)
+            epoch.append(DisplaySet([pcs, WDS.from_scratch([], pts=pts), ENDS.from_scratch(pts=pts)]))
+        return Epoch(epoch)
 
 #%%
 

@@ -783,7 +783,7 @@ def to_sup(bdn: BDNXML, cmap: npt.NDArray[np.uint8], cluts: npt.NDArray[np.uint8
     vw, vh = bdn.format.value
     pcs_fn = lambda cn,cs,pf,pts,dts=None,show=True : PCS.from_scratch(width=vw,
                                                              height=vh,
-                                                             fps=BDVideo.PCSFPS.from_fps(bdn.fps),
+                                                             fps=int(BDVideo.PCSFPS.from_fps(bdn.fps)),
                                                              composition_n=cn,
                                                              composition_state=cs,
                                                              pal_flag=pf,

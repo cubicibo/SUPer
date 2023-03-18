@@ -468,7 +468,7 @@ class PCS(PGSegment):
 
     @classmethod
     def from_scratch(cls, width: int, height: int, fps: PCSFPS, composition_n: int,
-                     composition_state: CompositionState, pal_flag: bool, pal_id: bool,
+                     composition_state: CompositionState, pal_flag: bool, pal_id: int,
                      cobjects: list[CObject], pts: Optional[float] = None,
                      dts: Optional[float] = None, **kwargs):
 
@@ -916,11 +916,11 @@ class DisplaySet:
             self.segments[0] = new_pcs
         else:
             raise TypeError("Not a PCS.")
-    
+
     @property
     def wds(self) -> Optional[WDS]:
         return self._wds[0] if self._wds else None
-        
+
     @wds.setter
     def wds(self, wds: Optional[WDS]) -> None:
         self._wds = [wds] * (wds is not None)
