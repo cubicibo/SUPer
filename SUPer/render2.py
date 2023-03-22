@@ -172,11 +172,8 @@ class ScreenRegion(Box):
 ####
 
 class WindowOnBuffer:
-    DURATION = None
-    USE_DEFAULT_DURATION = False
-    def __init__(self, screen_regions: list[ScreenRegion], duration: int, id: Optional[int] = None) -> None:
+    def __init__(self, screen_regions: list[ScreenRegion], duration: int) -> None:
         self.srs = screen_regions
-        self.id = id
         self.duration = duration
 
     def bitmap_update_mask(self,
@@ -637,7 +634,7 @@ class PGConvert:
                     output.append(Optimise.solve_sequence(*Optimise.prepare_sequence(nev))[::-1])
                     output_events.append(nev)
             else:
-                logging.warning("This should never happen.")
+                logging.warning("This code should not be executed. Did you load an empty bitmap?")
                 output.append((None, None))
                 output_events.append(tc_prev)
             ####

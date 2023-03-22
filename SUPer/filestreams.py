@@ -187,108 +187,6 @@ class SUPFile:
 ####SUPFile
 
 #%%
-class SupStream:
-    BUFFER_N_BYTES = 1048576
-    SEGMENTS = { 'PCS': PCS, 'WDS': WDS, 'PDS': PDS, 'ODS': ODS, 'END': ENDS }
-    DEPRECATED_SHOWN = False
-
-    def __init__(self, data: Union[str, Path, BytesIO, bytes], auto_close: Optional[bool] = True) -> None:
-        """
-        Manage a Sup Stream from a file, bytestring or an actual data stream.
-         Stop iterating once the buffer is consumed.
-         If the
-        :param auto_close: If the stream is a file, autoclose it when done reading.
-
-        :return:          PGSegment (that is, any child class)
-        """
-        self._is_file = type(data) in [Path, str]
-        self.stream = data if not self._is_file else open(data, 'rb')
-        self.s_index = 0
-        self._data = bytearray()
-        self.auto_close = auto_close
-        self._pending_segs = []
-
-        if not __class__.DEPRECATED_SHOWN:
-            logging.warning("SupStream class will be deprecated in the future. Use SUPFile")
-            __class__.DEPRECATED_SHOWN = True
-
-    def renew(self) -> None:
-        len_before = len(self._data)
-        self._data += self.stream.read(__class__.BUFFER_N_BYTES)
-        read_back = len(self._data) - len_before
-        self.s_index += read_back
-        return read_back
-
-    def epochs(self, epoch: Optional[Epoch] = Epoch()) -> Epoch:
-        """
-        Generator of Epoch for the given stream.
-         This function is stupid and can fail.
-        :param: epoch_ds : DSs to add to the first Epoch (catching behaviour)
-                            if dealing with a live bytestream
-
-        :yield:  Epoch containing a list of DS.
-        :return: An incomplete Epoch.
-        """
-
-        for ds in self.fetch_displayset():
-            if PCS.CompositionState.EPOCH_START == ds.pcs.composition_state:
-                if epoch.ds:
-                    yield epoch
-                    epoch = Epoch()
-            epoch.append(ds)
-        yield epoch #Return a probably incpmplete Epoch (EOS reached)
-
-    def fetch_displayset(self) -> DisplaySet:
-        for segment in self.fetch_segment(_watch_for_pending=False):
-            self._pending_segs.append(segment)
-            if isinstance(segment, ENDS):
-                yield DisplaySet(self._pending_segs)
-                self._pending_segs = []
-        return # Ran out of segments to generate a DS.
-
-    def fetch_segment(self, *, _watch_for_pending: bool = True) -> PGSegment:
-        """
-        Generator of PGS segment in the specified stream.
-         Stop iterating once the buffer is consumed.
-         Can be used after fetch_displayset() to retrieve orphaned segments.
-
-        :return:          PGSegment (that is, any child class)
-        """
-        if self.s_index == -1 or self.stream.closed:
-            raise Exception("Attempting to use a closed datastream.")
-
-        while True:
-            if self._pending_segs != [] and _watch_for_pending:
-                yield self._pending_segs.pop(0) # yield oldest segment pending
-                continue
-
-            if len(self._data) == 0 and not self.renew():
-                return
-
-            try:
-                seg = __class__.SEGMENTS[PGSegment(self._data).type](self._data)
-                self._data = self._data[len(seg):]
-                yield seg
-            except EOFError:
-                if self.renew() == 0:
-                    if self.auto_close and self._is_file:
-                        self.close()
-                    return
-            except (ValueError, BufferError) as e:
-                pg_id = self._data.find(PGSegment.MAGIC)
-                if pg_id == -1:
-                    self._data = bytearray(b'P') if self._data[-1] == b'P' else bytearray()
-                else:
-                    self._data = self._data[pg_id:]
-                if e == ValueError:
-                    logging.warning("Garbage in PGStream encountered.")
-
-    def close(self) -> None:
-        self.stream.close()
-        self.s_index = -1
-####SupStream
-
-#%%
 class BaseEvent:
     """
     Container event for any graphic object displayed on screen for a given time duration.
@@ -331,7 +229,6 @@ class BaseEvent:
 
     @property
     def img(self) -> Image.Image:
-        # provided for courtesy & compatbility reasons
         return self.image
 
     def set_custom_image(self, img: npt.NDArray[np.uint8]) -> None:
@@ -429,7 +326,7 @@ class BDNXMLEvent(BaseEvent):
                 new.x, new.y = props[0]
                 new._width, new._height = props[1]
         return new
-
+####BDNXMLEvent
 
 class SeqIO(ABC):
     """
@@ -461,6 +358,7 @@ class SeqIO(ABC):
     def groups(self, nf_split: Optional[float] = 0.26, tc_in: Optional[str] = None,
                tc_out: Optional[str] = None, /, *, _hard: bool = True) -> list[Type[BaseEvent]]:
         le = []
+        nf_split *= 1e3
 
         for event in self.fetch(tc_in, tc_out):
             if le == []:
@@ -471,7 +369,7 @@ class SeqIO(ABC):
             if _hard and td < 0:
                 raise Exception("Events are not ordered in time: {event.tc_in},"
                                 "{event.gfxfile.split(os.path.sep)[-1]} predates previous event.")
-            if le == [] or abs(td) < nf_split*1e3:
+            if le == [] or abs(td) < nf_split:
                 le.append(event)
             else:
                 yield le
@@ -485,6 +383,8 @@ class SeqIO(ABC):
          if tc_in is None or TC.tc2ms(e.tc_in, self.fps) >= TC.tc2ms(tc_in, self.fps):
           if tc_out is None or TC.tc2ms(e.tc_out, self.fps) <= TC.tc2ms(tc_out, self.fps):
            yield e
+          else: #Past tc out point
+           return
 
     def __len__(self):
         return len(self.events)
