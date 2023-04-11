@@ -20,8 +20,9 @@
 import numpy as np
 
 from typing import Any, TypeVar, Optional, Type, Union
+from enum import Enum
 from dataclasses import dataclass
-from itertools import combinations
+from itertools import combinations, chain
 
 from numpy import typing as npt
 from anytree import Node
@@ -34,7 +35,7 @@ from SUPer.utils import get_super_logger, Pos, Dim, Shape, BDVideo
 from SUPer.filestreams import BDNXMLEvent, BaseEvent
 from SUPer.segments import DisplaySet, PCS, WDS, ODS, WindowDefinition
 from SUPer.optim import Optimise, Preprocess
-from SUPer.pgraphics import PGraphics
+from SUPer.pgraphics import PGraphics, PGDecoder
 
 _Region = TypeVar('Region')
 
@@ -89,6 +90,19 @@ class Box:
     def slice_y(self) -> slice:
         return slice(self.y, self.y+self.dy)
 
+    def overlap_with(self, other) -> float:
+        intersect = __class__.intersect(self, other)
+        return intersect.area/min(self.area, other.area)
+
+    @classmethod
+    def intersect(cls, *box) -> 'Box':
+        x2 = min(map(lambda b: b.x2, box))
+        y2 = min(map(lambda b: b.y2, box))
+        x1 = max(map(lambda b: b.x, box))
+        y1 = max(map(lambda b: b.y, box))
+        dx, dy = (x2-x1), (y2-y1)
+        return cls(y1, dy * bool(dy > 0), x1, dx * bool(dx > 0))
+
     @classmethod
     def from_region(cls, region: _Region) -> 'Box':
         return cls.from_slices(region.slice)
@@ -109,6 +123,14 @@ class Box:
             final_hull
             raise NotImplementedError
         return final_hull
+
+    @classmethod
+    def union(cls, *box) -> 'Box':
+        x2 = max(map(lambda b: b.x2, box))
+        y2 = max(map(lambda b: b.y2, box))
+        x1 = min(map(lambda b: b.x, box))
+        y1 = min(map(lambda b: b.y, box))
+        return cls(y1, y2-y1, x1, x2-x1)
 
     @classmethod
     def from_events(cls, events: list[BaseEvent]) -> 'Box':
@@ -281,106 +303,6 @@ class WindowOnBuffer:
                 assert sr.dt > 0, assert_str
                 mask[sr.t] += 1
 
-class PGDecoder:
-    RX =  2*(1024**2)
-    RD = 16*(1024**2)
-    RC = 32*(1024**2)
-    FREQ = 90e3
-    DECODED_BUF_SIZE = 4*(1024**2)
-    CODED_BUF_SIZE   = 1*(1024**2)
-
-    @classmethod
-    def gplane_write_time(cls, *shape, coeff: int = 1):
-        return cls.FREQ * np.ceil(coeff*shape[0]*shape[1]/cls.RC)
-
-    @classmethod
-    def plane_initilaization_time(cls, ds: DisplaySet) -> int:
-        init_d = 0
-        if PCS.CompositionState.EPOCH_START & ds.pcs.composition_state:
-            #The patent gives the coeff 8 but does not explain where it comes from
-            # and the statements in the documentation says it is just the size of the
-            # graphic plane. But there are two graphics planes (swapped on each
-            # composition). So I assume the coefficient of two. Also, it makes no
-            # sense for an epoch start to be faster than an acquisition or a normal
-            # case and this is not validated with empirical trials.
-            init_d = cls.gplane_write_time(ds.pcs.width, ds.pcs.height, coeff=2)
-        else:
-            for window in ds.wds.windows:
-                init_d += cls.gplane_write_time(ds.pcs.width, ds.pcs.height)
-        return init_d
-
-    @classmethod
-    def wait(cls, ds: DisplaySet, obj_id: int, current_duration: int) -> int:
-        wait_duration = 0
-        for object_def in ds.ods:
-            if object_def.o_id == obj_id:
-                c_time = ds.pcs.dts + current_duration
-                if c_time < object_def.pts:
-                    wait_duration += object_def.pts - c_time
-                return np.ceil(wait_duration*cls.FREQ)
-        raise AssertionError("We should not be here (?)")
-        return wait_duration
-    ####
-    @staticmethod
-    def size(ds: DisplaySet, window_id: int) -> Shape:
-        window = None
-        for wd in ds.pcs.wds.window:
-            if ds.pcs.cobjects[0].window_id == wd.window_id:
-                window = wd
-                break
-        assert window is not None, "Did not find window definition."
-        return Shape(window.width, window.height)
-
-    @staticmethod
-    def object_areas(ods: list[ODS]) -> int:
-        return sum(map(lambda o: o.width*o.height if o.flags & o.ODSFlags.SEQUENCE_FIRST else 0, ods))
-
-    @staticmethod
-    def window_areas(wds: WDS) -> int:
-        return sum(map(lambda window: window.width * window.height, wds.windows))
-
-    @classmethod
-    def rc_coeff(cls, ods: list[ODS], wds: WDS) -> int:
-        return cls.object_areas(ods) + cls.window_areas(wds)
-
-    @classmethod
-    def decode_duration(cls, ds: DisplaySet) -> int:
-        decode_duration = cls.plane_initilaization_time(ds)
-        if ds.pcs.n_objects == 2:
-            if ds.pcs.cobjects[0].window_id == ds.pcs.cobjects[1].window_id:
-                decode_duration += cls.wait(ds, ds.pcs.cobjects[1].o_id, decode_duration)
-                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
-            else:
-                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
-                decode_duration += cls.wait(ds, ds.pcs.cobjects[1].o_id, decode_duration)
-                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[1].window_id))
-
-        elif ds.pcs.n_objects == 1:
-            decode_duration += cls.wait(ds, ds.pcs.cobjects[0].o_id, decode_duration)
-            decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
-        return decode_duration
-    ####
-
-    @classmethod
-    def displayset_transfer(cls, display_set: DisplaySet,
-                            wds: Optional[WDS] = None,
-                            ods: Optional[list[ODS]] = None) -> bool:
-        """
-        More precise, taking into account the transfer time at 128 Mbps.
-        This function does not consider
-        """
-        raise NotImplementedError("This function does not consider decoder multitasking.")
-        dd = 0
-        if display_set.ods != []:
-            assert ods is None, "Provided displayset with ODS>=1 and a list of ODS..."
-            ods = display_set.ods
-            dd += cls.decode_duration(display_set)
-            dd += cls.object_areas(display_set.ods)/cls.RD
-        if wds is None:
-            assert display_set.wds, "Cannot compute the transfer time without windows."
-            wds = display_set.wds
-        return dd + (cls.rc_coeff(ods, wds)/cls.RC)
-
 #%%
 @dataclass
 class PGDecoderStats:
@@ -425,7 +347,7 @@ class PGDecoderStats:
 
     def ds_comply(self, ds) -> bool:
         self._ds_action(ds)
-        details = f"{TC.s2tc(ds.pcs.pts, LUT_FPS_PCSFPS[ds.pcs.fps]}: "
+        details = f"{TC.s2tc(ds.pcs.pts, LUT_FPS_PCSFPS[ds.pcs.fps])}: "
         valid = True
         valid &= self.db_usage < PGDecoder.DECODED_BUF_SIZE
         if not valid:
@@ -709,85 +631,98 @@ class PGConvert:
         imgs = [bitmap_box[wob.get_window().slice] for wob in self.windows.values()]
         return (palette, tuple(imgs))
 
-    def convert(self, events: list[Type[BaseEvent]], box: Box, bdv: BDVideo) -> Epoch:
-        output_ip, nevs = self.render(events, box)
-        windows = {w_id: wobw.get_window() for w_id, wobw in self.windows.items()}
+    # def convert(self, events: list[Type[BaseEvent]], box: Box, bdv: BDVideo) -> Epoch:
+    #     output_ip, nevs = self.render(events, box)
+    #     windows = {w_id: wobw.get_window() for w_id, wobw in self.windows.items()}
 
-        epoch = []
-        pds_v = 0
-        kds = 0
+    #     epoch = []
+    #     pds_v = 0
+    #     kds = 0
 
-        for (palette, images), nev in zip(output_ip, nevs):
-            #ACQUISITION
-            if type(image) is tuple or kds == 0 or type(palette) == type(image) is not tuple:
-                pts = TC.tc2s(nev.tc_in, bdv.fps.value)
-                if type(image) is not tuple:
-                    image == (image,)
-                cobjects = []
-                ods = []
-                for o_id, img in enumerate(images):
-                    ods.extend(PGraphics.bitmap_to_ods(image, o_id,
-                                                       pts=TC.tc2s(nev.tc_in, bdv.fps.value)))
-                    cobjects.append(CObject.from_scratch(o_id, o_id,
-                                                         h_pos=windows[o_id].x,
-                                                         v_pos=windows[o_id].y,
-                                                         forced=getattr(nev, 'forced', False))
+    #     for (palette, images), nev in zip(output_ip, nevs):
+    #         #ACQUISITION
+    #         if type(image) is tuple or kds == 0 or type(palette) == type(image) is not tuple:
+    #             pts = TC.tc2s(nev.tc_in, bdv.fps.value)
+    #             if type(image) is not tuple:
+    #                 image == (image,)
+    #             cobjects = []
+    #             ods = []
+    #             for o_id, img in enumerate(images):
+    #                 ods.extend(PGraphics.bitmap_to_ods(image, o_id,
+    #                                                    pts=TC.tc2s(nev.tc_in, bdv.fps.value)))
+    #                 cobjects.append(CObject.from_scratch(o_id, o_id,
+    #                                                      h_pos=windows[o_id].x,
+    #                                                      v_pos=windows[o_id].y,
+    #                                                      forced=getattr(nev, 'forced', False))
 
-                pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
-                                       PCS.CompositionState.ACQUISITION, False, 0,
-                                       cobjects=cobjects, pts=pts)
-                end = ENDS.from_scratch(pts=pts)
-                pds = PDS.from_scratch(dict(zip(range(len(palette)), palette)), pds_v, 0, pts=pts)
-                epoch.append(DisplaySet([pcs, self.get_wds(pts)] + [pds] + ods + [end]))
+    #             pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
+    #                                    PCS.CompositionState.ACQUISITION, False, 0,
+    #                                    cobjects=cobjects, pts=pts)
+    #             end = ENDS.from_scratch(pts=pts)
+    #             pds = PDS.from_scratch(dict(zip(range(len(palette)), palette)), pds_v, 0, pts=pts)
+    #             epoch.append(DisplaySet([pcs, self.get_wds(pts)] + [pds] + ods + [end]))
 
-                kds += 1
-                pds_v += 1
-            elif type(palette) is tuple: #NORMAL CASE with palette effect
-                palups = Optimise.diff_cluts(cluts, matrix=self.kwargs.get('bt_colorspace', 'bt709'))
+    #             kds += 1
+    #             pds_v += 1
+    #         elif type(palette) is tuple: #NORMAL CASE with palette effect
+    #             palups = Optimise.diff_cluts(cluts, matrix=self.kwargs.get('bt_colorspace', 'bt709'))
 
-                pcs_f = lambda pts, kdsu: PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kdsu,
-                                                     PCS.CompositionState.NORMAL, True, 0,
-                                                     cobjects=cobjects, pts=pts)
+    #             pcs_f = lambda pts, kdsu: PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kdsu,
+    #                                                  PCS.CompositionState.NORMAL, True, 0,
+    #                                                  cobjects=cobjects, pts=pts)
 
-                cobject
-                for kdp, (palup, snev) in enumerate(zip(palups, nev)):
-                    pts = TC.tc2s(snev.tc_in, bdv.fps.value)
-                    pds = PDS.from_scratch(palup, pds_v, 0, pts=pts)
+    #             cobject
+    #             for kdp, (palup, snev) in enumerate(zip(palups, nev)):
+    #                 pts = TC.tc2s(snev.tc_in, bdv.fps.value)
+    #                 pds = PDS.from_scratch(palup, pds_v, 0, pts=pts)
 
-                    epoch.append(DisplaySet([pcs_f(pts, kdp+kds), pds, ENDS.from_scratch(pts=pts)]))
-                kds += kdp + 1
-            else:
-                pts = TC.tc2s(nev.tc_in, bdv.fps.value)
-                assert palette is None and images is None, "Not an empty NORMAL case."
-                pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
-                                       PCS.CompositionState.NORMAL, False, 0,
-                                       cobjects=[], pts=pts)
-                epoch.append(DisplaySet([pcs, self.get_wds(pts), ENDS.from_scratch(pts=pts)]))
+    #                 epoch.append(DisplaySet([pcs_f(pts, kdp+kds), pds, ENDS.from_scratch(pts=pts)]))
+    #             kds += kdp + 1
+    #         else:
+    #             pts = TC.tc2s(nev.tc_in, bdv.fps.value)
+    #             assert palette is None and images is None, "Not an empty NORMAL case."
+    #             pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
+    #                                    PCS.CompositionState.NORMAL, False, 0,
+    #                                    cobjects=[], pts=pts)
+    #             epoch.append(DisplaySet([pcs, self.get_wds(pts), ENDS.from_scratch(pts=pts)]))
 
-            pts = TC.tc2s(nev.tc_out, bdv.fps.value)
-            pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
-                                   PCS.CompositionState.NORMAL, False, 0,
-                                   cobjects=[], pts=pts)
-            epoch.append(DisplaySet([pcs, WDS.from_scratch([], pts=pts), ENDS.from_scratch(pts=pts)]))
-        return Epoch(epoch)
+    #         pts = TC.tc2s(nev.tc_out, bdv.fps.value)
+    #         pcs = PCS.from_scratch(bdv.width, bdv.height, bdv.pcsfps, kds,
+    #                                PCS.CompositionState.NORMAL, False, 0,
+    #                                cobjects=[], pts=pts)
+            # epoch.append(DisplaySet([pcs, WDS.from_scratch([], pts=pts), ENDS.from_scratch(pts=pts)]))
+        # return Epoch(epoch)
 
 #%%
 
 class GroupingEngine:
-    def __init__(self, n_groups: Optional[int] = None, **kwargs) -> None:
-        if n_groups is not None and n_groups not in range(1, 3):
-            logger.warning("Number of groups is not Blu-Ray compliant.")
+    class Mode(Enum):
+        SMALLEST_WINDOWS = 'area'
+        LEAST_ACQUISITIONS = 'acq'
+        SPECIAL_EFFECTS = 'special'
+
+        def __eq__(self, other: Any) -> bool:
+            if isinstance(self, self.__class__):
+                return self.value == other.value
+            if isinstance(other, str):
+                return self.value == other.lower()
+            return NotImplemented
+
+    def __init__(self, n_groups: int = 2, **kwargs) -> None:
+        if n_groups not in range(1, 3):
+            raise AssertionError(f"GroupingEngine expects 1 or 2 groups, not '{n_groups}'.")
+
         self.n_groups = n_groups
-        self.keep = kwargs.pop('n_keep', 10)
         self.candidates = kwargs.pop('candidates', 25)
+        self.mode = kwargs.pop('mode', __class__.Mode.SMALLEST_WINDOWS)
 
         self.no_blur = kwargs.pop('noblur_grouping', False)
-        self.blur_mul = kwargs.pop('blur_mul', 1.0)
+        self.blur_mul = kwargs.pop('blur_mul', 1.1)
         self.blur_c = kwargs.pop('blur_const', 1.5)
 
         self.kwargs = kwargs
 
-    def coarse_grouping(self, group: list[Type[BaseEvent]]):
+    def coarse_grouping(self, group: list[Type[BaseEvent]]) -> tuple[_Region, npt.NDArray[np.uint8], Box]:
         # SD content should be blurred with lower coeffs. Remove constant.
         blur_mul = self.blur_mul
         blur_c = self.blur_c
@@ -805,8 +740,8 @@ class GroupingEngine:
         for event in group:
             imgg = np.asarray(event.img.getchannel('A'), dtype=np.uint8)
             img_blurred = (255*gaussian(imgg, (blur_c + blur_mul*ratio_how, blur_c + blur_mul*ratio_woh)))
-            img_blurred[img_blurred <= 0.5] = 0
-            img_blurred[img_blurred > 0.5] = 1
+            img_blurred[img_blurred <= 0.25] = 0
+            img_blurred[img_blurred > 0.25] = 1
             ne_imgs.append(img_blurred)
 
         gs_graph = np.zeros((len(group), h, w), dtype=np.uint8)
@@ -816,60 +751,152 @@ class GroupingEngine:
             slice_y = slice(event.y-pytl, event.y-pytl+event.height)
             gs_graph[k, slice_y, slice_x] = b_img.astype(np.uint8)
             gs_orig[k, slice_y, slice_x] = np.array(event.img.getchannel('A'))
-        return regionprops(label(gs_graph)), gs_graph, gs_orig, box
+        return regionprops(label(gs_graph)), gs_orig, box
 
-    @staticmethod
-    def group_and_sort(srs: list[ScreenRegion], duration: int) -> list[tuple[WindowOnBuffer]]:
+    def group_and_sort_flat(self, srs: list[ScreenRegion], duration: int) -> list[tuple[WindowOnBuffer]]:
         """
         Seek for minimum areas from the regions, sort them and return them sorted,
         ascending area size. The caller will then choose the best area.
+        This function flatten the 3D space to a 2D one by grouping similar regions
         """
-        windows, areas = {}, {}
+        nsrs = len(srs)
 
-        n_regions = len(srs)
-        region_ids = range(n_regions)
-
-        if n_regions == 1:
+        if nsrs == 1 or self.n_groups == 1:
             return [(WindowOnBuffer(srs, duration=duration),)]
 
+        assert nsrs < 65536, "Too many regions."
+
+        inters_coeff = np.zeros((nsrs, nsrs))
+        for k, sr in enumerate(srs):
+            inters_coeff[k,:] = list(map(sr.overlap_with, srs))
+        inters_coeff -= np.eye(nsrs)
+
+        success = False
+        for thresh in np.arange(0.9, 0.4, -0.1):
+            lut = {}
+            groups = {}
+            seen = set()
+            mapping = np.argwhere(inters_coeff > thresh)
+            for k, v in mapping:
+                groups[k] = groups.get(k, []) + [v]
+            z = 0
+            for k, v in sorted(groups.items(), key=lambda e: len(e[1]), reverse=True):
+                if k in seen:
+                    continue
+                ids = list(chain(v, [k]))
+                lut[z] = [srid for srid in ids if srid not in seen]
+                seen |= set(ids)
+                z += 1
+            for k, sr in enumerate(srs):
+                if k not in seen:
+                    lut[z] = [k]
+                    z += 1
+            if len(lut) <= np.ceil(len(srs)/3.5): #/3.5 number of groups
+                success=True
+                break
+        ####
+        if len(lut) >= 16:
+            if len(lut) > 19:
+                raise AssertionError("Cannot optimise, too many isolated graphics in epoch.")
+            logging.warning("Grouping: long brute force situation: this will be SLOW!")
+        return self._group_and_sort_mapped(srs, duration, lut)
+
+    @staticmethod
+    def _get_combinations(n_regions: int) -> map:
         #If we have two composition objects, we want to find out the smallest 2 areas
         # that englobes all the screen regions. We generate all possible arrangement
+        region_ids = range(n_regions)
         arrangements = map(lambda combination: set(filter(lambda region_id: region_id >= 0, combination)),
-                           set(combinations(list(region_ids) + [-1]*(n_regions-2), n_regions-1)))
+                                   set(combinations(list(region_ids) + [-1]*(n_regions-2), n_regions-1)))
+        return arrangements
 
-        for key, arrangement in enumerate(arrangements):
+    def _group_and_sort_mapped(self,
+           srs: list[ScreenRegion],
+           duration: int,
+           mapping: dict[int, list[int]]
+        ) -> list[tuple[WindowOnBuffer]]:
+        """
+        Find the windows using pre-grouped srs according to some mapping.
+        """
+        combinations = __class__._get_combinations(len(mapping))
+
+        windows, areas = {}, {}
+
+        for key, arrangement in enumerate(combinations):
+            arr_sr, other_sr = [], []
+            for k, srl in mapping.items():
+                (arr_sr if k in arrangement else other_sr).extend([sr for ksr, sr in enumerate(srs) if ksr in srl])
+            windows[key] = (WindowOnBuffer(arr_sr, duration=duration), WindowOnBuffer(other_sr, duration=duration))
+            areas[key] = sum(map(lambda wb: wb.area(), windows[key]))
+
+        #Here, we can sort by ascending area – first has the smallest windows
+        return [windows[k] for k, _ in sorted(areas.items(), key=lambda x: x[1])]
+
+    def group_and_sort(self, srs: list[ScreenRegion], duration: int) -> list[tuple[WindowOnBuffer]]:
+        """
+        Seek for minimum areas from the regions, sort them and return them sorted,
+        ascending area size. The caller will then choose the best area.
+        This function performs an expensive 3D search, only suited for len(srs) <= 16
+        """
+        windows, areas = {}, {}
+        n_regions = len(srs)
+
+        if n_regions == 1 or self.n_groups == 1:
+            return [(WindowOnBuffer(srs, duration=duration),)]
+
+        for key, arrangement in enumerate(__class__._get_combinations(n_regions)):
             arr_sr, other_sr = [], []
             for k, sr in enumerate(srs):
                 (arr_sr if k in arrangement else other_sr).append(sr)
             windows[key] = (WindowOnBuffer(arr_sr, duration=duration), WindowOnBuffer(other_sr, duration=duration))
             areas[key] = sum(map(lambda wb: wb.area(), windows[key]))
 
-        #Here, we can sort by ascending area – the one that is the "cheapest" for the buffer
+        #Here, we can sort by ascending area – first has the smallest windows
         return [windows[k] for k, _ in sorted(areas.items(), key=lambda x: x[1])]
 
     def group(self, subgroup: list[Type[BaseEvent]]) -> tuple[list[tuple[WindowOnBuffer]], Box]:
         cls = self.__class__
-        regions, gs_map, gs_origs, box = self.coarse_grouping(subgroup)
+        regions, gs_origs, box = self.coarse_grouping(subgroup)
 
         tbox = []
         for region in regions:
             region.slice = cls.crop_region(region, gs_origs)
             tbox.append(ScreenRegion.from_region(region))
 
-        wobs = cls.group_and_sort(tbox, len(subgroup))
-        return (self.select_best_wob(wobs, box), box)
+        if len(tbox) < 12:
+            wobs = self.group_and_sort(tbox, len(subgroup))
+        else:
+            wobs = self.group_and_sort_flat(tbox, len(subgroup))
+        wob = self.select_best_wob(wobs, box)
+        return wob, box
 
     def select_best_wob(self, wobs: list[tuple[WindowOnBuffer]], box: Box) -> tuple[WindowOnBuffer]:
-        scores = []
+        """
+        This function has three mode, depending of the GroupingEngine:
+            - return the pair of WOBs with the minimum area
+            - return the pair of WOBs with the least amount of acquisition (rough est)
+            - TODOs: the pair of WOBs that would separate best special effects.
 
-        #wobs is a list of pairs of wob
-        for wobp in wobs[:self.candidates]:
-            area_refreshed = 0
-            for wob in wobp:
-                mask = wob.bitmap_update_mask(box)
-                area_refreshed += wob.area()*np.sum(mask)
-            scores.append(area_refreshed)
-        return list(map(lambda ws: ws[0], sorted(zip(wobs, scores), key=lambda ws : ws[1])))[:self.keep]
+        :param wobs: list of wobs pair
+        :param box: box containing all wobs
+        :return: list of wobs pair ordered ascendingly by total refreshed area.
+        """
+        if self.mode == __class__.Mode.SPECIAL_EFFECTS:
+            logger.warning("Not implemented yet, returning min area.")
+        if self.mode in [__class__.Mode.SPECIAL_EFFECTS, __class__.Mode.SMALLEST_WINDOWS]:
+            return wobs[0]
+        elif self.mode == __class__.Mode.LEAST_ACQUISITIONS:
+            scores = []
+            #wobs is a list of pairs of wob
+            for wobp in wobs[:self.candidates]:
+                area_refreshed = 0
+                for wob in wobp:
+                    mask = wob.bitmap_update_mask(box)
+                    area_refreshed += wob.area()*np.sum(mask)
+                scores.append(area_refreshed)
+            return next(map(lambda ws: ws[0], sorted(zip(wobs, scores), key=lambda ws : ws[1])))
+        else:
+            raise NotImplementedError("Unknown grouping choice mode.")
 
     @staticmethod
     def crop_region(region: _Region, gs_origs: npt.NDArray[np.uint8]) -> _Region:

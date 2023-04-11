@@ -21,7 +21,9 @@ import numpy as np
 from typing import Union, Optional
 from enum import Enum
 
-from .segments import ODS
+from .utils import Shape
+from .segments import WDS, ODS, DisplaySet
+from .filestreams import BaseEvent
 
 class PGraphics:
     @classmethod
@@ -176,3 +178,314 @@ class PGraphics:
             from PIL import Image
             Image.fromarray(palette[bitmap], 'RGB').show()
 ####
+class PGDecoder:
+    RX =  2*(1024**2)
+    RD = 16*(1024**2)
+    RC = 32*(1024**2)
+    FREQ = 90e3
+    DECODED_BUF_SIZE = 4*(1024**2)
+    CODED_BUF_SIZE   = 1*(1024**2)
+
+    @classmethod
+    def gplane_write_time(cls, *shape, coeff: int = 1):
+        return cls.FREQ * np.ceil(coeff*shape[0]*shape[1]/cls.RC)
+
+    @classmethod
+    def plane_initilaization_time(cls, ds: DisplaySet) -> int:
+        init_d = 0
+        if PCS.CompositionState.EPOCH_START & ds.pcs.composition_state:
+            #The patent gives the coeff 8 but does not explain where it comes from
+            # and the statements in the documentation says it is just the size of the
+            # graphic plane. But there are two graphics planes (swapped on each
+            # composition). So I assume the coefficient of two. Also, it makes no
+            # sense for an epoch start to be faster than an acquisition or a normal
+            # case and this is not validated with empirical trials.
+            init_d = cls.gplane_write_time(ds.pcs.width, ds.pcs.height, coeff=2)
+        else:
+            for window in ds.wds.windows:
+                init_d += cls.gplane_write_time(ds.pcs.width, ds.pcs.height)
+        return init_d
+
+    @classmethod
+    def wait(cls, ds: DisplaySet, obj_id: int, current_duration: int) -> int:
+        wait_duration = 0
+        for object_def in ds.ods:
+            if object_def.o_id == obj_id:
+                c_time = ds.pcs.dts + current_duration
+                if c_time < object_def.pts:
+                    wait_duration += object_def.pts - c_time
+                return np.ceil(wait_duration*cls.FREQ)
+        raise AssertionError("We should not be here (?)")
+        return wait_duration
+    ####
+    @staticmethod
+    def size(ds: DisplaySet, window_id: int) -> Shape:
+        window = None
+        for wd in ds.pcs.wds.window:
+            if ds.pcs.cobjects[0].window_id == wd.window_id:
+                window = wd
+                break
+        assert window is not None, "Did not find window definition."
+        return Shape(window.width, window.height)
+
+    @staticmethod
+    def object_areas(ods: list[ODS]) -> int:
+        return sum(map(lambda o: o.width*o.height if o.flags & o.ODSFlags.SEQUENCE_FIRST else 0, ods))
+
+    @staticmethod
+    def window_areas(wds: WDS) -> int:
+        return sum(map(lambda window: window.width * window.height, wds.windows))
+
+    @classmethod
+    def rc_coeff(cls, ods: list[ODS], wds: WDS) -> int:
+        return cls.object_areas(ods) + cls.window_areas(wds)
+
+    @classmethod
+    def decode_duration(cls, ds: DisplaySet) -> int:
+        decode_duration = cls.plane_initilaization_time(ds)
+        if ds.pcs.n_objects == 2:
+            if ds.pcs.cobjects[0].window_id == ds.pcs.cobjects[1].window_id:
+                decode_duration += cls.wait(ds, ds.pcs.cobjects[1].o_id, decode_duration)
+                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
+            else:
+                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
+                decode_duration += cls.wait(ds, ds.pcs.cobjects[1].o_id, decode_duration)
+                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[1].window_id))
+
+        elif ds.pcs.n_objects == 1:
+            decode_duration += cls.wait(ds, ds.pcs.cobjects[0].o_id, decode_duration)
+            decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
+        return decode_duration
+    ####
+#%%
+from SSIM_PIL import compare_ssim
+
+class WOBSAnalyzer:
+    def __init__(self, wobs: ..., events: ..., box: ..., fps: ...):
+        self.wobs = wobs
+        self.events = events
+        self.box = box
+        self.fps = fps
+
+    def analyze(self):
+        #First we get the active mask
+        active_mask = self.wobs[0].event_mask()
+        woba = []
+        for wob in self.wobs[1:]:
+            active_mask += wob.event_mask()
+            woba.append(WOBAnalyzer(wob, events, box))
+
+        #Run first level analysis: find effects
+        wob_effects = list(map(wob.analyze, woba))
+
+        #get the frame count between each screen update
+        delays = self.get_delays()
+
+    def get_durations(self, events: ..., fps: ...) -> npt.NDArray[np.uint32]:
+        """
+        Returns the duration of each event in frames.
+        Additionally, the offset from the previous event is also returned. This value
+        is zero unless there are no PG objects shown at some point in the epoch.
+        """
+        top = TC.tc2f(self.events[0].tc_in, self.fps)
+        delays = []
+        for event in events:
+            tic = TC.tc2f(event.tc_in, self.fps)
+            toc = TC.tc2f(event.tc_out,self.fps)
+            delays.append((toc-tic, top-tic))
+            top = toc
+        return delays
+
+class PGEffect:
+    def __init__(self, rgba) -> None:
+        self.rgba =
+
+class WOBAnalyzer:
+    def __init__(self, wob: ..., events: list[BaseEvent], box: ...) -> None:
+        self.wob = wob
+        self.box = box
+        self.events = events
+
+    def get_event(self, window) -> npt.NDArray[np.uint8]:
+        windowed_event = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
+        work_plane = np.zeros((box.dy, box.dx, 4), dtype=np.uint8)
+
+        for event in self.events:
+            hsw = slice(event.x-self.box.x+window.x-1, event.x-self.box.x+window.x+min(window.dx, event.width)-1)
+            vsw = slice(event.y-self.box.y+window.y, event.y-self.box.y+window.y+min(window.dy, event.height))
+            hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
+            vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)
+            work_plane[vsi, hsi, :] = np.asarray(event.img, dtype=np.uint8)
+            windowed_event[vsw, hsw, :] = work_plane[vsw, hsw, :]
+            yield windowed_event
+            windowed_event *= 0
+            work_plane *= 0
+        #### #StopIteration
+
+    @staticmethod
+    def get_grayscale(rgba: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+        img = np.round(0.2989*imga[:,:,0] + 0.587*imga[:,:,1] + 0.114*imga[:,:,2]).astype(np.uint8)
+        img &= (rgba[:,:,3] > 0) #Should be unecessary
+        return img.clip(0, 255)
+
+    def check_fade(self, chain) -> float:
+        I = np.zeros((len(chain)))
+        Imax = 0
+        for k, img in enumerate(chain):
+            dwti = pywt.dwt2(img[:,:,3], 'db6')[0]
+            I[k] = np.sum(dwti)/dwti.size
+            Imax = np.max((I[k], Imax))
+        assert Imax > 0, "Chain of transparent images received"
+        I /= Imax
+        # check for deep slopes to zero or close to
+
+
+    def get_patch(self,
+        current: npt.NDArray[np.uint8],
+        previous: npt.NDArray[np.uint8]
+    ) -> npt.NDArray[np.uint8]:
+        """
+        """
+        ...
+
+    def compare_to_previous(self) -> float:
+        compare_ssim
+
+    def analyze(self):
+        cls = self.__class__
+        window = self.wob.get_window()
+        bitmaps = np.zeros((0, window.dy, window.dx, 4))
+
+        for rgba_img in get_event(window):
+            gs_img = cls.get_grayscale(rgba_img)
+            if bitmaps.size == 0:
+
+
+
+
+
+
+#%%
+class PGObjectBuffer:
+    """
+    This class represents a PG Buffer with some functions to interact with it.
+    The PG Buffer is entirely cleared on EPOCH START.
+    On ACQUISITION or NORMAL case, we can only use existing buffer slots or define
+    new ones, within the limited buffer memory size.
+    """
+    _MAX_OBJECTS = 64
+    _MAX_SIZE = 4 << 20
+    def __init__(self, /, *, _max_size: Optional[int] = None, _margin: int = 0) -> None:
+        self._max_size = (__class__._MAX_SIZE if _max_size is None else _max_size)
+        self._max_size -= _margin
+
+        self._slots = {}
+        self._loaded = []
+
+    def get_free_size(self) -> int:
+        """
+        Get the remaining bytes available in the buffer.
+        """
+        diff = self._max_size - sum(starmap(lambda h, w: h*w, self._slots.values()))
+        return diff if diff >= 0 else 0
+
+    def get_n_free_slots(self) -> int:
+        """
+        Get the number of free slots left.
+        """
+        return __class__.MAX_OBJECTS - len(self.slots)
+
+    def _find_free_id(self) -> Optional[int]:
+        """
+        Find the first available object ID.
+        """
+        for k in range(__class__.MAX_OBJECTS):
+            if self._slots.get(k, None) is None:
+                return k
+        return None
+
+    def free(self, obj_id: int) -> bool:
+        """
+        Free a slot in the buffer (this is not realistic HW-wise but
+                                   provided out of programming courtesy)
+        """
+        if obj_id in self.slots:
+            self._slots.pop(obj_id)
+            return True
+        return False
+
+    def get_slot(self, height: int, width: int) -> Optional[int]:
+        """
+        Find the most suited existing free slot for a graphic of given dimensions.
+        :param height: Graphic height to fit
+        :param width:  Graphic width to fit
+        :return: the slot ID that is large enough to fit the graphic, if any.
+        """
+        best_fit = np.inf
+        best_fit_id = None
+        for obj_id in self._slots:
+            if obj_id in self._loaded:
+                continue
+            h, w = self._slots[obj_id]
+            area_diff =  w*h-width*height
+            if h >= height and w >= width and area_diff < best_fit:
+                best_fit = area_diff
+                best_fit_id = obj_id
+        return best_fit_id
+
+    def get_all_slots(self, only_free: bool = False) -> dict[int, tuple[int, int]]:
+        """
+        Return all allocated slots.
+        :param only_free: Flag to request only the unloaded slots.
+        """
+        if only_free:
+            return dict(filter(lambda x: x[0] in self._loaded, self._slots.items()))
+        return self._slots
+
+    def flush_objects(self) -> None:
+        """
+        Flush all loaded data on acquisition (the slots still exist but empty).
+        """
+        self._loaded.clear()
+
+    def load(self, obj_id: int) -> None:
+        """
+        Mark a given slot ID as occupied in the buffer.
+        :param obj_id: Slot ID to flag as occupied.
+        """
+        assert not self.is_loaded(obj_id), "Object already loaded in the buffer."
+        self._loaded.append(obj_id)
+
+    def is_loaded(self, obj_id: int) -> bool:
+        """
+        Check if a slot is already occupied by an object.
+        :param obj_id: slot ID
+        :return: true if the slot is occupied
+        """
+        return obj_id in self._loaded
+
+    def check(self, obj_id: int, height: int, width: int) -> None:
+        """
+        Check that the provided object is suited for the given slot.
+        :param obj_id: Slot ID
+        :param height: Object height
+        :param width:  Object width
+        """
+        hw = self._slots.get(obj_id, None)
+        assert hw is not None, f"No slot allocated for {obj_id}"
+        assert hw == (height, width), "Dimensions mismatch."
+
+    def allocate(self, height: int, width: int) -> Optional[int]:
+        """
+        Allocate a buffer slot with given dimensions.
+        :param height: Object height
+        :param width: Object width
+        :return: the object ID, if a slot could be allocated.
+        """
+        assert 8 <= width <= 4096 and 8 <= height <= 4096, "Incorrect dimensions for PG buffer."
+
+        new_id = self._find_free_id()
+        if new_id is not None and self.get_free_size() - width*height >= 0:
+            self._slots[new_id] = (height, width)
+            return new_id
+        return None

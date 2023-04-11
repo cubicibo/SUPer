@@ -201,8 +201,7 @@ class CObject:
         # NOTE: the patent claims there can be N>1 cropping windows… on the same window??
 
         if len(self._data) > __class__.COOff.CO_COL.value:
-            logging.error("SUPer does not know how to parse numerous cropping windows."\
-                          " Send this sample to the author please!")
+            logging.error("SUPer cannot parse numerous cropping windows on the same composition.")
 
         if self.cropped or _cropped:
             self._data = self._data[:__class__.COOff.CO_COL.value]
