@@ -178,6 +178,7 @@ class PGraphics:
             from PIL import Image
             Image.fromarray(palette[bitmap], 'RGB').show()
 ####
+#%%
 class PGDecoder:
     RX =  2*(1024**2)
     RD = 16*(1024**2)
@@ -215,7 +216,6 @@ class PGDecoder:
                 if c_time < object_def.pts:
                     wait_duration += object_def.pts - c_time
                 return np.ceil(wait_duration*cls.FREQ)
-        raise AssertionError("We should not be here (?)")
         return wait_duration
     ####
     @staticmethod
@@ -256,6 +256,14 @@ class PGDecoder:
             decode_duration += cls.wait(ds, ds.pcs.cobjects[0].o_id, decode_duration)
             decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
         return decode_duration
+
+    @classmethod
+    def decode_obj_duration(cls, area: int) -> float:
+        return area/cls.RD
+
+    @classmethod
+    def copy_gp_duration(cls, area: int) -> float:
+        return area/cls.RC
     ####
 #%%
 from SSIM_PIL import compare_ssim
@@ -270,16 +278,75 @@ class WOBSAnalyzer:
     def analyze(self):
         #First we get the active mask
         active_mask = self.wobs[0].event_mask()
-        woba = []
+        woba = [],[]
         for wob in self.wobs[1:]:
             active_mask += wob.event_mask()
-            woba.append(WOBAnalyzer(wob, events, box))
-
+        for k, wob in enumerate(self.wobs):
+            woba.append(WOBAnalyzer(wob, box, k))
+            gens.append(woba[-1].analyze())
         #Run first level analysis: find effects
-        wob_effects = list(map(wob.analyze, woba))
 
-        #get the frame count between each screen update
-        delays = self.get_delays()
+        pgobjs = {k: [] for k in self.wobs}
+        for event in self.events + [None]:
+            for k, obj in enumerate(map(lambda gwob: gwob.send(event), gens)):
+                if obj is not None:
+                    pgobjs[self.wobs[k]].extend(obj if isinstance(obj, list) else [obj])
+
+        n_obj = sum(map(len, pgobjs.values()))
+        area = sum(map(lambda x: x.area, pgobjs.values()))
+        self.find_acqs(pgobjs)
+
+    def find_acqs(self, pgobjs: dict[..., list[...]]):
+        #get the frame count between each screen update and find where we can do acqs
+        occupancy = []
+        obj_pipeline = [wl for wl in pgobjs.values()]
+
+        delays = self.get_durations()
+
+        ts_frame = 0
+        for delay, offset in delays:
+            occupancy.append([])
+            ts_frame += offset
+            for wob_objs in obj_pipeline:
+                for ko, obj in enumerate(wob_objs.copy()):
+                    if obj.is_active(ts_frame):
+                        occupancy[-1].extend(obj)
+            assert len(occupancy[-1]) <= 2, "More than 2 compositions at once."
+            ts_frame += delay
+
+        gp_clear_dur = PGDecoder.copy_gp_duration(sum(map(lambda x: x.get_window().area, self.wobs)))
+
+        acqs_possibles = [None] * len(delays)
+        acqs_singles = [0] * len(delays)
+        acqs_freetime = [0] * len(delays)
+        idx = len(delays) - 1
+
+        for (delay, offset), cobjs in reversed(zip(delays, occupancy)):
+            spacing = delay + offset
+            ts_frame -= delay
+
+            dt = spacing*1./self.fps
+
+            decode_duration = 0
+            gp_duration = gp_clear_dur
+            acqs_deadlines.append(0)
+
+            for cobj in cobjs:
+                decode_duration += PGDecoder.decode_obj_duration(cobj.area)
+                if decode_duration > gp_duration:
+                    gp_duration += decode_duration-gp_duration
+                gp_duration += PGDecoder.copy_gp_duration(cobj.area)
+                if cobj.f == ts_frame:
+                    acqs_singles[idx] += 1
+
+            #if negative, we lack time!
+            acqs_possibles[idx](dt - decode_duration)
+            acqs_freetime[idx] = dt
+            idx -= 1
+            ts_frame -= offset
+
+        return acqs_possibles, acqs_singles, acqs_freetime
+    ####
 
     def get_durations(self, events: ..., fps: ...) -> npt.NDArray[np.uint32]:
         """
@@ -296,74 +363,223 @@ class WOBSAnalyzer:
             top = toc
         return delays
 
-class PGEffect:
-    def __init__(self, rgba) -> None:
-        self.rgba =
+from PIL import Image
+from SUPer.utils import Pos
+from SUPer.render2 import Box
+from dataclasses import dataclass
 
+@dataclass
+class PGObject:
+    box: Box
+    gfx: npt.NDArray[np.uint8]
+    mask: list[bool]
+    f:  int
+
+    def __post_init__(self) -> None:
+        self.effects = None #Note: effects cannot overlap presently (either color or fade)
+
+    @property
+    def still_bitmap(self) -> npt.NDArray[bool]:
+        """
+        Return a mask that gives timing when a bitmap is still and
+        only requires alpha updates (or none at all)
+        """
+        mask = np.zeros((df,), dtype=np.bool_)
+
+        for k, eff in enumerate(self.effects):
+            #Fade effect defines alpha-ONLY effect applied on a given bitmap
+            # so if alpha does not vary, it IS classified as a fade effect
+            # color effect are special as they are encoded within the bitmap
+            if isinstance(eff, FadeEffect):
+                mask[eff.t:eff.t+eff.dt] = 1
+        return mask
+
+    def is_active(self, frame) -> bool:
+        return frame in range(f, f+len(mask))
+
+    def decode_duration(self) -> float:
+        return box.area/PGDecoder.RD
+
+    def transfer_duration(self) -> float:
+        return box.area/PGDecoder.RC
+
+    def estimate_rle_length(self) -> int:
+        return int(box.area*0.275)
+
+    def estimate_arrival_duration(self) -> float:
+        return self.estimate_rle_length()/PGDecoder.RX
+
+#%%
+from itertools import chain
+
+@dataclass
+class FadeEffect:
+    ref_img_idx: int
+    t: int
+    dt: int
+    coeffs: npt.NDArray[np.uint8]
+
+    @classmethod
+    def get_fade_chain(cls, chain: npt.NDArray[np.uint8]) -> float:
+        if len(chain) > 1:
+            I = np.zeros((len(chain)))
+            Imax = np.zeros((len(chain)))
+
+            for k, img in enumerate(chain):
+                I[k:k+1] = np.sum(img[:,:,3])/(img.shape[0]*img.shape[1])
+                Imax[k] = np.max(img[:,:,3])
+            I /= np.max(I)
+            dI = np.diff(I)
+            dImax = np.diff(Imax)
+            if np.all(dI*dImax >= 0):
+                # Get the fade effects (where we don't need to update the image!)
+                return cls.check_mse(chain, I)
+        return None
+
+    @classmethod
+    def check_mse(cls, imgs: npt.NDArray[np.uint8], I: npt.NDArray[float]) -> list['FadeEffect']:
+        fade_start = None
+        effects = []
+        chain32 = imgs.astype(np.int32)
+        for k, rgba_img in enumerate(chain(chain32[1:], [None])):
+            if rgba_img is not None:
+                mse = np.square(np.subtract(chain32[k,:,:,:3], rgba_img[:,:,:3]))
+            if rgba_img is not None and 70 > mse.mean() and mse.max() < 1500:
+                if fade_start is None:
+                    fade_start = k
+            elif fade_start is not None or rgba_img is None:
+                ref_idx = fade_start + np.argmax(I[fade_start:k+1])
+                effects.append(cls(ref_idx, fade_start, k+1-fade_start, I[fade_start:k+1]/I[k+1-fade_start]))
+                fade_start = None
+        return effects if len(effects) > 0 else None
+
+#%%
 class WOBAnalyzer:
-    def __init__(self, wob: ..., events: list[BaseEvent], box: ...) -> None:
+    def __init__(self, wob: ..., box: ..., k: int) -> None:
         self.wob = wob
         self.box = box
-        self.events = events
+        self.wob_id = wob_id
 
-    def get_event(self, window) -> npt.NDArray[np.uint8]:
+    def mask_event(self, window, event) -> npt.NDArray[np.uint8]:
         windowed_event = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
         work_plane = np.zeros((box.dy, box.dx, 4), dtype=np.uint8)
 
-        for event in self.events:
-            hsw = slice(event.x-self.box.x+window.x-1, event.x-self.box.x+window.x+min(window.dx, event.width)-1)
-            vsw = slice(event.y-self.box.y+window.y, event.y-self.box.y+window.y+min(window.dy, event.height))
-            hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
-            vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)
-            work_plane[vsi, hsi, :] = np.asarray(event.img, dtype=np.uint8)
-            windowed_event[vsw, hsw, :] = work_plane[vsw, hsw, :]
-            yield windowed_event
-            windowed_event *= 0
-            work_plane *= 0
-        #### #StopIteration
+        hsw = slice(event.x-self.box.x+window.x-1, event.x-self.box.x+window.x+min(window.dx, event.width)-1)
+        vsw = slice(event.y-self.box.y+window.y, event.y-self.box.y+window.y+min(window.dy, event.height))
+        hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
+        vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)
+        work_plane[vsi, hsi, :] = np.array(event.img, dtype=np.uint8)
+        windowed_event[vsw, hsw, :] = work_plane[vsw, hsw, :]
+        return windowed_event
 
     @staticmethod
     def get_grayscale(rgba: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
-        img = np.round(0.2989*imga[:,:,0] + 0.587*imga[:,:,1] + 0.114*imga[:,:,2]).astype(np.uint8)
-        img &= (rgba[:,:,3] > 0) #Should be unecessary
-        return img.clip(0, 255)
+        rgba = rgba.astype(np.uint16)
+        img = np.round(0.2989*rgba[:,:,0] + 0.587*rgba[:,:,1] + 0.114*rgba[:,:,2])
+        return (img.clip(0, 255) & (255*(rgba[:,:,3] > 0))).astype(np.uint8)
 
-    def check_fade(self, chain) -> float:
-        I = np.zeros((len(chain)))
-        Imax = 0
-        for k, img in enumerate(chain):
-            dwti = pywt.dwt2(img[:,:,3], 'db6')[0]
-            I[k] = np.sum(dwti)/dwti.size
-            Imax = np.max((I[k], Imax))
-        assert Imax > 0, "Chain of transparent images received"
-        I /= Imax
-        # check for deep slopes to zero or close to
-
-
-    def get_patch(self,
-        current: npt.NDArray[np.uint8],
-        previous: npt.NDArray[np.uint8]
-    ) -> npt.NDArray[np.uint8]:
+    @staticmethod
+    def compare(bitmap, current) -> float:
         """
+        :param bitmap: (cropped or padded) aggregate of the previous bitmaps
+        :param current: current bitmap under analysis
+        :return: comparison score between the two
         """
-        ...
+        assert bitmap.width == current.width and bitmap.height == current.height, "Different shapes."
 
-    def compare_to_previous(self) -> float:
-        compare_ssim
+        # Intersect alpha planes
+        a_bitmap = np.array(bitmap)
+        a_current = np.array(current)
+        inters_inv = np.logical_and(a_bitmap[:,:,3] == 0, a_current[:,:,3] == 0)
+        inters = np.logical_and(a_bitmap[:,:,3] != 0, a_current[:,:,3] != 0)
+        #if the images are identical, this measure is equal to 1.0
+        overlap = (np.sum(inters) + np.sum(inters_inv))/inters.size
+
+        if overlap < 0.99 and overlap > 0:
+            #score = compare_ssim(bitmap.convert('L'), current.convert('L'))
+            #Broadcast transparency mask of current on all channels of ref
+            mask = 255*(np.logical_and((a_bitmap > 0), (a_current[:, :, 3, None] > 0)).astype(np.uint8))
+            score = compare_ssim(Image.fromarray(a_bitmap & mask).convert('L'), current.convert('L'))
+        else:
+            #Perfect overlap or no overlap, the current bitmap fits perfectly on the previous
+            score = 1.0
+        return score
+
+    def get_patch(image1, image2) -> Image.Image:
+        bbox1 = image1.getbbox()
+        bbox2 = image2.getbbox()
+
+        #One of the image is fully transparent.
+        if bbox1 is None or bbox2 is None:
+            return bbox1, bbox2
+
+        f_area = lambda bbox: (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+
+        A1 = f_area(bbox1)
+        A2 = f_area(bbox2)
+
+        if A1 >= A2:
+            return (image1.crop(bbox1), Pos(*bbox1[:2])), image2
+        return image1, (image2.crop(bbox2), Pos(*bbox2[:2]))
+
+    def correlate_patch(image, patch) -> tuple[float, Box]:
+        image = cv2.cvtColor(np.array(image), cv2.COLOR_RGBA2BGRA)
+
+        #pad image with patch dimension, so we can look at the edges.
+        image = cv2.copyMakeBorder(image, patch.height-1, patch.height-1,
+                                   patch.width-1, patch.width-1,
+                                   cv2.BORDER_CONSTANT, value=[0]*4)
+
+        img_gray = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
+        patch_gray = cv2.cvtColor(np.asarray(patch, dtype=np.uint8), cv2.COLOR_RGBA2GRAY)
+
+        #Correlate across entire surface and return the best scores
+        res = cv2.matchTemplate(img_gray, patch_gray, cv2.TM_CCOEFF_NORMED)
+        score1, score2, p1, p2 = cv2.minMaxLoc(res)
+        return (score1, p1), (score2, p2)
+
 
     def analyze(self):
         cls = self.__class__
         window = self.wob.get_window()
+
         bitmaps = np.zeros((0, window.dy, window.dx, 4))
+        alpha_compo = Image.fromarray(np.zeros((window.dy, window.dx, 4), np.uint8))
 
-        for rgba_img in get_event(window):
-            gs_img = cls.get_grayscale(rgba_img)
-            if bitmaps.size == 0:
+        mask = []
+        event_cnt = 0
+        pgo_yield = None
+        event = True
 
+        while event is not None:
+            event = yield pgo_yield
+            pgo_yield = None
 
+            if event is None:
+                bbox = alpha_compo.getbbox()
+                yield PGObject(bitmaps, Box.from_coords(bbox), mask, event_cnt-len(mask[:-1]))
+                continue
 
+            rgba = self.mask_event(window, event)
+            mask.append(np.any(rgba))
+            if mask[-1]:
+                score = cls.compare(alpha_compo, event)
 
+                if score > 0.91:
+                    bitmaps = np.stack((bitmaps, np.expand_dims(rgba, 0)))
+                    alpha_compo.alpha_composite(Image.fromarray(rgba))
+                else:
+                    bbox = alpha_compo.getbbox()
+                    pgo_yield = PGObject(bitmaps, Box.from_coords(bbox), mask, event_cnt-len(mask[:-1]))
 
+                    #new bitmap
+                    mask = mask[-1:]
+                    bitmaps = np.expand_dims(rgba, 0)
+                    alpha_compo = Image.fromarray(np.zeros((window.dy, window.dx, 4), np.uint8))
+                    alpha_compo.alpha_composite(Image.fromarray(rgba))
+            event_cnt += 1
+        ####while
+        return # StopIteration
 
 #%%
 class PGObjectBuffer:
