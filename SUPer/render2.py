@@ -884,7 +884,7 @@ class GroupingEngine:
         if self.mode == __class__.Mode.SPECIAL_EFFECTS:
             logger.warning("Not implemented yet, returning min area.")
         if self.mode in [__class__.Mode.SPECIAL_EFFECTS, __class__.Mode.SMALLEST_WINDOWS]:
-            return wobs[0]
+            return tuple(sorted(wobs[0], key=lambda x: x.srs[0].t))
         elif self.mode == __class__.Mode.LEAST_ACQUISITIONS:
             scores = []
             #wobs is a list of pairs of wob

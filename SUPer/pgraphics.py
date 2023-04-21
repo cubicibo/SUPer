@@ -278,12 +278,15 @@ class WOBSAnalyzer:
     def analyze(self):
         #First we get the active mask
         active_mask = self.wobs[0].event_mask()
-        woba = [],[]
+        woba = []
+        gens = []
         for wob in self.wobs[1:]:
             active_mask += wob.event_mask()
-        for k, wob in enumerate(self.wobs):
-            woba.append(WOBAnalyzer(wob, box, k))
+        #wob_id -> window_id later
+        for wob_id, wob in enumerate(self.wobs):
+            woba.append(WOBAnalyzer(wob, self.box, wob_id))
             gens.append(woba[-1].analyze())
+            next(gens[-1]) #run the generator to the first yield
         #Run first level analysis: find effects
 
         pgobjs = {k: [] for k in self.wobs}
@@ -455,22 +458,17 @@ class FadeEffect:
 
 #%%
 class WOBAnalyzer:
-    def __init__(self, wob: ..., box: ..., k: int) -> None:
+    def __init__(self, wob: ..., box: ..., wob_id: int) -> None:
         self.wob = wob
         self.box = box
         self.wob_id = wob_id
 
     def mask_event(self, window, event) -> npt.NDArray[np.uint8]:
-        windowed_event = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
-        work_plane = np.zeros((box.dy, box.dx, 4), dtype=np.uint8)
-
-        hsw = slice(event.x-self.box.x+window.x-1, event.x-self.box.x+window.x+min(window.dx, event.width)-1)
-        vsw = slice(event.y-self.box.y+window.y, event.y-self.box.y+window.y+min(window.dy, event.height))
+        work_plane = np.zeros((self.box.dy, self.box.dx, 4), dtype=np.uint8)
         hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
         vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)
         work_plane[vsi, hsi, :] = np.array(event.img, dtype=np.uint8)
-        windowed_event[vsw, hsw, :] = work_plane[vsw, hsw, :]
-        return windowed_event
+        return work_plane[window.y:window.y2, window.x:window.x2, :]
 
     @staticmethod
     def get_grayscale(rgba: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -487,23 +485,45 @@ class WOBAnalyzer:
         """
         assert bitmap.width == current.width and bitmap.height == current.height, "Different shapes."
 
+        # crop_box = current.getbbox()
+        # c_bitmap = bitmap.crop(crop_box)
+        # c_current = current.crop(crop_box)
+
+        # # Intersect alpha planes
+        # a_bitmap = np.array(bitmap)
+        # a_current = np.array(current)
+        # inters_inv = np.logical_and(a_bitmap[:,:,3] == 0, a_current[:,:,3] == 0)
+        # inters = np.logical_and(a_bitmap[:,:,3] != 0, a_current[:,:,3] != 0)
+        # #if the images are identical, this measure is equal to 1.0
+        # match = (np.sum(inters) + np.sum(inters_inv))/inters.size
+        # print(f"{match:.03f}",end=', ')
+
+        crop_box = current.getbbox()
+        c_bitmap = bitmap.crop(crop_box)
+        c_current = current.crop(crop_box)
+
         # Intersect alpha planes
-        a_bitmap = np.array(bitmap)
-        a_current = np.array(current)
+        a_bitmap = np.array(c_bitmap)
+        a_current = np.array(c_current)
         inters_inv = np.logical_and(a_bitmap[:,:,3] == 0, a_current[:,:,3] == 0)
         inters = np.logical_and(a_bitmap[:,:,3] != 0, a_current[:,:,3] != 0)
         #if the images are identical, this measure is equal to 1.0
-        overlap = (np.sum(inters) + np.sum(inters_inv))/inters.size
+        inters_area = np.sum(inters)
+        match_inters = (inters_area > 0) * (inters_area + np.sum(inters_inv))/inters.size
 
-        if overlap < 0.99 and overlap > 0:
-            #score = compare_ssim(bitmap.convert('L'), current.convert('L'))
+        if 0 < match_inters < 0.999:
             #Broadcast transparency mask of current on all channels of ref
-            mask = 255*(np.logical_and((a_bitmap > 0), (a_current[:, :, 3, None] > 0)).astype(np.uint8))
-            score = compare_ssim(Image.fromarray(a_bitmap & mask).convert('L'), current.convert('L'))
+            #mask = 255*(np.logical_and(, (a_current[:, :, 3, None] > 0)).astype(np.uint8))
+            score = compare_ssim(Image.fromarray(a_bitmap * (a_current[:,:,3,None] > 0)).convert('L'),
+                                 Image.fromarray(a_current * (a_bitmap[:,:,3,None] > 0)).convert('L'))
+
+            score_no_mask = compare_ssim(Image.fromarray(a_bitmap).convert('L'),
+                                 Image.fromarray(a_current).convert('L'))
         else:
             #Perfect overlap or no overlap, the current bitmap fits perfectly on the previous
-            score = 1.0
-        return score
+            score, score_no_mask = [1.0]*2
+        print(f"MI-{match_inters:.03f},  SC-{score:.05f}, {score_no_mask}")
+        return (score+score_no_mask)/2
 
     def get_patch(image1, image2) -> Image.Image:
         bbox1 = image1.getbbox()
@@ -543,9 +563,9 @@ class WOBAnalyzer:
         cls = self.__class__
         window = self.wob.get_window()
 
-        bitmaps = np.zeros((0, window.dy, window.dx, 4))
         alpha_compo = Image.fromarray(np.zeros((window.dy, window.dx, 4), np.uint8))
 
+        bitmaps = []
         mask = []
         event_cnt = 0
         pgo_yield = None
@@ -557,24 +577,26 @@ class WOBAnalyzer:
 
             if event is None:
                 bbox = alpha_compo.getbbox()
-                yield PGObject(bitmaps, Box.from_coords(bbox), mask, event_cnt-len(mask[:-1]))
+                yield PGObject(np.stack(bitmaps).astype(np.uint8), Box.from_coords(*bbox), mask, event_cnt-len(mask[:-1]))
                 continue
 
             rgba = self.mask_event(window, event)
+            rgba_i = Image.fromarray(rgba)
             mask.append(np.any(rgba))
             if mask[-1]:
-                score = cls.compare(alpha_compo, event)
+                print(f"{event.gfxfile[:-8]}",end=', ')
+                score = cls.compare(alpha_compo, rgba_i)
 
                 if score > 0.91:
-                    bitmaps = np.stack((bitmaps, np.expand_dims(rgba, 0)))
+                    bitmaps.append(rgba)
                     alpha_compo.alpha_composite(Image.fromarray(rgba))
                 else:
                     bbox = alpha_compo.getbbox()
-                    pgo_yield = PGObject(bitmaps, Box.from_coords(bbox), mask, event_cnt-len(mask[:-1]))
+                    pgo_yield = PGObject(np.stack(bitmaps).astype(np.uint8), Box.from_coords(*bbox), mask, event_cnt-len(mask[:-1]))
 
                     #new bitmap
                     mask = mask[-1:]
-                    bitmaps = np.expand_dims(rgba, 0)
+                    bitmaps = [rgba]
                     alpha_compo = Image.fromarray(np.zeros((window.dy, window.dx, 4), np.uint8))
                     alpha_compo.alpha_composite(Image.fromarray(rgba))
             event_cnt += 1
