@@ -187,108 +187,6 @@ class SUPFile:
 ####SUPFile
 
 #%%
-class SupStream:
-    BUFFER_N_BYTES = 1048576
-    SEGMENTS = { 'PCS': PCS, 'WDS': WDS, 'PDS': PDS, 'ODS': ODS, 'END': ENDS }
-    DEPRECATED_SHOWN = False
-
-    def __init__(self, data: Union[str, Path, BytesIO, bytes], auto_close: Optional[bool] = True) -> None:
-        """
-        Manage a Sup Stream from a file, bytestring or an actual data stream.
-         Stop iterating once the buffer is consumed.
-         If the
-        :param auto_close: If the stream is a file, autoclose it when done reading.
-
-        :return:          PGSegment (that is, any child class)
-        """
-        self._is_file = type(data) in [Path, str]
-        self.stream = data if not self._is_file else open(data, 'rb')
-        self.s_index = 0
-        self._data = bytearray()
-        self.auto_close = auto_close
-        self._pending_segs = []
-
-        if not __class__.DEPRECATED_SHOWN:
-            logging.warning("SupStream class will be deprecated in the future. Use SUPFile")
-            __class__.DEPRECATED_SHOWN = True
-
-    def renew(self) -> None:
-        len_before = len(self._data)
-        self._data += self.stream.read(__class__.BUFFER_N_BYTES)
-        read_back = len(self._data) - len_before
-        self.s_index += read_back
-        return read_back
-
-    def epochs(self, epoch: Optional[Epoch] = Epoch()) -> Epoch:
-        """
-        Generator of Epoch for the given stream.
-         This function is stupid and can fail.
-        :param: epoch_ds : DSs to add to the first Epoch (catching behaviour)
-                            if dealing with a live bytestream
-
-        :yield:  Epoch containing a list of DS.
-        :return: An incomplete Epoch.
-        """
-
-        for ds in self.fetch_displayset():
-            if PCS.CompositionState.EPOCH_START == ds.pcs.composition_state:
-                if epoch.ds:
-                    yield epoch
-                    epoch = Epoch()
-            epoch.append(ds)
-        yield epoch #Return a probably incpmplete Epoch (EOS reached)
-
-    def fetch_displayset(self) -> DisplaySet:
-        for segment in self.fetch_segment(_watch_for_pending=False):
-            self._pending_segs.append(segment)
-            if isinstance(segment, ENDS):
-                yield DisplaySet(self._pending_segs)
-                self._pending_segs = []
-        return # Ran out of segments to generate a DS.
-
-    def fetch_segment(self, *, _watch_for_pending: bool = True) -> PGSegment:
-        """
-        Generator of PGS segment in the specified stream.
-         Stop iterating once the buffer is consumed.
-         Can be used after fetch_displayset() to retrieve orphaned segments.
-
-        :return:          PGSegment (that is, any child class)
-        """
-        if self.s_index == -1 or self.stream.closed:
-            raise Exception("Attempting to use a closed datastream.")
-
-        while True:
-            if self._pending_segs != [] and _watch_for_pending:
-                yield self._pending_segs.pop(0) # yield oldest segment pending
-                continue
-
-            if len(self._data) == 0 and not self.renew():
-                return
-
-            try:
-                seg = __class__.SEGMENTS[PGSegment(self._data).type](self._data)
-                self._data = self._data[len(seg):]
-                yield seg
-            except EOFError:
-                if self.renew() == 0:
-                    if self.auto_close and self._is_file:
-                        self.close()
-                    return
-            except (ValueError, BufferError) as e:
-                pg_id = self._data.find(PGSegment.MAGIC)
-                if pg_id == -1:
-                    self._data = bytearray(b'P') if self._data[-1] == b'P' else bytearray()
-                else:
-                    self._data = self._data[pg_id:]
-                if e == ValueError:
-                    logging.warning("Garbage in PGStream encountered.")
-
-    def close(self) -> None:
-        self.stream.close()
-        self.s_index = -1
-####SupStream
-
-#%%
 class BaseEvent:
     """
     Container event for any graphic object displayed on screen for a given time duration.
@@ -331,7 +229,6 @@ class BaseEvent:
 
     @property
     def img(self) -> Image.Image:
-        # provided for courtesy & compatbility reasons
         return self.image
 
     def set_custom_image(self, img: npt.NDArray[np.uint8]) -> None:
@@ -429,7 +326,7 @@ class BDNXMLEvent(BaseEvent):
                 new.x, new.y = props[0]
                 new._width, new._height = props[1]
         return new
-
+####BDNXMLEvent
 
 class SeqIO(ABC):
     """
@@ -461,6 +358,7 @@ class SeqIO(ABC):
     def groups(self, nf_split: Optional[float] = 0.26, tc_in: Optional[str] = None,
                tc_out: Optional[str] = None, /, *, _hard: bool = True) -> list[Type[BaseEvent]]:
         le = []
+        nf_split *= 1e3
 
         for event in self.fetch(tc_in, tc_out):
             if le == []:
@@ -470,8 +368,8 @@ class SeqIO(ABC):
 
             if _hard and td < 0:
                 raise Exception("Events are not ordered in time: {event.tc_in},"
-                                "{event.gfxfile.split(os.path.sep)[-1]} predates previous event.")
-            if le == [] or abs(td) < nf_split*1e3:
+                                f"{event.gfxfile.split(os.path.sep)[-1]} predates previous event.")
+            if le == [] or abs(td) < nf_split:
                 le.append(event)
             else:
                 yield le
@@ -485,6 +383,8 @@ class SeqIO(ABC):
          if tc_in is None or TC.tc2ms(e.tc_in, self.fps) >= TC.tc2ms(tc_in, self.fps):
           if tc_out is None or TC.tc2ms(e.tc_out, self.fps) <= TC.tc2ms(tc_out, self.fps):
            yield e
+          else: #Past tc out point
+           return
 
     def __len__(self):
         return len(self.events)
@@ -494,22 +394,23 @@ class SeqIO(ABC):
         return self._format
 
     @format.setter
-    def format(self, nf: str) -> None:
+    def format(self, nf: Union[str, tuple[int, int], int, BDVideo.VideoFormat]) -> None:
         if type(nf) is tuple or type(nf) is BDVideo.VideoFormat:
             self._format = BDVideo.VideoFormat(nf)
         elif type(nf) is str:
-            dc = {480: 720, 576: 720, 720: 1280, 1080: 1920}
+            # reversed to alleviate the potential illegal entries key overwrites
+            dc = {vf.value[1]: vf.value[0] for vf in reversed(BDVideo.VideoFormat)}
             try:
-                # Quick and dirty 16/9 look-up table for BDNXML format
-                ord(nf[-1])
+                # Quick and dirty 16/9 look-up with appended scan format
+                if nf[-1].lower() not in ['i', 'p']:
+                    raise TypeError
                 nf_rs = int(nf[:-1])
-                self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
             except TypeError:
                 try:
                     nf_rs = int(nf)
-                    self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
                 except ValueError:
                     raise TypeError("Don't know how to parse format string.")
+            self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
 
     @property
     def fps(self) -> float:
@@ -614,106 +515,3 @@ class BDNXML(SeqIO):
         if dropframe:
             logging.warning("Drop frame timecodes are not implemented.")
         self._dropframe = dropframe
-
-class ImgSequence(SeqIO):
-    """
-    Used to define a sequence of image with very basic timing provided in a csv file.
-    First line of the csv needs to define: FPS,ts_type,start_ts,dt_type
-    -fps: fps of stream
-    -ts_type: type of start_ts ('f': frame count, 'ms': milliseconds)
-    -start_ts: timestamp at which the effect appears/start, w/ aforementionned format
-    -dt_type: format for on-screen time of each image, specified on the next lines.
-        can be either 'ms' or 'f'. One number per line (associated to each image)
-    """
-
-    # :)
-    EXTS = ['.png', '.gif', '.jpg', 'tiff', '.tif', 'jpeg', 'webp']
-
-    def __init__(self, file: Union[str, Path],
-                 folder: Optional[Union[str, Path]] = None, delimiter: str = ','):
-
-        super().__init__(file, folder)
-        self.delimiter = delimiter
-
-        self.parse(False)
-
-    def parse(self, skip_header: bool = True):
-        import csv
-
-        dc, rows = {}, []
-        for fn in sorted(os.listdir(self.folder)):
-            if fn.lower()[-4:] in __class__.EXTS:
-                dc[int(fn.split('.')[0])] = fn
-
-        if os.path.exists(self.file):
-            with open(os.path.join(self.file), 'r') as csvfile:
-                csvre = csv.reader(csvfile, delimiter=self.delimiter, quotechar='|')
-                rows = [row for row in csvre]
-        else:
-            raise OSError("Cannot find CSV timing file.")
-
-        if not skip_header:
-            if rows == []:
-                logging.warning("No timing file provided: assuming:"
-                                "1920x1080p23.976, 1 fpi, 0 pts.")
-                self.fps, self._type_ts, self.t_start, self.t_sep, x, y, vw, vh =\
-                    (23.976, 'f', 0, 'f', -1, -1, 1920, 1080)
-            else:
-                temp_fps, self._type_ts, self.t_start, self.t_sep = rows[0][:4]
-                if len(rows[0]) == 8:
-                    x, y, vw, vh = rows[0][4:6]
-                else:
-                    x, y, vw, vh = -1, -1, 1920, 1080
-            self.fps = float(temp_fps)
-            self.format = (vw, vh)
-
-        if rows == []:
-            rows = [1] * (len(dc)+1)
-
-        dcf = {
-            'f': lambda tc, f : TC.tc_addf(tc, int(f), self.fps),
-            'ms': lambda tc, ms : TC.tc_addms(tc, int(ms), self.fps),
-            's': lambda tc, s : TC.tc_adds(tc, float(s), self.fps),
-            'tc': lambda tc1, tc2 : TC.tc_addtc(tc1, tc2, self.fps),
-        }
-
-        if self._type_ts == 'ms':
-            self.t_start = TC.ms2tc(int(self.t_start), self.fps)
-        elif self._type_ts == 'f':
-            self.t_start = TC.f2tc(int(self.t_start), self.fps)
-        else:
-            raise NotImplementedError(f"Unknown timestamp format {self._type_ts}.")
-
-        offset_fn = dcf[self.t_sep]
-
-        t_in = self.t_start
-        self.events = []
-        for key, event in zip(sorted(list(dc.keys())), rows[1:]):
-            t_out = offset_fn(t_in, event[0])
-            self.events.append(BaseEvent(t_in, t_out, os.path.join(self.folder, dc[key]), x, y))
-            t_in = t_out
-
-    @property
-    def type_ts(self) -> str:
-        return self._type_ts
-
-    @property
-    def t_out(self) -> str:
-        return self.events[-1].event.outtc
-
-    @property
-    def t_in(self) -> float:
-        if self._type_ts == 'ms':
-            return TC.tc2ms(self.t_start, self.fps)
-        return self.t_start
-
-    @t_in.setter
-    def t_in(self, ts):
-        """
-        Timestamp when effect starts. Either NFrames or seconds, depending of how the
-         stream was initialised. Internally, the ts is always converted to Nframes
-        """
-        if self._type_ts == 'ms':
-            self.t_start = TC.ms2tc(ts, self.fps)
-        else:
-            self.t_start = TC.f2tc(ts, self.fps)

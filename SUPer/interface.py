@@ -21,7 +21,7 @@ import numpy as np
 from os import path
 
 from .utils import Shape, TimeConv as TC, _pinit_fn, get_super_logger
-from .render import group_event_alikes, to_epoch2, is_compliant
+from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
 from .filestreams import BDNXML, SUPFile
 
 logger = get_super_logger('SUPer')
@@ -34,7 +34,7 @@ class BDNRender:
         #Leave norm threshold to zero, it can generate unexpected behaviours.
         #Colors should be 256. Anything above is illegal, anything below results in a
         # loss of quality.
-        self.kwargs = {'norm_thresh': 0, 'colors': 256}
+        self.kwargs = {'colors': 256}
         self.kwargs |= kwargs
 
     def optimise(self) -> None:
@@ -76,16 +76,12 @@ class BDNRender:
             #Epoch generation (each subgroup will be its own epoch)
             for subgroup in reversed(subgroups):
                 logger.info(f"Generating epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}...")
-                try:
-                    regions_ods_mapping, box = group_event_alikes(subgroup, **kwargs)
-                    outm, _ = to_epoch2(bdn, subgroup, regions_ods_mapping, box, **kwargs)
-                except Exception as exc:
-                    if self.skip_errors:
-                        raise exc
-                    logger.critical(f"!!! EXCEPTION: {exc}. Epoch starting at {subgroup[0].tc_in} was not generated !!!")
-                else:
-                    self._epochs.append(outm)
-                    logger.info(f" => optimised as {len(outm.ds)} display sets.")
+                wob, box = GroupingEngine(n_groups=2, **kwargs).group(subgroup)
+
+                wobz = WOBSAnalyzer(wob, subgroup, box, bdn.fps, bdn, **kwargs)
+                epoch = wobz.analyze()
+                self._epochs.append(epoch)
+                logger.info(f" => optimised as {len(epoch)} display sets on {len(wob)} window(s).")
             gc.collect()
 
         scaled_fps = False

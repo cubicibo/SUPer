@@ -40,16 +40,6 @@ class FadeCurve(IntEnum):
     QUADRATIC = auto()
     EXPONENTIAL = auto()
 
-# class OptiMode(IntEnum):
-#     COMMON_SEQUENCES = auto() # pick N most common sequences and assign leftovers. Can underfit
-#     OVERFIT_SEQUENCES = auto() # Pick n < N common sequence then looks for selected least commmon. Can overfit.
-#     RGBA_EVENLY = auto() # Split the sequences to have even RGBA on screen throughout the animation
-
-#     @classmethod
-#     def _missing_(cls, value):
-#         logging.warning("Unknown optimisation mode, using default.")
-#         return cls.MOST_COMMON_SEQUENCES
-
 class Preprocess:
     @staticmethod
     def quantize(img: Image.Image, colors=256, kmeans_quant: bool = False) -> Image.Image:
@@ -67,9 +57,7 @@ class Preprocess:
             criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 15, 0.5)
             ret, label, center = cv2.kmeans(flat_img, nk, None, criteria, 10, cv2.KMEANS_PP_CENTERS)
 
-            center[center < 0] = 0
-            center[center > 255] = 255
-            center = np.uint8(np.round(center))
+            center = np.uint8(np.round(np.clip(center, 0, 255)))
 
             offset = 1024
             occs = np.argsort(np.bincount(label[:,0]))[::-1]
@@ -274,25 +262,6 @@ class Optimise:
         """
 
         N_SEQUENCES_MAX = kwargs.get('colors', 256)
-        THRESH = kwargs.get('norm_thresh', 13)
-
-        if THRESH > 0:
-            logging.warning("Enabled color merging, this is buggy.")
-            for n, (clut, cmap) in enumerate(zip(cluts, cmaps)):
-                nmat = np.linalg.norm((clut[:clut_len[n]] - \
-                                       clut[:clut_len[n], None]).astype(np.uint32), 2, axis=2)
-                #cmap_new = cmap.copy()
-                for k in range(nmat.shape[0]):
-                    for j in range(k):
-                        if nmat[k, j] < THRESH:
-                            if np.sum(cmap[cmap == j]) > np.sum(cmap[cmap == k]):
-                                nv, other = j, k
-                            else:
-                                nv, other = k, j
-                            logging.debug(f"CLUT {n}: Merging color {clut[nv]} to {clut[other]}.")
-                            cmap[cmap == other] = nv
-                            clut_len[n] -= 1
-                #cmaps[n] = cmap_new
 
         sequences = [clut[cmap] for clut, cmap in zip(cluts, cmaps)]
         sequences = np.stack(sequences, axis=2).astype(np.uint8) #(LEN_SEQ, H, W, RGBA=4)
@@ -353,6 +322,70 @@ class Optimise:
         # Output map, Sequences for the N_SEQUENCES_MAX RGBA values
         return out_map, \
             np.asarray(list(seq_sorted.values())[:N_SEQUENCES_MAX]).astype(np.uint8)
+
+    @staticmethod
+    def solve_sequence_fast(events, colors: int = 256, kmeans: bool = False) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+        """
+        This functions finds a solution for the provided subtitle animation.
+        :param events:  PIL images, stacked one after the other
+        :param colors: max number of sequences usable
+        :param kmwans: enable kmeans quantization
+
+        :return: bitmap, sequence of palette update to obtain the said input animation.
+        """
+
+        sequences = []
+        for event in events:
+            img, img_pal = Preprocess.quantize(event, colors, kmeans)
+            clut = np.asarray(list(img_pal.keys()), dtype=np.uint8)
+            sequences.append(clut[img])
+
+        sequences = np.stack(sequences, axis=2).astype(np.uint8)
+
+        #catalog the sequences
+        seq_occ: dict[int, tuple[int, npt.NDArray[np.uint8]]] = {}
+        for i in range(sequences.shape[0]):
+            for j in range(sequences.shape[1]):
+                seq = sequences[i, j, :, :]
+                hsh = hash(seq.tobytes())
+                try:
+                    seq_occ[hsh][0] += 1
+                except KeyError:
+                    seq_occ[hsh] = [1, seq]
+
+        #Sort sequences by commonness
+        seq_sorted = {k: x[1] for k, x in sorted(seq_occ.items(), key=lambda item: item[1][0], reverse=True)}
+        seq_ids = {k: z for z, k in enumerate(seq_sorted.keys())}
+
+        #Fill a new array with kept sequences to perform fast norm calculations
+        norm_mat = np.ndarray((colors, *sequences[i,j,:,:].shape[0:2]))
+
+        #Match sequences to the most common ones (N[colors] kept)
+        remap = {}
+        for cnt, v in enumerate(seq_sorted.values()):
+            if cnt < colors:
+                norm_mat[cnt, :, :] = v
+            else:
+                nm = np.linalg.norm(norm_mat - v[None, :], 2, axis=2)
+
+                id1 = np.argsort(np.sum(nm, axis=1))
+                id2 = np.argsort(np.sum(nm, axis=1)/np.sum(nm != 0, axis=1))
+
+                best_fit = np.abs(id1 - id2[:, None])
+                remap[cnt] = id1[best_fit.argmin() % id1.size]
+
+        bitmap = np.zeros(sequences.shape[0:2], dtype=np.uint8)
+        for i in range(sequences.shape[0]):
+            for j in range(sequences.shape[1]):
+                seq = sequences[i, j, :, :]
+                hsh = hash(seq.tobytes())
+                if seq_ids[hsh] < colors:
+                    bitmap[i, j] = seq_ids[hsh]
+                else:
+                    bitmap[i, j] = remap[seq_ids[hsh]]
+        #retun bitmap and the color sequence.
+        return bitmap, np.asarray(list(seq_sorted.values()), dtype=np.uint8)[:colors]
+
 
     @staticmethod
     def diff_cluts(cluts: npt.NDArray[np.uint8], to_ycbcr: bool = True, /, *,

@@ -201,8 +201,7 @@ class CObject:
         # NOTE: the patent claims there can be N>1 cropping windows… on the same window??
 
         if len(self._data) > __class__.COOff.CO_COL.value:
-            logging.error("SUPer does not know how to parse numerous cropping windows."\
-                          " Send this sample to the author please!")
+            logging.error("SUPer cannot parse numerous cropping windows on the same composition.")
 
         if self.cropped or _cropped:
             self._data = self._data[:__class__.COOff.CO_COL.value]
@@ -357,8 +356,8 @@ class PCS(PGSegment):
         N_OBJ_DEFS = 10
         LENGTH_SEG = N_OBJ_DEFS # must be last
 
-    class CompositionState(Flags):
-        #NORMAL = 0x00     #Update
+    class CompositionState(IntEnum):
+        NORMAL      = 0x00 #Update
         ACQUISITION = 0x40 #Update current composition with new objects
         EPOCH_START = 0x80 #Display update (new "group of DSs")
 
@@ -416,12 +415,14 @@ class PCS(PGSegment):
         self.payload = (__class__.PCSOff.COMP_NB.value, pack(">H", nc_n))
 
     @property
-    def composition_state(self) -> Flags:
+    def composition_state(self) -> int:
         return __class__.CompositionState(self.payload[__class__.PCSOff.COMP_STATE.value])
 
     @composition_state.setter
-    def composition_state(self, cs: Flags) -> None:
-        for flag in __class__.CompositionState:
+    def composition_state(self, cs: int) -> None:
+        flags = [flag for flag in __class__.CompositionState]
+        assert cs in flags, f"Unknown state value: '{cs}'."
+        for flag in flags:
             self.payload = (__class__.PCSOff.COMP_STATE.value,
                             self.payload[__class__.PCSOff.COMP_STATE.value] & (~int(flag)))
             self.payload = (__class__.PCSOff.COMP_STATE.value,
@@ -466,7 +467,7 @@ class PCS(PGSegment):
 
     @classmethod
     def from_scratch(cls, width: int, height: int, fps: PCSFPS, composition_n: int,
-                     composition_state: CompositionState, pal_flag: bool, pal_id: bool,
+                     composition_state: CompositionState, pal_flag: bool, pal_id: int,
                      cobjects: list[CObject], pts: Optional[float] = None,
                      dts: Optional[float] = None, **kwargs):
 
@@ -641,7 +642,7 @@ class PDS(PGSegment):
 
     @property
     def n_entries(self) -> int:
-        return int((len(self.payload) - __class__.PDSOff.PAL_ENTRIES.value.start)/5)
+        return int((len(self.payload) - __class__.PDSOff.PAL_ENTRIES.value.start)/__class__.__STEP)
 
     @property
     def __dict__(self) -> dict[str, Any]:
@@ -833,6 +834,11 @@ class ODS(PGSegment):
 
 
 class ENDS(PGSegment):
+    """
+    The END segment closes a DS. It may be preceeded by any other segment but
+    it always follows the last ODS in a DS.
+    MPEG2 standard recommends to have END.pts = END.dts
+    """
     _NAME = 'END'
     def __init__(self, data: bytes) -> None:
         super().__init__(data)
@@ -845,19 +851,19 @@ class ENDS(PGSegment):
 
 #%%
 class DisplaySet:
+    AUTO_SET_END_PTS = True
     def __init__(self, segments: list[Type[PGSegment]]) -> None:
         self.segments = segments
-        self.pds = [s for s in self.segments if isinstance(s, PDS)]
-        self.ods = [s for s in self.segments if isinstance(s, ODS)]
-        if not isinstance(self.segments[0], PCS):
-            raise ValueError("First segment is not a PCS.")
-        self.wds = [s for s in self.segments if isinstance(s, WDS)]
-        if isinstance(segments[-1], ENDS):
-            self.end = segments[-1]
-        else:
-            self.end = ENDS.from_scratch(self._pcs.pts, self._pcs.dts)
-            self.segments.append(self.end)
-        self.has_image = bool(self.ods)
+
+        if not isinstance(segments[-1], ENDS):
+            self.segments.append(ENDS.from_scratch(self.pcs.pts, self.pcs.dts))
+
+        _pcs = [s for s in self.segments if isinstance(s, PCS)]
+        _wds = [s for s in self.segments if isinstance(s, WDS)]
+        _end = [s for s in self.segments if isinstance(s, ENDS)]
+        assert len(_pcs) == 1, "Too few or too many PCS segments."
+        assert len(_wds) <= 1, "More than one WDS in a DisplaySet."
+        assert len(_end) <= 1, "More than one END in a DisplaySet."
 
     def __iter__(self):
         self.n = 0
@@ -889,6 +895,11 @@ class DisplaySet:
     def __len__(self) -> int:
         return len(self.segments)
 
+    def update(self) -> None:
+        if __class__.AUTO_SET_END_PTS:
+            self.end.pts = self.segments[-2].pts
+            self.end.dts = self.segments[-2].dts
+
     @property
     def t_in(self) -> float:
         return self.segments[0].pts
@@ -903,10 +914,75 @@ class DisplaySet:
 
     @pcs.setter
     def pcs(self, new_pcs: PCS) -> None:
-        if isinstance(new_pcs, PCS):
-            self.segments[0] = new_pcs
+        assert isinstance(new_pcs, PCS), "Not a PCS."
+        self.segments[0] = new_pcs
+
+    @property
+    def wds(self) -> Optional[WDS]:
+        wds = [s for s in self.segments if isinstance(s, WDS)]
+        assert len(wds) <= 1
+        return wds[0] if len(wds) == 1 else None
+
+    @wds.setter
+    def wds(self, wds: Optional[WDS]) -> None:
+        assert wds is None or isinstance(wds, WDS), "Not a WDS."
+        if isinstance(self.segments[1], WDS):
+            if wds is None:
+                self.segments.pop(1)
+            else:
+                self.segments[1] = wds
+        elif wds is not None:
+            self.segments[1:1] = [wds]
+        self.update()
+
+    @property
+    def pds(self) -> list[PDS]:
+        return [s for s in self.segments if isinstance(s, PDS)]
+
+    @pds.setter
+    def pds(self, pds: Union[PDS, list[PDS]]) -> None:
+        if pds is None: pds = []
+        elif isinstance(pds, PDS): pds = [pds]
+        assert isinstance(pds, (tuple, list)), "Invalid PDS param."
+
+        begin = end = -1
+        for k, seg in enumerate(self.segments):
+            if isinstance(seg, PDS) and begin == -1:         begin = k
+            elif isinstance(seg, (ODS, ENDS)) and end == -1: end = k
+        assert end > 0
+        if begin == -1:
+            self.segments[end:end] = pds
         else:
-            raise TypeError("Not a PCS.")
+            self.segments = self.segments[:begin] + pds + self.segments[end:]
+        self.update()
+
+    @property
+    def ods(self) -> Optional[ODS]:
+        return [s for s in self.segments if isinstance(s, ODS)]
+
+    @ods.setter
+    def ods(self, ods: Optional[list[ODS]]) -> None:
+        if ods is None: ods = []
+        elif isinstance(ods, ODS): ods = [ods]
+        assert isinstance(ods, (list, tuple)), "Not an ODS or chain of ODS."
+
+        for k, seg in enumerate(self.segments):
+            if isinstance(seg, ODS):
+                self.segments = self.segments[:k] + ods + self.segments[-1:]
+                self.update()
+                return
+        #not found, inject before end
+        self.segments[-1:-1] = ods
+        self.update()
+
+    @property
+    def end(self) -> ENDS:
+        return self.segments[-1]
+
+    @end.setter
+    def end(self, end: ENDS) -> None:
+        assert isinstance(end, ENDS), "End segment must exist"
+        self.segments[-1] = end
 
     @property
     def pts(self) -> float:
@@ -921,13 +997,10 @@ class DisplaySet:
         return bytes(b''.join([bytes(seg) for seg in self.segments]))
 
     def is_palette_update(self) -> bool:
-        try:
-            return self.segments[0].pal_flag and len(self.ods) == 0
-        except KeyError:
-            return False
+        return self.pcs.pal_flag and len(self) == 3
 
-    def is_crop_update(self) -> bool:
-        raise NotImplementedError
+    def is_display_refresh(self) -> bool:
+        return self.wds is not None
 
 @dataclass
 class Epoch:
