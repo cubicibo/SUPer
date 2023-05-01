@@ -22,14 +22,16 @@ from typing import Optional, Union
 
 import numpy as np
 from numpy import (typing as npt)
+from PIL import ImagePalette
 
 from .utils import get_matrix, get_super_logger
+
+#%%
 
 RGBA = namedtuple('RGBA', ['r', 'g', 'b', 'a'])
 FpPal = namedtuple('FpPal', 'y cb cr alpha')
 
 logging = get_super_logger('SUPer')
-
 def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
     """
     Clip an array of YCxCyA values to s_range either {'limited', 'full'}
@@ -39,10 +41,9 @@ def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
 
     :return: Clipped values according to range. If 'full' generally input=output.
     """
-    squeeze = False
-    if ycbcra.ndim == 1:
+    squeeze = ycbcra.ndim == 1
+    if squeeze:
         ycbcra = np.expand_dims(ycbcra, 0)
-        squeeze = True
 
     if ycbcra.shape[1] != 4 and ycbcra.shape[0] == 4:
         ycbcra = ycbcra.T
@@ -145,7 +146,7 @@ class PaletteEntry:
 #%%
 @dataclass
 class Palette:
-    palette : dict[int, PaletteEntry] = field(default_factory=lambda: dict())
+    palette : dict[int, PaletteEntry] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.sort()
@@ -234,6 +235,10 @@ class Palette:
         else:
             raise ValueError(f"Shifting outside 8bit range with {offset} (got {max(self.palette) + offset}, {min(self.palette) + offset}).")
 
+    def get_rgba_array(self, matrix: str = 'bt709', s_range: str = 'limited') -> npt.NDArray[np.uint8]:
+        #palette = np.zeros((len(self), 4), np.uint8)
+        vfunc = np.vectorize(lambda x: x.to_rgba(matrix, s_range=s_range))
+        return np.array(vfunc(self), dtype=np.uint8).transpose()
 
     def get_ycbcr(self, /, *, _no_key = False) -> npt.NDArray[np.uint8]:
         """
@@ -267,6 +272,10 @@ class Palette:
             return np.array([a.alpha for a in self.palette.values()])
         return np.array([(k, a.alpha) for k, a in self.palette.items()])
 
+    @classmethod
+    def from_pil(cls, palette: ImagePalette.ImagePalette, matrix: str = 'bt709'):
+        assert palette is not None
+        return cls({v: PaletteEntry.from_rgba(k, matrix=matrix) for k, v in palette.colors.items()})
 
     @classmethod
     def from_rgba(cls,

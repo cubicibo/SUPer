@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from collections import namedtuple
 from enum import Enum, IntEnum
 from PIL import Image
+from timecode import Timecode
 
 #ImageEvent is the common container for the Optimiser module.
 ImageEvent = namedtuple("ImageEvent", "img event")
@@ -34,8 +35,7 @@ Pos = namedtuple("Pos", "x y")
 _BaseEvent = TypeVar('BaseEvent')
 
 # Elementary plane initialisation time function
-_pinit_fn = lambda shape: np.ceil(90e3*(shape.width*shape.height/(32*1e6)))
-
+_pinit_fn = lambda shape, *, _coeff=1: np.ceil(90e3*(shape.width*shape.height/(_coeff*32*1e6)))
 
 def min_enclosing_cube(group: list[_BaseEvent], *, _retwh=True) -> npt.NDArray[np.uint8]:
     pxtl, pytl = np.inf, np.inf
@@ -124,12 +124,13 @@ class BDVideo:
 
     class VideoFormat(Enum):
         HD1080    = (1920, 1080)
-        HD1080_43 = (1440, 1080) #Probably illegal
         HD720     = (1280, 720)
-        SD576_169 = (1024, 576) #Probably illegal
-        SD480_169 = (856,  480) #Probably illegal
         SD576_43  = (720,  576)
         SD480_43  = (720,  480)
+        HD1080_43 = (1440, 1080) #Probably illegal
+        SD576_169 = (1024, 576) #Probably illegal
+        SD480_169 = (856,  480) #Probably illegal
+
 
     class PCSFPS(IntEnum):
         FILM_NTSC_P = 0x10
@@ -141,7 +142,7 @@ class BDVideo:
 
         @classmethod
         def from_fps(cls, other: float):
-            return BDVideo.LUT_PCS_FPS[np.round(other, 3)]
+            return cls(BDVideo.LUT_PCS_FPS[np.round(other, 3)])
 
     LUT_PCS_FPS = {
         23.976:0x10,
@@ -151,6 +152,29 @@ class BDVideo:
         50:    0x60,
         59.94: 0x70,
     }
+
+    LUT_FPS_PCSFPS = {
+        0x10: 23.976,
+        0x20: 24,
+        0x30: 25,
+        0x40: 29.97,
+        0x60: 50,
+        0x70: 59.94,
+    }
+
+    def __init__(self, fps: float, height: int, width: Optional[int] = None) -> None:
+        self.fps = __class__.FPS(fps)
+        self.pcsfps = __class__.PCSFPS.from_fps(self.fps.value)
+        if width is None:
+            self.format = None
+            for vf in __class__.VideoFormat:
+                if vf.value[1] == height:
+                    self.format = vf
+                    break
+            assert self.format is not None
+        else:
+            self.format = __class__.VideoFormat((height, width))
+
 
 class TimeConv:
     @staticmethod
@@ -166,23 +190,12 @@ class TimeConv:
         return int(round_f(s*fps))
 
     @staticmethod
-    def f2s(f: int, fps: float, ndigits: int = 6) -> float:
-        return round(f/fps, ndigits=ndigits)
-
-    @staticmethod
     def s2tc(s: float, fps: float) -> str:
-        h = int(s//3600)
-        m = int((s % 3600)//60)
-        sec = int((s % 60))
-        fc = round((s-int(s))*fps)
-        return f"{h:02}:{m:02}:{sec:02}:{fc:02}"
+        return str(Timecode(fps, start_seconds=s+1/fps+1e-8))
 
     @classmethod
     def tc2s(cls, tc: str, fps: float, *, ndigits: int = 6) -> float:
-        dt =  tc[:(fpos := tc.rfind(':'))]
-        dtts = datetime.strptime(dt, '%H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
-        dtts += cls.f2s(int(tc[fpos+1:]), fps, ndigits=ndigits)
-        return round(dtts-datetime.strptime('0:0:0', '%H:%M:%S').replace(tzinfo=timezone.utc).timestamp(), ndigits=ndigits)
+        return round(Timecode(fps, tc).float - Timecode(fps, '00:00:00:00').float, ndigits)
 
     @classmethod
     def ms2tc(cls, ms: int, fps: float) -> str:
@@ -194,43 +207,11 @@ class TimeConv:
 
     @classmethod
     def tc2f(cls, tc: str, fps: float, *, add_one: bool = False) -> int:
-        return cls.s2f(cls.tc2s(tc, fps), fps)
+        return Timecode(fps, tc).frame_number
 
     @classmethod
     def f2tc(cls, f: int, fps: float, *, add_one: bool = False) -> str:
-        return cls.s2tc(cls.f2s(f, fps), fps)
-
-    @classmethod
-    def tc_addf(cls, tc: str, f: int, fps: float) -> str:
-        return cls.f2tc(cls.tc2f(tc, fps) + f, fps)
-
-    @classmethod
-    def tc_adds(cls, tc: str, s: float, fps: float) -> str:
-        return cls.s2tc(cls.tc2s(tc, fps) + s, fps)
-
-    @classmethod
-    def tc_addtc(cls, tc1: str, tc2: str, fps: float) -> str:
-        return cls.f2tc(cls.tc2f(tc1, fps)+cls.tc2f(tc2, fps), fps)
-
-    @classmethod
-    def tc_addms(cls, tc: str, ms: int, fps: float) -> str:
-        return __class__.ms2tc(__class__.tc2ms(tc, fps) + ms, fps)
-
-    @staticmethod
-    def pgs2ms(pgts: int, *, _round = lambda x: int(round(x))) -> int:
-        return int(_round(pgts/90))
-
-    @staticmethod
-    def ms2pgs(ms: float, *, _round = lambda x: int(round(x))) -> int:
-        return int(_round(ms*90))
-
-    @classmethod
-    def tc2pgs(cls, tc: str, fps: float) -> int:
-        return cls.ms2pgs(cls.tc2ms(tc, fps))
-
-    @classmethod
-    def pgs2tc(cls, pgts: int, fps: float) -> str:
-        return cls.ms2tc(cls.pgs2ms(pgts, _round=lambda a: a), fps)
+        return str(Timecode(fps, frames=f+1))
 
 def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """
