@@ -626,13 +626,11 @@ class WOBSAnalyzer:
             next(gens[-1])
 
         #get all windowed bitmaps
-        wevents = [[] for k in range(len(windows))]
         pgobjs = [[] for k in range(len(windows))]
         for event in chain(self.events, [None]*2):
             for wid, (window, gen) in enumerate(zip(windows, gens)):
                 if event is not None:
-                    wevents[wid].append(self.mask_event(window,  event))
-                    pgobj = gen.send(wevents[wid][-1])
+                    pgobj = gen.send(self.mask_event(window,  event))
                 else:
                     try:
                         pgobj = gen.send(None)
@@ -647,7 +645,7 @@ class WOBSAnalyzer:
         states[0] = PCS.CompositionState.EPOCH_START
         drought = 0
         for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
-            if acq and (forced or margin > max(0.8-0.05*drought, 0)):
+            if forced or (acq and margin > max(0.8-0.05*drought, 0)):
                 states[k] = PCS.CompositionState.ACQUISITION
                 drought = 0
             else:
@@ -806,7 +804,7 @@ class WOBSAnalyzer:
 
             areas = list(map(lambda obj: obj.area*obj.is_visible(k), filter(lambda x: x is not None, objs)))
             td = PGDecoder.decode_display_duration(gp_clear_dur, areas)
-            valid[k] = td < margin
+            valid[k] = (td < margin)
             dtl[k] = 1-td/margin
             absolutes[k] = force_acq
             prev_dt = dt
