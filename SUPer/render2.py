@@ -604,15 +604,18 @@ class WOBSAnalyzer:
         self.bdn = bdn
         self.kwargs = kwargs
 
-    def mask_event(self, window, event) -> npt.NDArray[np.uint8]:
-        windowed_event = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
-        work_plane = np.zeros((self.box.dy, self.box.dx, 4), dtype=np.uint8)
+    def mask_event(self, window, event) -> Optional[npt.NDArray[np.uint8]]:
+        if event is not None:
+            windowed_event = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
+            work_plane = np.zeros((self.box.dy, self.box.dx, 4), dtype=np.uint8)
 
-        hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
-        vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)
-        work_plane[vsi, hsi, :] = np.array(event.img, dtype=np.uint8)
+            hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
+            vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)
+            work_plane[vsi, hsi, :] = np.array(event.img, dtype=np.uint8)
+            event.unload() #Help a bit to save on RAM
 
-        return work_plane[window.y:window.y2, window.x:window.x2, :]
+            return work_plane[window.y:window.y2, window.x:window.x2, :]
+        return None
 
     def analyze(self):
         woba = []
@@ -629,13 +632,10 @@ class WOBSAnalyzer:
         pgobjs = [[] for k in range(len(windows))]
         for event in chain(self.events, [None]*2):
             for wid, (window, gen) in enumerate(zip(windows, gens)):
-                if event is not None:
+                try:
                     pgobj = gen.send(self.mask_event(window,  event))
-                else:
-                    try:
-                        pgobj = gen.send(None)
-                    except StopIteration:
-                        pgobj = None
+                except StopIteration:
+                    pgobj = None
                 if pgobj is not None:
                     pgobjs[wid].append(pgobj)
         pgobjs_proc = [objs.copy() for objs in pgobjs]
@@ -644,8 +644,12 @@ class WOBSAnalyzer:
         states = [PCS.CompositionState.NORMAL] * len(acqs)
         states[0] = PCS.CompositionState.EPOCH_START
         drought = 0
+
+        thresh = self.kwargs.get('quality_factor', 0.8)
+        dthresh = self.kwargs.get('dquality_factor', 0.05)
+
         for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
-            if forced or (acq and margin > max(0.8-0.05*drought, 0)):
+            if forced or (acq and margin > max(thresh-dthresh*drought, 0)):
                 states[k] = PCS.CompositionState.ACQUISITION
                 drought = 0
             else:

@@ -39,6 +39,10 @@ class BDNRender:
 
     def optimise(self) -> None:
         kwargs = self.kwargs
+        stkw = ''
+        stkw += ':'.join([f"{k}={v}" for k, v in kwargs.items()])
+        logger.info(f"Parameters: {stkw}")
+
 
         bdn = BDNXML(path.expanduser(self.bdn_file))
         logger.info("Finding epochs...")
@@ -47,7 +51,6 @@ class BDNRender:
         # This is doing coarse epoch definitions, without any consideration to
         # what's being displayed on screen.
         delay_refresh = 0.01+0.25*np.multiply(*bdn.format.value)/(1920*1080)
-
         for group in bdn.groups(delay_refresh):
             offset = len(group)-1
             subgroups = []

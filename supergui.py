@@ -24,7 +24,7 @@ import multiprocessing as mp
 import time
 import signal
 
-from guizero import App, PushButton, Text, CheckBox, Combo
+from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 
 from SUPer import BDNRender, get_super_logger
 from SUPer.__metadata__ import __version__ as SUPVERS
@@ -35,7 +35,7 @@ SUPER_STRING = "Make it SUPer!"
 #### FUnctions, main at the end of the file
 def get_kwargs() -> dict[str, int]:
     return {
-        'merge_nonoverlap': merge_nonoverlap.value,
+        'quality_factor': int(compression_txt.value)/100,
         'noblur_grouping': no_blur.value,
         'adjust_dropframe': dropframebox.value,
         'scale_fps': scale_fps.value,
@@ -46,11 +46,21 @@ def get_kwargs() -> dict[str, int]:
 def wrapper_mp() -> None:
     if supout.value == '' or bdnname.value == '':
         return
+    try:
+        kwargs = get_kwargs()
+    except ValueError:
+        logger.error("Incorrect parameter, aborting.")
+        return
+    else:
+        if not (0 <= kwargs['quality_factor'] <= 100):
+            logger.error("Incorrect compression factor, aborting.")
+            return
+
     do_super.enabled = False
     logger.info("Starting optimiser process.")
     do_super.text = "Generating (check console)..."
     do_super.proc.start()
-    do_super.queue.put(get_kwargs())
+    do_super.queue.put(kwargs)
     do_super.queue.put(bdnname.value)
     do_super.queue.put(supout.value)
     do_super.queue.put(supname.value)
@@ -166,19 +176,23 @@ if __name__ == '__main__':
     do_super.text_color = 'red'
     do_super.sup_kwargs = {}
 
-    merge_nonoverlap = CheckBox(app, text="Merge non-overlapping (can fix buffer issues but damage few animations)", grid=[0,4,2,1], align='left')
+    bcompre = Box(app, layout="grid", grid=[0,4,2,1])
+    Text(bcompre, "Compression [integer]%: ", grid=[0,0], align='right')
+    compression_txt = TextBox(bcompre, width=4, height=1, grid=[1,0], text="80")
+
     kmeans_quant = CheckBox(app, text="KMeans quantize on fades (good for fades, bad for other animations)", grid=[0,5,2,1], align='left')
     no_blur = CheckBox(app, text="Disable blur grouping (recommended for SD content)", grid=[0,6,2,1], align='left')
-    dropframebox = CheckBox(app, text="Force dropframe timing", grid=[0,7,2,1], align='left')
+    dropframebox = CheckBox(app, text="Correct dropframe timing", grid=[0,7,2,1], align='left')
     scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored with 24p)", grid=[0,8,2,1], align='left')
 
-    Text(app, "Color space: ", grid=[0,9], align='right')
-    colorspace = Combo(app, options=["bt709", "bt601", "bt2020"], grid=[1,9], align='left')
+    bspace = Box(app, layout="grid", grid=[0,9,2,1])
+    Text(bspace, "Color space: ", grid=[0,0], align='right')
+    colorspace = Combo(bspace, options=["bt709", "bt601", "bt2020"], grid=[1,0], align='left')
 
     #flatten = CheckBox(app, text="Reduce palette individually (can improve kara)", grid=[0,7,2,1], align='left')
     #flatten_grp = CheckBox(app, text="Reduce palette at once (can improve gradients)", grid=[0,8,2,1], align='left')
 
-    Text(app, grid=[0,10,2,1], align='left', text="Progress data is displayed in the command line !")
+    Text(app, grid=[0,10,2,1], align='left', text="Progress data is displayed in the command line!")
     app.repeat(1000, monitor_mp)  # Schedule call to monitor_mp() every 1000ms
 
     app.when_closed = terminate
