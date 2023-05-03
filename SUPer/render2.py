@@ -464,7 +464,7 @@ class GroupingEngine:
         regions = regionprops(labeled_screen)
 
         if len(regions) == 1:
-            return [(WindowOnBuffer(tbox, duration))]
+            return [(WindowOnBuffer(tbox, duration),)]
 
         # Too many regions, increase blurring and try again
         if len(regions) > 16:
