@@ -20,7 +20,6 @@ if __name__ == '__main__':
     print("Loading...")
 
 import sys
-import multiprocessing as mp
 import time
 import signal
 
@@ -36,7 +35,6 @@ SUPER_STRING = "Make it SUPer!"
 def get_kwargs() -> dict[str, int]:
     return {
         'quality_factor': int(compression_txt.value)/100,
-        'noblur_grouping': no_blur.value,
         'adjust_dropframe': dropframebox.value,
         'scale_fps': scale_fps.value,
         'kmeans_quant': kmeans_quant.value,
@@ -68,6 +66,7 @@ def wrapper_mp() -> None:
 
 
 def monitor_mp() -> None:
+    from multiprocessing import Process
     do_reset = False
     if time.time()-do_super.ts < 2:
         return
@@ -79,7 +78,7 @@ def monitor_mp() -> None:
                 ...
             else:
                 logger.info("Closed gracefully SUPer process.")
-                do_super.proc = mp.Process(target=from_bdnxml, args=(do_super.queue,), daemon=True, name="SUPinternal")
+                do_super.proc = Process(target=from_bdnxml, args=(do_super.queue,), daemon=True, name="SUPinternal")
                 do_super.ts = time.time()
                 do_reset = True
     if do_reset and bdnname.value and supout.value:
@@ -121,7 +120,7 @@ def terminate(frame = None, sig = None):
         else:
             proc.join(0.1)
 
-def from_bdnxml(queue: mp.Queue) -> None:
+def from_bdnxml(queue: ...) -> None:
     logger = get_super_logger('SUPer')
     kwargs = queue.get()
     bdnf = queue.get()
@@ -148,6 +147,9 @@ def from_bdnxml(queue: mp.Queue) -> None:
 
 
 if __name__ == '__main__':
+    import multiprocessing as mp
+    mp.freeze_support()
+
     logger = get_super_logger('SUPui')
     logger.info(f"SUPer v{SUPVERS}")
 
@@ -181,7 +183,6 @@ if __name__ == '__main__':
     compression_txt = TextBox(bcompre, width=4, height=1, grid=[1,0], text="80")
 
     kmeans_quant = CheckBox(app, text="KMeans quantize on fades (good for fades, bad for other animations)", grid=[0,5,2,1], align='left')
-    no_blur = CheckBox(app, text="Disable blur grouping (recommended for SD content)", grid=[0,6,2,1], align='left')
     dropframebox = CheckBox(app, text="Correct dropframe timing", grid=[0,7,2,1], align='left')
     scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored with 24p)", grid=[0,8,2,1], align='left')
 

@@ -21,8 +21,10 @@ from typing import Any, Dict
 
 from setuptools import setup
 
+NAME = 'SUPer'
+
 meta: Dict[str, Any] = {}
-with open(convert_path('SUPer/__metadata__.py'), encoding='utf-8') as f:
+with open(convert_path(f"{NAME}/__metadata__.py"), encoding='utf-8') as f:
     exec(f.read(), meta)
 
 with open('README.md', encoding='utf-8') as fh:
@@ -31,8 +33,6 @@ with open('README.md', encoding='utf-8') as fh:
 with open('requirements.txt', encoding='utf-8') as fh:
     install_requires = fh.read()
 
-NAME = 'BDSUPer'
-
 setup(
     name=NAME,
     version=meta['__version__'],
@@ -40,9 +40,9 @@ setup(
     description='Blu-Ray SUP editor and optimiser.',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    packages=['SUPer',],
+    packages=[NAME,],
     package_data={
-        'SUPer': ['py.typed'],
+        NAME: ['py.typed'],
     },
     url='https://github.com/cubicibo/SUPer',
     zip_safe=False,

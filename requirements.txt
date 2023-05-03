@@ -1,9 +1,9 @@
 Pillow==9.2.0
 numpy
 py-flags==1.1.4
+sklearn
 scikit-image==0.19.3
 guizero
-sklearn
 opencv-python
 pyopencl
 SSIM-PIL

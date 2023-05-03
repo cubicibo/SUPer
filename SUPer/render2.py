@@ -203,6 +203,10 @@ class ScreenRegion(Box):
     @classmethod
     def from_region(cls, region: _Region) -> 'ScreenRegion':
         return cls.from_slices(region.slice, region)
+
+    @classmethod
+    def from_coords(cls, x1: int, y1: int, t1: int, x2: int, y2: int, t2: int, region: _Region) -> 'ScreenRegion':
+        return cls(min(y1, y2), abs(y2-y1), min(x1, x2), abs(x2-x1), min(t1, t2), abs(t2-t1), region=region)
 ####
 
 class WindowOnBuffer:
@@ -367,7 +371,7 @@ class GroupingEngine:
         self.candidates = kwargs.pop('candidates', 25)
         self.mode = kwargs.pop('mode', __class__.Mode.SMALLEST_WINDOWS)
 
-        self.no_blur = kwargs.pop('noblur_grouping', False)
+        self.no_blur = True
         self.blur_mul = kwargs.pop('blur_mul', 1.1)
         self.blur_c = kwargs.pop('blur_const', 1.5)
 
@@ -404,12 +408,13 @@ class GroupingEngine:
             gs_orig[k, slice_y, slice_x] = np.array(event.img.getchannel('A'))
         return regionprops(label(gs_graph)), gs_orig, box
 
-    def group_and_sort_flat(self, srs: list[ScreenRegion], duration: int) -> list[tuple[WindowOnBuffer]]:
+    def group_and_sort_flat_old(self, srs: list[ScreenRegion], duration: int) -> list[tuple[WindowOnBuffer]]:
         """
         Seek for minimum areas from the regions, sort them and return them sorted,
         ascending area size. The caller will then choose the best area.
         This function flatten the 3D space to a 2D one by grouping similar regions
         """
+        logger.warning("DEPRECATED: This function will be removed in the next release.")
         nsrs = len(srs)
 
         if nsrs == 1 or self.n_groups == 1:
@@ -442,13 +447,50 @@ class GroupingEngine:
                 if k not in seen:
                     lut[z] = [k]
                     z += 1
-            if len(lut) <= np.ceil(len(srs)/3.5): #/3.5 number of groups
+            if len(lut) <= 16:
                 success=True
                 break
         ####
-        if len(lut) >= 15:
+        if not success:
             return None
         return self._group_and_sort_mapped(srs, duration, lut)
+
+    def group_and_sort_flat(self, tbox: list[ScreenRegion], box: Box, duration: int) -> Optional[list[tuple[WindowOnBuffer]]]:
+        screen = np.zeros((box.dy, box.dx), np.uint16)
+        for sr in tbox:
+            screen[sr.spatial_slice] = 1
+
+        labeled_screen = label(screen)
+        regions = regionprops(labeled_screen)
+
+        if len(regions) == 1:
+            return [(WindowOnBuffer(tbox, duration))]
+
+        # Too many regions, increase blurring and try again
+        if len(regions) > 16:
+            return None
+
+        new_tbox = [[] for reg in regions]
+        fake_srs = []
+        for sr in tbox:
+            id_owner = labeled_screen[sr.spatial_slice][0,0]-1
+            new_tbox[id_owner].append(sr)
+
+        for k, (region, ntb) in enumerate(zip(regions, new_tbox)):
+            region.slice = (slice(min(map(lambda x: x.t, ntb)), max(map(lambda x: x.t2, ntb))), *region.slice)
+            region._SUPer_rid = k
+            fake_srs.append(ScreenRegion.from_region(region))
+
+        results = self.group_and_sort(fake_srs, duration)
+
+        #Inject back the original ScreenRegions
+        for res in results:
+            for w in res:
+                new_sr = []
+                for sr in w.srs:
+                    new_sr.extend(new_tbox[sr.region._SUPer_rid])
+                w.srs = new_sr
+        return results
 
     @staticmethod
     def _get_combinations(n_regions: int) -> map:
@@ -470,11 +512,12 @@ class GroupingEngine:
         combinations = __class__._get_combinations(len(mapping))
 
         windows, areas = {}, {}
-
         for key, arrangement in enumerate(combinations):
             arr_sr, other_sr = [], []
             for k, srl in mapping.items():
                 (arr_sr if k in arrangement else other_sr).extend([sr for ksr, sr in enumerate(srs) if ksr in srl])
+            arr_sr = list(arr_sr)
+            other_sr = list(other_sr)
             windows[key] = (WindowOnBuffer(arr_sr, duration=duration), WindowOnBuffer(other_sr, duration=duration))
             areas[key] = sum(map(lambda wb: wb.area(), windows[key]))
 
@@ -517,14 +560,11 @@ class GroupingEngine:
                 region.slice = cls.crop_region(region, gs_origs)
                 tbox.append(ScreenRegion.from_region(region))
 
-            if len(tbox) < 12:
-                wobs = self.group_and_sort(tbox, len(subgroup))
-            else:
-                wobs = self.group_and_sort_flat(tbox, len(subgroup))
-                if wobs is None:
-                    self.no_blur = False
-                    self.blur_mul += 0.5
-                    self.blur_c += 0.5
+            wobs = self.group_and_sort_flat(tbox, box, len(subgroup))
+            if wobs is None:
+                self.no_blur = False
+                self.blur_mul += 0.5
+                self.blur_c += 0.5
         if wobs is None:
             logger.warning("Grouping Engine giving up optimising layout. Using a single window.")
             wobs = [(WindowOnBuffer(tbox, duration=len(subgroup)),)]
@@ -606,7 +646,6 @@ class WOBSAnalyzer:
 
     def mask_event(self, window, event) -> Optional[npt.NDArray[np.uint8]]:
         if event is not None:
-            windowed_event = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
             work_plane = np.zeros((self.box.dy, self.box.dx, 4), dtype=np.uint8)
 
             hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
