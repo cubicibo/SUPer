@@ -740,6 +740,15 @@ class WOBSAnalyzer:
 
         palup_compatibility_mode = kwargs.pop('pup_compatibility', True)
 
+        try:
+            use_pbar = False
+            from tqdm import tqdm
+        except ModuleNotFoundError:
+            from contextlib import nullcontext as tqdm
+        else:
+            use_pbar = True
+
+        pbar = tqdm(range(n_actions))
         while i < n_actions:
             for k in range(i+1, n_actions):
                 if states[k] != PCS.CompositionState.NORMAL:
@@ -818,6 +827,11 @@ class WOBSAnalyzer:
                     # if len(pals) > 1:
                     #     print(f"{len(pals[0])} {len(pals[1])}")
             i = k
+            if use_pbar:
+                pbar.n = i
+                pbar.update()
+        if use_pbar:
+            pbar.close()
         ####while
         #final "undisplay" displayset
         displaysets.append(get_undisplay(self, -1, pcs_id, wds_base))

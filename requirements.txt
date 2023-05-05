@@ -9,3 +9,4 @@ pyopencl
 SSIM-PIL
 timecode
 numba
+tqdm
