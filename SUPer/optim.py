@@ -42,19 +42,19 @@ class FadeCurve(IntEnum):
 
 class Preprocess:
     @staticmethod
-    def quantize(img: Image.Image, colors=256, kmeans_quant: bool = False) -> Image.Image:
+    def quantize(img: Image.Image, colors: int = 256, kmeans_quant: bool = False, kmeans_fade: bool = False, **kwargs) -> Image.Image:
         #use cv2 for high transparency images, pillow has issues
 
         alpha = np.asarray(img.split()[-1], dtype=np.uint16)
-        kmeans_quant = (np.mean(alpha[alpha > 0]) < 38) and kmeans_quant
+        kmeans_fade = (np.mean(alpha[alpha > 0]) < 38) and kmeans_fade
 
-        if kmeans_quant:
+        if kmeans_quant or kmeans_fade:
             # Use PIL to get approximate number of clusters
             nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
             ocv_img = np.asarray(img)
             flat_img = np.float32(ocv_img.reshape((-1, 4)))
 
-            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 15, 0.5)
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 15, 0.33)
             ret, label, center = cv2.kmeans(flat_img, nk, None, criteria, 10, cv2.KMEANS_PP_CENTERS)
 
             center = np.uint8(np.round(np.clip(center, 0, 255)))
@@ -231,8 +231,7 @@ class Optimise:
         clut = []
         clut_lens = []
         for event in events:
-            img, img_pal = Preprocess.quantize(event.img, n_colors,
-                                               kwargs.get('kmeans_quant', False))
+            img, img_pal = Preprocess.quantize(event.img, n_colors, **kwargs)
             maps.append(img)
 
             a = np.zeros((256, 4))
@@ -324,7 +323,7 @@ class Optimise:
             np.asarray(list(seq_sorted.values())[:N_SEQUENCES_MAX]).astype(np.uint8)
 
     @staticmethod
-    def solve_sequence_fast(events, colors: int = 256, kmeans: bool = False) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+    def solve_sequence_fast(events, colors: int = 256, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
         """
         This functions finds a solution for the provided subtitle animation.
         :param events:  PIL images, stacked one after the other
@@ -336,7 +335,7 @@ class Optimise:
 
         sequences = []
         for event in events:
-            img, img_pal = Preprocess.quantize(event, colors, kmeans)
+            img, img_pal = Preprocess.quantize(event, colors, **kwargs)
             clut = np.asarray(list(img_pal.keys()), dtype=np.uint8)
             sequences.append(clut[img])
 

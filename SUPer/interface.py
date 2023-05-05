@@ -103,7 +103,7 @@ class BDNRender:
             for epoch in self._epochs:
                 for ds in epoch.ds:
                     for seg in ds.segments:
-                        seg.pts = seg.pts/1.001
+                        seg.pts = seg.pts*(1.001 - 3e-5)
         # Final check
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps))
 

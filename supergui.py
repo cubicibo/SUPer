@@ -24,6 +24,7 @@ import time
 import signal
 
 from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
+from idlelib.tooltip import Hovertip
 
 from SUPer import BDNRender, get_super_logger
 from SUPer.__metadata__ import __version__ as SUPVERS
@@ -37,8 +38,10 @@ def get_kwargs() -> dict[str, int]:
         'quality_factor': int(compression_txt.value)/100,
         'adjust_dropframe': dropframebox.value,
         'scale_fps': scale_fps.value,
+        'kmeans_fade': kmeans_fade.value,
         'kmeans_quant': kmeans_quant.value,
         'bt_colorspace': colorspace.value,
+        'pup_compatibility': compat_mode.value,
     }
 
 def wrapper_mp() -> None:
@@ -150,6 +153,8 @@ if __name__ == '__main__':
     import multiprocessing as mp
     mp.freeze_support()
 
+    pos_v = 0
+
     logger = get_super_logger('SUPui')
     logger.info(f"SUPer v{SUPVERS}")
 
@@ -162,38 +167,44 @@ if __name__ == '__main__':
 
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
 
-    PushButton(app, command=get_sup, text="Select SUP to inject (opt.)", grid=[0,0], align='left', width=15)
-    supname = Text(app, grid=[1,0], align='left')
+    PushButton(app, command=get_sup, text="Select SUP to inject (opt.)", grid=[0,pos_v], align='left', width=15)
+    supname = Text(app, grid=[1,pos_v], align='left')
 
-    PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,1],align='left', width=15)
-    bdnname = Text(app, grid=[1,1], align='left')
+    PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,pos_v:=pos_v+1],align='left', width=15)
+    bdnname = Text(app, grid=[1,pos_v], align='left')
 
-    PushButton(app, command=set_outputsup, text="Set SUP output", grid=[0,2], align='left', width=15)
-    supout = Text(app, grid=[1,2], align='left')
+    PushButton(app, command=set_outputsup, text="Set SUP output", grid=[0,pos_v:=pos_v+1], align='left', width=15)
+    supout = Text(app, grid=[1,pos_v], align='left')
 
-    do_super = PushButton(app, command=wrapper_mp, text=SUPER_STRING, grid=[0,3,2,1], align='left', enabled=False)
+    do_super = PushButton(app, command=wrapper_mp, text=SUPER_STRING, grid=[0,pos_v:=pos_v+1,2,1], align='left', enabled=False)
     do_super.queue = mp.Queue(10)
     do_super.proc = mp.Process(target=from_bdnxml, args=(do_super.queue,), daemon=True, name="SUPinternal")
     do_super.ts = time.time()
     do_super.text_color = 'red'
     do_super.sup_kwargs = {}
 
-    bcompre = Box(app, layout="grid", grid=[0,4,2,1])
+    bcompre = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bcompre, "Compression [integer]%: ", grid=[0,0], align='right')
     compression_txt = TextBox(bcompre, width=4, height=1, grid=[1,0], text="80")
 
-    kmeans_quant = CheckBox(app, text="KMeans quantize on fades (good for fades, bad for other animations)", grid=[0,5,2,1], align='left')
-    dropframebox = CheckBox(app, text="Correct dropframe timing", grid=[0,7,2,1], align='left')
-    scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored with 24p)", grid=[0,8,2,1], align='left')
+    kmeans_fade = CheckBox(app, text="Use KMeans quantization on fades", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    kmeans_quant = CheckBox(app, text="Use KMeans quantization everywhere (slow)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
 
-    bspace = Box(app, layout="grid", grid=[0,9,2,1])
+    dropframebox = CheckBox(app, text="Correct NTSC timings (*1.001)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+
+    compat_mode = CheckBox(app, text="Compatibility mode for software players (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    tooltip = Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly.\n"\
+                                       "If enabled, SUPer insert instructions for the decoder to redraw the graphic plane.\n"\
+                                       "I.e, the decoder re-copy existing objects in the buffer to the graphic plane and apply the new palette.\n"\
+                                       "However, hardware decoders can only redraw a portion of the graphic plane per frame.\n"\
+                                       "Should be unticked for commercial BDs.")
+
+    bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')
     colorspace = Combo(bspace, options=["bt709", "bt601", "bt2020"], grid=[1,0], align='left')
 
-    #flatten = CheckBox(app, text="Reduce palette individually (can improve kara)", grid=[0,7,2,1], align='left')
-    #flatten_grp = CheckBox(app, text="Reduce palette at once (can improve gradients)", grid=[0,8,2,1], align='left')
-
-    Text(app, grid=[0,10,2,1], align='left', text="Progress data is displayed in the command line!")
+    Text(app, grid=[0,pos_v:=pos_v+1,2,1], align='left', text="Progress data is displayed in the command line!")
     app.repeat(1000, monitor_mp)  # Schedule call to monitor_mp() every 1000ms
 
     app.when_closed = terminate

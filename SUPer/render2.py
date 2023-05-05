@@ -264,7 +264,7 @@ class WindowOnBuffer:
             mxy[:] = np.min([np.asarray((sr.y,  sr.x)),  mxy], axis=0)
             Mxy[:] = np.max([np.asarray((sr.y2, sr.x2)), Mxy], axis=0)
         mxy, Mxy = np.uint32((mxy, Mxy))
-        return Box(mxy[0], Mxy[0]-mxy[0], mxy[1], Mxy[1]-mxy[1])
+        return Box(mxy[0], max(Mxy[0]-mxy[0], 8), mxy[1], max(Mxy[1]-mxy[1], 8))
 
     def area(self) -> int:
         return self.get_window().area
@@ -328,7 +328,8 @@ class PGConvert:
     def _quantize_adapt_palette(self, img) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8], int]:
         padding, k = None, 0
         while padding is None:
-            bitmap, palette = Preprocess.quantize(img, 256-k, kmeans_quant=self.kwargs.get('kmeans_quant', False))
+            bitmap, palette = Preprocess.quantize(img, 256-k, kmeans_fade=self.kwargs.get('kmeans_fade', False),
+                                                  kmeans_quant=self.kwargs.get('kmeans_quant', False))
             palette, padding = __class__._find_most_transparent(palette)
             k+=1
         return bitmap, palette, padding
@@ -734,6 +735,11 @@ class WOBSAnalyzer:
         pcs_fn = lambda pcs_cnt, state, pal_flag, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.fps, 3)], pcs_cnt, state, pal_flag, 0, cl, pts=pts)
 
+        kwargs = self.kwargs.copy()
+        kwargs.pop('colors')
+
+        palup_compatibility_mode = kwargs.pop('pup_compatibility', True)
+
         while i < n_actions:
             for k in range(i+1, n_actions):
                 if states[k] != PCS.CompositionState.NORMAL:
@@ -755,8 +761,7 @@ class WOBSAnalyzer:
                     continue
                 cobjs.append(CObject.from_scratch(wid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
                 res.append(Optimise.solve_sequence_fast([Image.fromarray(img) for img in pgo.gfx[i-pgo.f:k-pgo.f]],
-                                                        128 if has_two_objs else 256,
-                                                        self.kwargs.get('kmeans_quant', False)))
+                                                        128 if has_two_objs else 256, **kwargs))
                 pals.append(Optimise.diff_cluts(res[-1][1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
 
                 ods_data = PGraphics.encode_rle(res[-1][0] + 128*(wid == 1 and has_two_objs))
@@ -794,23 +799,24 @@ class WOBSAnalyzer:
                     if durs[z][1] != 0:
                         displaysets.append(get_undisplay(self, z-1, pcs_id, wds_base))
                         pcs_id += 1
-                    if has_two_objs:
+                    if has_two_objs and palup_compatibility_mode:
                         pcs = pcs_fn(pcs_id, states[z], False, cobjs, c_pts)
                         wds = WDS(bytes(wds_base))
                         wds.pts = c_pts
                         pds = PDS.from_scratch(pal, pal_vn, 0, pts=c_pts)
                         displaysets.append(DisplaySet([pcs, wds, pds, ENDS.from_scratch(pts=c_pts)]))
                     else:
-                        pcs = pcs_fn(pcs_id, states[z], True, cobjs, c_pts)
+                        pcs = pcs_fn(pcs_id, states[z], True, cobjs[:1], c_pts)
                         pds = PDS.from_scratch(p1 | p2, pal_vn, 0, pts=c_pts)
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
                     pal_vn += 1
                     pcs_id += 1
                 #assert z+1 == k
                 if z+1 != k:
-                    print(f"{len(pals)} {has_two_objs}, {i}-{k}")
-                    if len(pals) > 1:
-                        print(f"{len(pals[0])} {len(pals[1])}")
+                    ...
+                    # print(f"{len(pals)} {has_two_objs}, {i}-{k}")
+                    # if len(pals) > 1:
+                    #     print(f"{len(pals[0])} {len(pals[1])}")
             i = k
         ####while
         #final "undisplay" displayset
@@ -1265,6 +1271,11 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
             if ods_acc >= 4*(1024**2):
                 logger.warning(f"Decoded obect buffer overrun at {seg.pts} [s].")
                 compliant = False
+
+            #On palette update, we re-evaluate the existing graphic plane with a new CLUT.
+            # so we are not subject to the Rc constraint.
+            if ds.pcs.pal_flag:
+                continue
 
             #We clear the plane (window area) and copy the objects to window. This is done at 32MiB/s
             Rc = fps*(sum(window_area.values()) + np.min([ods_acc, sum(window_area.values())]))
