@@ -764,8 +764,9 @@ class WOBSAnalyzer:
             c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.fps))
 
             res, pals, o_ods, cobjs = [], [], [], []
-            has_two_objs = event_mask[i] > 1
-            for wid, pgo in get_obj(i, pgobjs).items():
+            pgobs_items = get_obj(i, pgobjs).items()
+            has_two_objs = sum(map(lambda x: x[1] is not None, pgobs_items)) > 1
+            for wid, pgo in pgobs_items:
                 if pgo is None:
                     continue
                 cobjs.append(CObject.from_scratch(wid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
@@ -1000,7 +1001,7 @@ class WOBAnalyzer:
                 if not len(mask):
                     f_start = event_cnt
                 mask.append(has_content)
-            if has_content:
+
                 rgba_i = Image.fromarray(rgba)
                 score = self.compare(alpha_compo, rgba_i)
                 if score > self.ssim_threshold:
@@ -1015,9 +1016,7 @@ class WOBAnalyzer:
                     bitmaps = [rgba]
                     f_start = event_cnt
                     alpha_compo = Image.fromarray(rgba.copy())
-                unseen = 0
-            elif len(mask):
-                unseen += 1
+                unseen = (not has_content)*(unseen + 1)
             event_cnt += 1
         ####while
         return # StopIteration
