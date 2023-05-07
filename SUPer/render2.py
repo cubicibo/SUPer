@@ -409,53 +409,6 @@ class GroupingEngine:
             gs_orig[k, slice_y, slice_x] = np.array(event.img.getchannel('A'))
         return regionprops(label(gs_graph)), gs_orig, box
 
-    def group_and_sort_flat_old(self, srs: list[ScreenRegion], duration: int) -> list[tuple[WindowOnBuffer]]:
-        """
-        Seek for minimum areas from the regions, sort them and return them sorted,
-        ascending area size. The caller will then choose the best area.
-        This function flatten the 3D space to a 2D one by grouping similar regions
-        """
-        logger.warning("DEPRECATED: This function will be removed in the next release.")
-        nsrs = len(srs)
-
-        if nsrs == 1 or self.n_groups == 1:
-            return [(WindowOnBuffer(srs, duration=duration),)]
-
-        assert nsrs < 65536, "Too many regions."
-
-        inters_coeff = np.zeros((nsrs, nsrs))
-        for k, sr in enumerate(srs):
-            inters_coeff[k,:] = list(map(sr.overlap_with, srs))
-        inters_coeff -= np.eye(nsrs)
-
-        success = False
-        for thresh in np.arange(0.9, 0.4, -0.1):
-            lut = {}
-            groups = {}
-            seen = set()
-            mapping = np.argwhere(inters_coeff > thresh)
-            for k, v in mapping:
-                groups[k] = groups.get(k, []) + [v]
-            z = 0
-            for k, v in sorted(groups.items(), key=lambda e: len(e[1]), reverse=True):
-                if k in seen:
-                    continue
-                ids = list(chain(v, [k]))
-                lut[z] = [srid for srid in ids if srid not in seen]
-                seen |= set(ids)
-                z += 1
-            for k, sr in enumerate(srs):
-                if k not in seen:
-                    lut[z] = [k]
-                    z += 1
-            if len(lut) <= 16:
-                success=True
-                break
-        ####
-        if not success:
-            return None
-        return self._group_and_sort_mapped(srs, duration, lut)
-
     def group_and_sort_flat(self, tbox: list[ScreenRegion], box: Box, duration: int) -> Optional[list[tuple[WindowOnBuffer]]]:
         screen = np.zeros((box.dy, box.dx), np.uint16)
         for sr in tbox:
@@ -501,29 +454,6 @@ class GroupingEngine:
         arrangements = map(lambda combination: set(filter(lambda region_id: region_id >= 0, combination)),
                                    set(combinations(list(region_ids) + [-1]*(n_regions-2), n_regions-1)))
         return arrangements
-
-    def _group_and_sort_mapped(self,
-           srs: list[ScreenRegion],
-           duration: int,
-           mapping: dict[int, list[int]]
-        ) -> list[tuple[WindowOnBuffer]]:
-        """
-        Find the windows using pre-grouped srs according to some mapping.
-        """
-        combinations = __class__._get_combinations(len(mapping))
-
-        windows, areas = {}, {}
-        for key, arrangement in enumerate(combinations):
-            arr_sr, other_sr = [], []
-            for k, srl in mapping.items():
-                (arr_sr if k in arrangement else other_sr).extend([sr for ksr, sr in enumerate(srs) if ksr in srl])
-            arr_sr = list(arr_sr)
-            other_sr = list(other_sr)
-            windows[key] = (WindowOnBuffer(arr_sr, duration=duration), WindowOnBuffer(other_sr, duration=duration))
-            areas[key] = sum(map(lambda wb: wb.area(), windows[key]))
-
-        #Here, we can sort by ascending area – first has the smallest windows
-        return [windows[k] for k, _ in sorted(areas.items(), key=lambda x: x[1])]
 
     def group_and_sort(self, srs: list[ScreenRegion], duration: int) -> list[tuple[WindowOnBuffer]]:
         """
@@ -647,7 +577,8 @@ class WOBSAnalyzer:
 
     def mask_event(self, window, event) -> Optional[npt.NDArray[np.uint8]]:
         if event is not None:
-            work_plane = np.zeros((self.box.dy, self.box.dx, 4), dtype=np.uint8)
+            #+8 for minimum object width and height
+            work_plane = np.zeros((self.box.dy+8, self.box.dx+8, 4), dtype=np.uint8)
 
             hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
             vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)

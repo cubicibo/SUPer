@@ -19,13 +19,12 @@
 from numpy import typing as npt
 import numpy as np
 from typing import Union, Optional, Type
-from enum import Enum, IntEnum
-from itertools import chain, zip_longest
+from enum import IntEnum
+from itertools import chain
 
+from .palette import Palette, PaletteEntry
+from .segments import WDS, ODS, DisplaySet, PDS
 from .utils import Shape
-from .segments import WDS, ODS, DisplaySet
-from .filestreams import BaseEvent
-from .utils import Pos, TimeConv as TC
 
 from dataclasses import dataclass
 #%%
@@ -203,7 +202,7 @@ class PGraphics:
         :return:      2D map to associate with the proper palette
         """
 
-        class RLEDecoderState(Enum):
+        class RLEDecoderState(IntEnum):
             NEED_MORE = -2
             NEW_CODE  = -1
             SMALL_TSP = 0
@@ -271,10 +270,15 @@ class PGraphics:
         return np.asarray(plane2d, dtype=np.uint8)
 
     @staticmethod
-    def show(l_ods: list[ODS], palette: Optional[npt.NDArray[np.uint8]] = None) -> None:
+    def show(l_ods: Union[ODS, list[ODS]],
+             palette: Optional[Union[npt.NDArray[np.uint8], PDS, list[PDS], dict[int, PaletteEntry]]] = None) -> None:
         """
         Show the ODS with or without a provided palette. If no palette are provided,
         one is generated that illustrates the encoded animation in the bitmap.
+        :l_ods:   ODS or list of ODS segment (object to decode)
+        :palette: Palette to use. If none, a evenly distributed palette is
+                  generated on the fly that illustrates the encoded animation
+                  If list[PDS] is provided, the PDS are OR'd together.
         """
         bitmap = __class__.decode_rle(l_ods)
 
@@ -294,7 +298,19 @@ class PGraphics:
             palette -= np.min(palette)
             palette /= (np.max(palette)/255)
             palette = np.uint8(np.round(palette))
-
+        else:
+            if isinstance(palette, list):
+                assert isinstance(palette[0], PDS)
+                pal = [pds.to_palette().palette for pds in palette]
+                palette = {}
+                for p in pal:
+                    palette |= p
+            if isinstance(palette, PDS):
+                palette = palette.to_palette()
+            elif isinstance(palette, dict):
+                palette = Palette(palette)
+            if isinstance(palette, Palette):
+                palette = palette.get_rgba_array(keep_indexes=True)
         try:
             from matplotlib import pyplot as plt
             plt.imshow(palette[bitmap])

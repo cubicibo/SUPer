@@ -235,10 +235,15 @@ class Palette:
         else:
             raise ValueError(f"Shifting outside 8bit range with {offset} (got {max(self.palette) + offset}, {min(self.palette) + offset}).")
 
-    def get_rgba_array(self, matrix: str = 'bt709', s_range: str = 'limited') -> npt.NDArray[np.uint8]:
-        #palette = np.zeros((len(self), 4), np.uint8)
-        vfunc = np.vectorize(lambda x: x.to_rgba(matrix, s_range=s_range))
-        return np.array(vfunc(self), dtype=np.uint8).transpose()
+    def get_rgba_array(self, matrix: str = 'bt709', s_range: str = 'limited', keep_indexes: bool = False) -> npt.NDArray[np.uint8]:
+        if not keep_indexes:
+            vfunc = np.vectorize(lambda x: x.to_rgba(matrix, s_range=s_range))
+            return np.array(vfunc(self), dtype=np.uint8).transpose()
+        else:
+            pal = np.zeros((max(self.palette)+1, 4), dtype=np.uint8)
+            for peid, ycrcba in self.palette.items():
+                pal[peid, :] = ycrcba.to_rgba(matrix, s_range=s_range)
+            return pal
 
     def get_ycbcr(self, /, *, _no_key = False) -> npt.NDArray[np.uint8]:
         """
