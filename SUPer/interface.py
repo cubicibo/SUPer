@@ -102,8 +102,8 @@ class BDNRender:
         if self.kwargs.get('adjust_dropframe', False):
             for epoch in self._epochs:
                 for ds in epoch.ds:
-                    for seg in ds.segments:
-                        seg.pts = seg.pts*(1.001 - 3e-5)
+                    for seg in ds.segments: #Subtract a few PG decoder ticks to avoid rounding issues
+                        seg.pts = seg.pts*1.001 - 3/90e3
         # Final check
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps))
 
