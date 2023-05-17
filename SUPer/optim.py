@@ -326,7 +326,7 @@ class Optimise:
     def solve_sequence_fast(events, colors: int = 256, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
         """
         This functions finds a solution for the provided subtitle animation.
-        :param events:  PIL images, stacked one after the other
+        :param events: PIL images, stacked one after the other
         :param colors: max number of sequences usable
         :param kmwans: enable kmeans quantization
 

@@ -503,7 +503,7 @@ class GroupingEngine:
 
     def select_best_wob(self, wobs: list[tuple[WindowOnBuffer]], box: Box) -> tuple[WindowOnBuffer]:
         """
-        This function has three mode, depending of the GroupingEngine:
+        This function has three mode, depending of the config mode:
             - return the pair of WOBs with the minimum area
             - return the pair of WOBs with the least amount of acquisition (rough est)
             - TODOs: the pair of WOBs that would separate best special effects.
@@ -648,7 +648,9 @@ class WOBSAnalyzer:
             return objs
 
         def get_pts(c_pts):
-            return c_pts - 2/90e3
+            #Set PTS a few ticks before the real timestamp so we swap the graphic plane
+            # on time for the frame it is supposed to be on screen !
+            return c_pts - 4/90e3
 
         def get_undisplay(self, i, pcs_id, wds_base):
             c_pts = get_pts(TC.tc2s(self.events[i].tc_out, self.fps))
@@ -664,7 +666,7 @@ class WOBSAnalyzer:
         c_pts = 0
 
         pcs_fn = lambda pcs_cnt, state, pal_flag, cl, pts:\
-                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.fps, 3)], pcs_cnt, state, pal_flag, 0, cl, pts=pts)
+                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, 0, cl, pts=pts)
 
         kwargs = self.kwargs.copy()
         kwargs.pop('colors')
@@ -696,19 +698,36 @@ class WOBSAnalyzer:
 
             res, pals, o_ods, cobjs = [], [], [], []
             pgobs_items = get_obj(i, pgobjs).items()
-            has_two_objs = sum(map(lambda x: x[1] is not None, pgobs_items)) > 1
+            has_two_objs = 0
             for wid, pgo in pgobs_items:
                 if pgo is None:
                     continue
+                if not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
+                    continue
+                has_two_objs += 1
+            has_two_objs = has_two_objs > 1
+
+            for wid, pgo in pgobs_items:
+                if pgo is None:
+                    continue
+                if not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
+                    continue
+                imgs_chain = [Image.fromarray(img) for img in pgo.gfx[i-pgo.f:k-pgo.f]]
+
                 cobjs.append(CObject.from_scratch(wid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
-                res.append(Optimise.solve_sequence_fast([Image.fromarray(img) for img in pgo.gfx[i-pgo.f:k-pgo.f]],
-                                                        128 if has_two_objs else 256, **kwargs))
+                res.append(Optimise.solve_sequence_fast(imgs_chain, 128 if has_two_objs else 256, **kwargs))
                 pals.append(Optimise.diff_cluts(res[-1][1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
 
                 ods_data = PGraphics.encode_rle(res[-1][0] + 128*(wid == 1 and has_two_objs))
-                o_ods += ODS.from_scratch(wid, ods_reg[wid], res[-1][0].shape[1], res[-1][0].shape[0], ods_data, pts=c_pts)
+                o_ods += ODS.from_scratch(wid, ods_reg[wid] & 0xFF, res[-1][0].shape[1], res[-1][0].shape[0], ods_data, pts=c_pts)
                 ods_reg[wid] += 1
             ####
+            if len(pals) == 0:
+                displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base))
+                pcs_id += 1
+                i = k
+                continue
+
             pal = pals[0][0]
             if has_two_objs:
                 for p in pals[1]:
@@ -718,7 +737,7 @@ class WOBSAnalyzer:
             wds = WDS(bytes(wds_base))
             wds.pts = c_pts
 
-            pds = PDS.from_scratch(pal, pal_vn, 0, pts=c_pts)
+            pds = PDS.from_scratch(pal, pal_vn & 0xFF, 0, pts=c_pts)
             pal_vn += 1
             pcs = pcs_fn(pcs_id, states[i], False, cobjs, c_pts)
             pcs_id += 1
@@ -729,10 +748,6 @@ class WOBSAnalyzer:
                 if len(pals) == 1:
                     assert not has_two_objs
                     pals.append([])
-                else:
-                    #assert len(pals[0]) == len(pals[1]) and has_two_objs
-                    #assert has_two_objs
-                    ...
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.fps))
                     pal |= (p1 | p2)
@@ -744,20 +759,15 @@ class WOBSAnalyzer:
                         pcs = pcs_fn(pcs_id, states[z], False, cobjs, c_pts)
                         wds = WDS(bytes(wds_base))
                         wds.pts = c_pts
-                        pds = PDS.from_scratch(pal, pal_vn, 0, pts=c_pts)
+                        pds = PDS.from_scratch(pal, pal_vn & 0xFF, 0, pts=c_pts)
                         displaysets.append(DisplaySet([pcs, wds, pds, ENDS.from_scratch(pts=c_pts)]))
                     else:
                         pcs = pcs_fn(pcs_id, states[z], True, cobjs[:1], c_pts)
-                        pds = PDS.from_scratch(p1 | p2, pal_vn, 0, pts=c_pts)
+                        pds = PDS.from_scratch(p1 | p2, pal_vn & 0xFF, 0, pts=c_pts)
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
                     pal_vn += 1
                     pcs_id += 1
-                #assert z+1 == k
-                if z+1 != k:
-                    ...
-                    # print(f"{len(pals)} {has_two_objs}, {i}-{k}")
-                    # if len(pals) > 1:
-                    #     print(f"{len(pals[0])} {len(pals[1])}")
+                assert z+1 == k
             i = k
             if use_pbar:
                 pbar.n = i
