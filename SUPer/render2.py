@@ -567,11 +567,11 @@ class GroupingEngine:
 
 #%%
 class WOBSAnalyzer:
-    def __init__(self, wobs: ..., events: ..., box: ..., fps: ..., bdn: ..., **kwargs):
+    def __init__(self, wobs: tuple[WindowOnBuffer], events: list[BDNXMLEvent], box: Box, fps: Union[float, int], bdn: ..., **kwargs):
         self.wobs = wobs
         self.events = events
         self.box = box
-        self.fps = fps
+        self.target_fps = fps
         self.bdn = bdn
         self.kwargs = kwargs
 
@@ -653,7 +653,7 @@ class WOBSAnalyzer:
             return c_pts - 4/90e3
 
         def get_undisplay(self, i, pcs_id, wds_base):
-            c_pts = get_pts(TC.tc2s(self.events[i].tc_out, self.fps))
+            c_pts = get_pts(TC.tc2s(self.events[i].tc_out, self.bdn.fps))
             pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, [], c_pts)
             wds = WDS(bytes(wds_base))
             wds.pts = c_pts
@@ -666,7 +666,7 @@ class WOBSAnalyzer:
         c_pts = 0
 
         pcs_fn = lambda pcs_cnt, state, pal_flag, cl, pts:\
-                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, 0, cl, pts=pts)
+                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, 0, cl, pts=pts)
 
         kwargs = self.kwargs.copy()
         kwargs.pop('colors')
@@ -694,7 +694,7 @@ class WOBSAnalyzer:
                 displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base))
                 pcs_id += 1
 
-            c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.fps))
+            c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
 
             res, pals, o_ods, cobjs = [], [], [], []
             pgobs_items = get_obj(i, pgobjs).items()
@@ -749,7 +749,7 @@ class WOBSAnalyzer:
                     assert not has_two_objs
                     pals.append([])
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
-                    c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.fps))
+                    c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
                     pal |= (p1 | p2)
                     assert states[z] == PCS.CompositionState.NORMAL
                     if durs[z][1] != 0:
@@ -794,7 +794,7 @@ class WOBSAnalyzer:
 
         prev_dt = 6
         for k, (dt, delay) in enumerate(durs):
-            margin = (delay + prev_dt)*1/self.fps
+            margin = (delay + prev_dt)*1/self.bdn.fps
             force_acq = False
             for wid, wd in enumerate(windows):
                 if objs[wid] and not objs[wid].is_active(k):
@@ -822,11 +822,11 @@ class WOBSAnalyzer:
         Additionally, the offset from the previous event is also returned. This value
         is zero unless there are no PG objects shown at some point in the epoch.
         """
-        top = TC.tc2f(self.events[0].tc_in, self.fps)
+        top = TC.tc2f(self.events[0].tc_in, self.bdn.fps)
         delays = []
         for event in self.events:
-            tic = TC.tc2f(event.tc_in, self.fps)
-            toc = TC.tc2f(event.tc_out,self.fps)
+            tic = TC.tc2f(event.tc_in, self.bdn.fps)
+            toc = TC.tc2f(event.tc_out,self.bdn.fps)
             delays.append((toc-tic, top-tic))
             top = toc
         return delays
@@ -963,170 +963,42 @@ class WOBAnalyzer:
         return # StopIteration
 
 
-#%%
-@dataclass
-class PGDecoderStats:
-    fps: Union[BDVideo.FPS, float]
-    cb_usage: int = 0 #Coded buffer
-    db_usage: int = 0 #Decoded buffer
-    stream_usage: int = 0 #pg stream
+# def test_diplayset(ds: DisplaySet) -> None:
+#     """
+#     This function performs hard check on the display set
+#     if its structure is bad, it raises an assertion error.
+#     This is preferred over a "return false" because a bad displayset
+#     will typically crash a hardware decoder and we don't want that.
+#     """
+#     current_pts = ds.pcs.pts
+#     if epoch.ds[kd-1].pcs.pts != prev_pts and current_pts != epoch.ds[kd-1].pcs.pts:
+#         prev_pts = epoch.ds[kd-1].pcs.pts
+#     else:
+#         logger.warning(f"Two displaysets at {current_pts} [s] (internal rendering error?)")
 
-    """
-    This class implements a basic compliancy test using the standard bandwiths specified
-    in the PGS patent. It is not perfect but is a good indicator of issues on the decoding
-    side
-    """
-
-    def __post_init__(self) -> None:
-        self.__is_valid = True
-        self.__last_pcs_pts = -1 #PTS of each PCS should be unique (and PTS=DTS of END should)
-        self.__objects = {}
-        self.__cobjects ={}
-        self.__windows = {}
-        nfps = int(np.ceil(getattr(self.fps, 'value', self.fps)))
-        self.__coded_past = [0] * nfps# coded_bw_ra[1:round(fps)]
-        self.__decod_past = [0] * nfps
-        self.__pgstream_past = [0] * nfps
-        self.__past_pts = [-1] * nfps
-
-    def stream_bandwidth(self) -> float:
-        return sum(self.__pgstream_past)/abs(self.__past_pts[-1]-self.__past_pts[0])
-
-    def coded_bandwidth(self) -> float:
-        return sum(self.__coded_past)/abs(self.__past_pts[-1]-self.__past_pts[0])
-
-    def decoded_bandwidth(self) -> float:
-        return sum(self.__decod_past)/abs(self.__past_pts[-1]-self.__past_pts[0])
-
-    def last_rc(self) -> int:
-        #cast for overflows
-        nf = TC.s2f(np.uint32(PGDecoder.FREQ*(self.__past_pts[-1] - self.__past_pts[-2]))/PGDecoder.FREQ, self.fps)
-        w_area = sum([win.width * win.height for win in self.__windows])
-        active_ods_area = sum(map(lambda x: x['width']*x['height'], filter(lambda x: x['display'], self.__cobjects.values())))
-        return self.fps*(w_area + min(active_ods_area, w_area))
-
-    def ds_comply(self, ds) -> bool:
-        self._ds_action(ds)
-        valid = True
-        valid &= self.db_usage < PGDecoder.DECODED_BUF_SIZE
-        if not valid:
-            details += "ERR: Object buffer overrun, "
-
-        valid &= self.stream_bandwidth() < PGDecoder.RX + PGDecoder.CODED_BUF_SIZE
-        if not valid:
-            details += "ERR: Excessive BDAV PG bandwidth, "
-        else:
-            #TODO: try to implement buffering here with the 1 MiB buffer at the input
-            valid &= self.stream_bandwidth() < PGDecoder.RX + int(PGDecoder.CODED_BUF_SIZE/1.8)
-            if not valid:
-                # This is not a critical error because we have a 1 MiB PG buffer
-                # if it triggers for a long time there will be an overrun.
-                details += "WARN: High BDAV bandwidth, "
-
-        valid &= self.coded_bandwidth() < PGDecoder.RD
-        if not valid:
-            details += "ERR: Excessive object bandwidth, "
-
-        valid &= self.last_rc() < PGDecoder.RC
-        if not valid:
-            details += "WARN: Flickering"
-        self.test_diplayset()
-        logger.warning(details)
-        return valid
-
-    def _save_usage(self, pgbytes: int, coded: int, decoded: int, pts: float) -> None:
-        if pts != self.__past_pts[-1]:
-            #discard oldest entry and move next
-            self.__coded_past = self.__coded_past[1:] + [coded]
-            self.__decod_past = self.__decod_past[1:] + [decoded]
-            self.__pgstream_past = self.__pgstream_past[1:] + [pgbytes]
-        else:
-            self.__coded_past[-1] += coded
-            self.__decod_past[-1] += decoded
-            self.__pgstream_past[-1] += pgbytes
-
-    def _ds_action(self, ds: DisplaySet) -> None:
-        ds_coded = 0
-        ds_decod = 0
-
-        if ds.pcs.composition_state & PCS.CompositionState.EPOCH_START:
-            self.cb_usage = 0
-            self.db_usage = 0
-            self.__objects = {}
-        elif ds.pcs.composition_state & PCS.CompositionState.ACQUISITION:
-            self.cb_usage = 0
-            self.db_usage = 0
-            self.__cobjects = {}
-        if ds.wds != []:
-            for win in ds.wds.windows:
-                self.windows[win.window_id] = win
-
-        self.__is_valid |= (self.last_pcs_pts >= ds.pcs.pts)
-
-        #NOTE: this is not exact, a buffer slot is identified by the object id but
-        # the slot has fixed dims within an epoch (defined by the 1st object with this ID).
-        # If this is not respected, buffer overruns can occur (esp. with FHD content)
-        # effectively crashing the hardware decoder.
-        for ods in ds.ods:
-            if ods.flags & int(ODS.ODSFlags.SEQUENCE_FIRST):
-                ds_decod += (ods.width * ods.height)
-                ds_coded += ods.rle_len
-                self.__cobjects[ods.o_id] = {'width': ods.width, 'height': ods.height}
-
-        #Should never happen unless one defines >64 different CObj within an epoch
-        # without ever doign an acquisitions.
-        assert len(self.__cobjects) <= 64, "More than 64 composition objects defined."
-
-        #Set all object to no display
-        for cobj in self.__cobjects.values():
-            cobj['display'] = False
-
-        #assign the ones that are displayed.
-        for cobj in ds.pcs.cobject:
-            assert ods.o_id in self.__cobjects, "Displaying unknown object id."
-            self.__cobjects[cobj.o_id] |= vars(cobj) | {'display': True}
-
-        self.cb_usage += ds_coded
-        self.db_usage += ds_decod
-        self._save_usage(len(bytes(ds)), ds_coded, ds_decod, ds.pcs.pts)
-        self.last_pcs_pts = ds.pcs.pts
-
-    def test_diplayset(self, ds: DisplaySet) -> None:
-        """
-        This function performs hard check on the display set
-        if its structure is bad, it raises an assertion error.
-        This is preferred over a "return false" because a bad displayset
-        will typically crash a hardware decoder and we don't want that.
-        """
-        current_pts = ds.pcs.pts
-        if epoch.ds[kd-1].pcs.pts != prev_pts and current_pts != epoch.ds[kd-1].pcs.pts:
-            prev_pts = epoch.ds[kd-1].pcs.pts
-        else:
-            logger.warning(f"Two displaysets at {current_pts} [s] (internal rendering error?)")
-
-        if ds.pcs.composition_state != PCS.CompositionState.NORMAL:
-            assert ds.pcs.pal_flag is False, "Palette update on epoch start or acquisition."
-        if ds.wds:
-            assert ds.pcs.pal_flag is False, "Manipulating windows on palette update."
-            assert len(ds.wds.windows) <= 2, "More than two windows."
-        if ds.ods:
-            assert ds.pcs.pal_flag is False, "Defining ODS in palette update."
-            start_cnt, close_cnt = 0, 0
-            for ods in ds.ods:
-                start_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST))
-                close_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_LAST))
-            assert start_cnt == close_cnt, "ODS segments flags mismatch."
-        if ds.pds:
-            for pds in ds.pds:
-                if ds.pcs.pal_flag:
-                    assert len(ds.pcs.cobjects) == 1, "Undefined behaviour: palette update with 2+ objects."
-                    assert ds.pcs.pal_id == pds.p_id, "Palette ID mismatch between PCS and PDS on palette update."
-                    assert len(ds) == 3, "Unusual display set structure for a palette update."
-                assert pds.p_id < 8, "Using undefined palette ID."
-                assert pds.n_entries <= 256, "Defining more than 256 palette entries."
-        assert ds.end, "No END segment in DS."
-        assert ds.end.pts >= ds.end.dts, "Not MPEG2 standard compliant."
-        ####
+#     if ds.pcs.composition_state != PCS.CompositionState.NORMAL:
+#         assert ds.pcs.pal_flag is False, "Palette update on epoch start or acquisition."
+#     if ds.wds:
+#         assert ds.pcs.pal_flag is False, "Manipulating windows on palette update."
+#         assert len(ds.wds.windows) <= 2, "More than two windows."
+#     if ds.ods:
+#         assert ds.pcs.pal_flag is False, "Defining ODS in palette update."
+#         start_cnt, close_cnt = 0, 0
+#         for ods in ds.ods:
+#             start_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST))
+#             close_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_LAST))
+#         assert start_cnt == close_cnt, "ODS segments flags mismatch."
+#     if ds.pds:
+#         for pds in ds.pds:
+#             if ds.pcs.pal_flag:
+#                 assert len(ds.pcs.cobjects) == 1, "Undefined behaviour: palette update with 2+ objects."
+#                 assert ds.pcs.pal_id == pds.p_id, "Palette ID mismatch between PCS and PDS on palette update."
+#                 assert len(ds) == 3, "Unusual display set structure for a palette update."
+#             assert pds.p_id < 8, "Using undefined palette ID."
+#             assert pds.n_entries <= 256, "Defining more than 256 palette entries."
+#     assert ds.end, "No END segment in DS."
+#     assert ds.end.pts >= ds.end.dts, "Not MPEG2 standard compliant."
+    ####
 
 def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> bool:
     prev_pts = -1

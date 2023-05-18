@@ -22,7 +22,7 @@ from struct import unpack, pack
 from typing import Union, Optional, Any, Type
 from dataclasses import dataclass, field
 
-from .utils import get_super_logger
+from .utils import get_super_logger, BDVideo
 from .palette import PaletteEntry, Palette
 
 #%%
@@ -361,14 +361,6 @@ class PCS(PGSegment):
         ACQUISITION = 0x40 #Update current composition with new objects
         EPOCH_START = 0x80 #Display update (new "group of DSs")
 
-    class PCSFPS(IntEnum):
-        FILM_NTSC_P = 0x10
-        FILM_24P    = 0x20
-        PAL_P       = 0x30
-        NTSC_P      = 0x40
-        PAL_I       = 0x60
-        NTSC_I      = 0x70
-
     _py2pg_pal_update_flag = {False: 0x00, True: 0x80}
     _pg2py_pal_update_flag = {v: k for k, v in _py2pg_pal_update_flag.items()}
 
@@ -399,11 +391,11 @@ class PCS(PGSegment):
         self.payload = (__class__.PCSOff.HEIGHT.value, pack(">H", nh))
 
     @property
-    def fps(self) -> PCSFPS:
-        return __class__.PCSFPS(self.payload[__class__.PCSOff.STREAM_FPS.value])
+    def fps(self) -> BDVideo.PCSFPS:
+        return BDVideo.PCSFPS(self.payload[__class__.PCSOff.STREAM_FPS.value])
 
     @fps.setter
-    def fps(self, nfps: PCSFPS) -> None:
+    def fps(self, nfps: BDVideo.PCSFPS) -> None:
         self.payload = (__class__.PCSOff.STREAM_FPS.value, int(nfps))
 
     @property
@@ -466,7 +458,7 @@ class PCS(PGSegment):
                     'n_objects': self.n_objects }, **super().__dict__)
 
     @classmethod
-    def from_scratch(cls, width: int, height: int, fps: PCSFPS, composition_n: int,
+    def from_scratch(cls, width: int, height: int, fps: Union[BDVideo.PCSFPS, int], composition_n: int,
                      composition_state: CompositionState, pal_flag: bool, pal_id: int,
                      cobjects: list[CObject], pts: Optional[float] = None,
                      dts: Optional[float] = None, **kwargs):

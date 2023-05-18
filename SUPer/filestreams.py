@@ -450,6 +450,20 @@ class BDNXML(SeqIO):
         self.parse()
 
     def parse(self) -> None:
+        self.parse_header()
+        self._parse_events()
+
+    def parse_header(self) -> None:
+        with open(self._file, 'r') as f:
+            content = ET.parse(f).getroot()
+            header, self._raw_events = content[0:2]
+
+            hformat = header.find('Format')
+            self.fps = float(hformat.attrib['FrameRate'])
+            self.dropframe = bool(1 if hformat.attrib['DropFrame'].lower() == 'true' else 0)
+            self.format = hformat.attrib['VideoFormat']
+
+    def _parse_events(self) -> None:
         """
         BDNXML repesents events with PNG images. But the way those PNG images
         are generated differs vastly. Some have one image for overlapping
@@ -459,52 +473,44 @@ class BDNXML(SeqIO):
         SUPer assumes the worst case and always assumes there's a single bitmap
         per BDNXMLEvent. (2+ images are merged to have one image).
         """
-        with open(self._file, 'r') as f:
-            content = ET.parse(f).getroot()
-            header, events = content[0:2]
+        # Parse global effects here then LTU wwhile cycling the events
+        #  https://forum.doom9.org/showthread.php?t=146493&page=9
 
-            hformat = header.find('Format')
-            self.fps = float(hformat.attrib['FrameRate'])
-            self.dropframe = bool(1 if hformat.attrib['DropFrame'].lower() == 'true' else 0)
-            self.format = hformat.attrib['VideoFormat']
+        #BDNXML have n>=1 graphical object in each event but we don't want to
+        # have subgroup for a given timestamp to not break the SeqIO class
+        # so, we merge sub-evnets on the same plane.
+        prev_f_out = -1
 
-            # Parse global effects here then LTU wwhile cycling the events
-            #  https://forum.doom9.org/showthread.php?t=146493&page=9
-
-            #BDNXML have n>=1 graphical object in each event but we don't want to
-            # have subgroup for a given timestamp to not break the SeqIO class
-            # so, we merge sub-evnets on the same plane.
-            prev_f_out = -1
-
-            for event in events:
-                cnt = 0
-                while event[cnt:]:
-                    assert event[cnt].tag == 'Graphic', "Expected a 'Graphic' first."
-                    effects, gevents, k = [], [], 0
-                    for k, subevent in enumerate(event[cnt+1:]):
-                        if subevent.tag == 'Graphic':
-                            gevents.append(subevent)
-                        else:
-                            effects.append(subevent)
-                    # Event.attrib contains the <Event> tag params
-                    # Event[cnt] features the internal content of the <event> tag.
-                    # i.e <Graphic>, <Fade ...>
-                    if gevents != []:
-                        gevents[0:0] = [event[cnt]]
-                        group2merge = [BDNXMLEvent(event.attrib, dict(gevent.attrib, fp=os.path.join(self.folder, gevent.text)), []) for gevent in gevents]
-                        pos, dim = min_enclosing_cube(group2merge)
-                        image_info = dict(Width=dim.w, Height=dim.h, X=pos.x, Y=pos.y, fp=None)
-                        image = merge_events(group2merge, dim=dim, pos=pos)
-                        image_info['fp'] = os.path.join(self.folder, 'temp', event[cnt].text)
-                        ea = BDNXMLEvent(event.attrib, image_info, others=effects)
-                        ea.set_custom_image(image)
+        for event in self._raw_events:
+            cnt = 0
+            while event[cnt:]:
+                assert event[cnt].tag == 'Graphic', "Expected a 'Graphic' first."
+                effects, gevents, k = [], [], 0
+                for k, subevent in enumerate(event[cnt+1:]):
+                    if subevent.tag == 'Graphic':
+                        gevents.append(subevent)
                     else:
-                        ea = BDNXMLEvent(event.attrib, dict(event[cnt].attrib, fp=os.path.join(self.folder, event[cnt].text)), effects)
-                    self.events.append(ea)
-                    assert prev_f_out <= TC.tc2f(ea.tc_out, self.fps), "Event ahead finish before last event!"
-                    prev_f_out = TC.tc2f(ea.tc_out, self.fps)
-                    cnt += k+2
-            # for event
+                        effects.append(subevent)
+                # Event.attrib contains the <Event> tag params
+                # Event[cnt] features the internal content of the <event> tag.
+                # i.e <Graphic>, <Fade ...>
+                if gevents != []:
+                    gevents[0:0] = [event[cnt]]
+                    group2merge = [BDNXMLEvent(event.attrib, dict(gevent.attrib, fp=os.path.join(self.folder, gevent.text)), []) for gevent in gevents]
+                    pos, dim = min_enclosing_cube(group2merge)
+                    image_info = dict(Width=dim.w, Height=dim.h, X=pos.x, Y=pos.y, fp=None)
+                    image = merge_events(group2merge, dim=dim, pos=pos)
+                    image_info['fp'] = os.path.join(self.folder, 'temp', event[cnt].text)
+                    ea = BDNXMLEvent(event.attrib, image_info, others=effects)
+                    ea.set_custom_image(image)
+                else:
+                    ea = BDNXMLEvent(event.attrib, dict(event[cnt].attrib, fp=os.path.join(self.folder, event[cnt].text)), effects)
+                self.events.append(ea)
+                new_out = TC.tc2f(ea.tc_out, self.fps)
+                assert prev_f_out <= new_out, "Event ahead finish before last event!"
+                prev_f_out = new_out
+                cnt += k+2
+        # for event
 
     @property
     def dropframe(self) -> bool:
@@ -512,6 +518,8 @@ class BDNXML(SeqIO):
 
     @dropframe.setter
     def dropframe(self, dropframe: bool) -> None:
-        if dropframe:
-            logging.warning("Drop frame timecodes are not implemented.")
         self._dropframe = dropframe
+        TC.FORCE_NDF = not dropframe
+        if dropframe:
+            logging.warning("WARNING: Detected drop frame flag in BDNXML! SUPer is untested with drop frame timecodes!")
+

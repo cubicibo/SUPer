@@ -62,8 +62,10 @@ def merge_events(group: list[_BaseEvent], pos: Pos, dim: Dim) -> Image.Image:
 
 class BDVideo:
     class FPS(Enum):
+        NTSCi_NDF = 60 #Illegal, just for NDF timing
         NTSCi = 59.94
         PALi  = 50
+        NTSCp_NDF = 30 #Illegal, just for NDF timing
         NTSCp = 29.97
         PALp  = 25
         FILM  = 24
@@ -128,8 +130,8 @@ class BDVideo:
         SD576_43  = (720,  576)
         SD480_43  = (720,  480)
         HD1080_43 = (1440, 1080) #Probably illegal
-        SD576_169 = (1024, 576) #Probably illegal
-        SD480_169 = (856,  480) #Probably illegal
+        SD576_169 = (1024, 576)  #Probably illegal
+        SD480_169 = (856,  480)  #Probably illegal
 
 
     class PCSFPS(IntEnum):
@@ -149,8 +151,10 @@ class BDVideo:
         24:    0x20,
         25:    0x30,
         29.97: 0x40,
+        30:    0x40,#hack for NDF timing
         50:    0x60,
         59.94: 0x70,
+        60:    0x70 #hack for NDF timing
     }
 
     LUT_FPS_PCSFPS = {
@@ -158,8 +162,10 @@ class BDVideo:
         0x20: 24,
         0x30: 25,
         0x40: 29.97,
+        0x40: 30, #hack for NDF timing
         0x60: 50,
         0x70: 59.94,
+        0x70: 60, #hack for NDF timing
     }
 
     def __init__(self, fps: float, height: int, width: Optional[int] = None) -> None:
@@ -177,6 +183,7 @@ class BDVideo:
 
 
 class TimeConv:
+    FORCE_NDF = True
     @staticmethod
     def s2f(s: float, fps: float, *, round_f: Optional[Callable[[float], float]] = round) -> float:
         """
@@ -191,11 +198,12 @@ class TimeConv:
 
     @staticmethod
     def s2tc(s: float, fps: float) -> str:
-        return str(Timecode(fps, start_seconds=s+1/fps+1e-8))
+        return str(Timecode(round(fps, 2), start_seconds=s+1/fps+1e-8, force_non_drop_frame=cls.FORCE_NDF))
 
     @classmethod
     def tc2s(cls, tc: str, fps: float, *, ndigits: int = 6) -> float:
-        return round(Timecode(fps, tc).float - Timecode(fps, '00:00:00:00').float, ndigits)
+        return round(Timecode(round(fps, 2), tc, force_non_drop_frame=cls.FORCE_NDF).float -\
+                     Timecode(fps, '00:00:00:00', force_non_drop_frame=cls.FORCE_NDF).float, ndigits)
 
     @classmethod
     def ms2tc(cls, ms: int, fps: float) -> str:
@@ -207,11 +215,11 @@ class TimeConv:
 
     @classmethod
     def tc2f(cls, tc: str, fps: float, *, add_one: bool = False) -> int:
-        return Timecode(fps, tc).frame_number
+        return Timecode(round(fps, 2), tc, force_non_drop_frame=cls.FORCE_NDF).frame_number
 
     @classmethod
     def f2tc(cls, f: int, fps: float, *, add_one: bool = False) -> str:
-        return str(Timecode(fps, frames=f+1))
+        return str(Timecode(round(fps, 2), frames=f+1, force_non_drop_frame=cls.FORCE_NDF))
 
 def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """

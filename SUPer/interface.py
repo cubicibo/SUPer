@@ -43,8 +43,16 @@ class BDNRender:
         stkw += ':'.join([f"{k}={v}" for k, v in kwargs.items()])
         logger.info(f"Parameters: {stkw}")
 
-
         bdn = BDNXML(path.expanduser(self.bdn_file))
+
+        clip_framerate = bdn.fps
+        if self.kwargs.pop('adjust_dropframe', False):
+            if isinstance(bdn.fps, float):
+                bdn.fps = round(bdn.fps)
+                logger.info(f"NTSC NDF flag: using {bdn.fps} for timestamps rather than BDNXML {clip_framerate:.03f}.")
+            else:
+                logger.warning("Ignored NDF flag with integer framerate.")
+
         logger.info("Finding epochs...")
 
         #Empirical max: we need <=6 frames @23.976 to clear the buffers and windows.
@@ -81,11 +89,18 @@ class BDNRender:
                 logger.info(f"Generating epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}...")
                 wob, box = GroupingEngine(n_groups=2, **kwargs).group(subgroup)
 
-                wobz = WOBSAnalyzer(wob, subgroup, box, bdn.fps, bdn, **kwargs)
+                wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, **kwargs)
                 epoch = wobz.analyze()
                 self._epochs.append(epoch)
                 logger.info(f" => optimised as {len(epoch)} display sets on {len(wob)} window(s).")
             gc.collect()
+
+        if clip_framerate != bdn.fps:
+            adjustment_ratio = bdn.fps/round(clip_framerate, 2)
+            for epoch in self._epochs:
+                for ds in epoch:
+                    for seg in ds:
+                        seg.pts = seg.pts*adjustment_ratio - 3/90e3
 
         scaled_fps = False
         if self.kwargs.get('scale_fps', False):
@@ -99,11 +114,6 @@ class BDNRender:
             else:
                 logger.error(f"Expexcted 25 or 30 fps for 2x scaling. Got '{I_LUT_PCS_FPS[self._epochs[0].ds[0].pcs.fps.value]}'.")
 
-        if self.kwargs.get('adjust_dropframe', False):
-            for epoch in self._epochs:
-                for ds in epoch.ds:
-                    for seg in ds.segments: #Subtract a few PG decoder ticks to avoid rounding issues
-                        seg.pts = seg.pts*1.001 - 3/90e3
         # Final check
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps))
 
