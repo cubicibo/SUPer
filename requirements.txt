@@ -10,3 +10,4 @@ SSIM-PIL
 timecode
 numba
 tqdm
+scenaristream @ git+https://github.com/cubicibo/ScenariStream

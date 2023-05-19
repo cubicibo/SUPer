@@ -102,7 +102,8 @@ def get_bdnxml() -> None:
 
 def set_outputsup() -> None:
     pg_sup_types = ('*.sup', '*.SUP')
-    file_returned = app.select_file(filetypes=[["SUP", pg_sup_types], ["All files", "*"]], save=True)
+    pg_pes_types = ('*.pes', '*.PES')
+    file_returned = app.select_file(filetypes=[["SUP", pg_sup_types], ['PES', pg_pes_types], ["All files", "*"]], save=True)
     supout.value = file_returned
     if bdnname.value != '':
         do_super.enabled = True
@@ -173,7 +174,7 @@ if __name__ == '__main__':
     PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,pos_v:=pos_v+1],align='left', width=15)
     bdnname = Text(app, grid=[1,pos_v], align='left')
 
-    PushButton(app, command=set_outputsup, text="Set SUP output", grid=[0,pos_v:=pos_v+1], align='left', width=15)
+    PushButton(app, command=set_outputsup, text="Set output", grid=[0,pos_v:=pos_v+1], align='left', width=15)
     supout = Text(app, grid=[1,pos_v], align='left')
 
     do_super = PushButton(app, command=wrapper_mp, text=SUPER_STRING, grid=[0,pos_v:=pos_v+1,2,1], align='left', enabled=False)

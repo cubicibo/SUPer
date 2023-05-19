@@ -20,6 +20,8 @@ import gc
 import numpy as np
 from os import path
 
+from scenaristream import EsMuiStream
+
 from .utils import Shape, TimeConv as TC, _pinit_fn, get_super_logger
 from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
 from .filestreams import BDNXML, SUPFile
@@ -116,6 +118,7 @@ class BDNRender:
 
         # Final check
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps))
+    ####
 
     def merge(self, input_sup) -> None:
         epochs = SUPFile(input_sup).epochs()
@@ -133,9 +136,22 @@ class BDNRender:
 
     def write_output(self, fp: str) -> None:
         if self._epochs:
-            with open(fp, 'wb') as f:
+            if fp.lower().endswith('pes'):
+                writer = EsMuiStream.segment_writer(fp)
+                next(writer) #init writer
                 for epoch in self._epochs:
-                    f.write(bytes(epoch))
+                    for ds in epoch:
+                        for seg in ds:
+                            writer.send(seg)
+                # Close ESMUI writer
+                writer.send(None)
+                writer.close()
+            else:
+                if not fp.lower().endswith('sup'):
+                    logger.warning("Unknown extension, assuming a .SUP file...")
+                with open(fp, 'wb') as f:
+                    for epoch in self._epochs:
+                        f.write(bytes(epoch))
         else:
             raise RuntimeError("No data to write.")
  ####
