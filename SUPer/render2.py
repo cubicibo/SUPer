@@ -834,7 +834,7 @@ class WOBSAnalyzer:
 #%%
 
 class WOBAnalyzer:
-    def __init__(self, wob, ssim_threshold: float = 0.97, overlap_threshold: float = 0.995) -> None:
+    def __init__(self, wob, ssim_threshold: float = 0.95, overlap_threshold: float = 0.995) -> None:
         self.wob = wob
         assert ssim_threshold < 1.0, "Not a valid SSIM threshold"
         self.ssim_threshold = ssim_threshold
@@ -847,7 +847,7 @@ class WOBAnalyzer:
         img = np.round(0.2989*rgba[:,:,0] + 0.587*rgba[:,:,1] + 0.114*rgba[:,:,2])
         return (img.clip(0, 255) & (255*(rgba[:,:,3] > 0))).astype(np.uint8)
 
-    def compare(self, bitmap: Image.Image, current: Image.Image) -> float:
+    def compare(self, bitmap: Image.Image, current: Image.Image) -> tuple[float, float]:
         """
         :param bitmap: (cropped or padded) aggregate of the previous bitmaps
         :param current: current bitmap under analysis
@@ -867,12 +867,14 @@ class WOBAnalyzer:
         if overlap < self.overlap_threshold and overlap > 0:
             #score = compare_ssim(bitmap.convert('L'), current.convert('L'))
             #Broadcast transparency mask of current on all channels of ref
-            mask = 255*(np.logical_and((a_bitmap > 0), (a_current[:, :, 3, None] > 0)).astype(np.uint8))
-            score = compare_ssim(Image.fromarray(a_bitmap & mask).convert('L'), current.convert('L'))
+            mask = 255*(np.logical_and((a_bitmap[:, :, 3] > 0), (a_current[:, :, 3] > 0)).astype(np.uint8))
+            score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), current.convert('L'))
+            cross_percentage = np.sum(mask > 0)/mask.size
         else:
             #Perfect overlap or zero overlap, the current bitmap fits perfectly on the previous
             score = 1.0
-        return score
+            cross_percentage = 1.0
+        return score, cross_percentage
 
     @staticmethod
     def get_patch(image1, image2) -> Image.Image:
@@ -944,8 +946,8 @@ class WOBAnalyzer:
                 mask.append(has_content)
 
                 rgba_i = Image.fromarray(rgba)
-                score = self.compare(alpha_compo, rgba_i)
-                if score > self.ssim_threshold:
+                score, cross_percentage = self.compare(alpha_compo, rgba_i)
+                if score >= max(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage)):
                     bitmaps.append(rgba)
                     alpha_compo.alpha_composite(rgba_i)
                 else:
