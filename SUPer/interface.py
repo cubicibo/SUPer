@@ -51,7 +51,7 @@ class BDNRender:
         if self.kwargs.pop('adjust_dropframe', False):
             if isinstance(bdn.fps, float):
                 bdn.fps = round(bdn.fps)
-                logger.info(f"NTSC NDF flag: using {bdn.fps} for timestamps rather than BDNXML {clip_framerate:.03f}.")
+                logger.info(f"NTSC timing flag: using {bdn.fps} for timestamps rather than BDNXML {clip_framerate:.03f}.")
             else:
                 logger.warning("Ignored NDF flag with integer framerate.")
 
@@ -98,27 +98,47 @@ class BDNRender:
             gc.collect()
 
         if clip_framerate != bdn.fps:
-            adjustment_ratio = bdn.fps/round(clip_framerate, 2)
-            for epoch in self._epochs:
-                for ds in epoch:
-                    for seg in ds:
-                        seg.pts = seg.pts*adjustment_ratio - 3/90e3
+            self.ndf_shift(bdn, clip_framerate)
 
         scaled_fps = False
         if self.kwargs.get('scale_fps', False):
-            from SUPer.utils import BDVideo
-            I_LUT_PCS_FPS = {v: k for k, v in BDVideo.LUT_PCS_FPS.items()}
-            if (new_pcs_fps := BDVideo.LUT_PCS_FPS.get(2*I_LUT_PCS_FPS[self._epochs[0].ds[0].pcs.fps.value], None)):
-                for epoch in self._epochs:
-                    for ds in epoch.ds:
-                        ds.pcs.fps = new_pcs_fps
-                scaled_fps = True
-            else:
-                logger.error(f"Expexcted 25 or 30 fps for 2x scaling. Got '{I_LUT_PCS_FPS[self._epochs[0].ds[0].pcs.fps.value]}'.")
+            scaled_fps = self.scale_pcsfps()
+
+        if self.kwargs.get('enforce_dts', False):
+            self.compute_set_dts()
 
         # Final check
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps))
     ####
+
+    def ndf_shift(self, bdn: BDNXML, clip_framerate: float) -> None:
+        adjustment_ratio = bdn.fps/round(clip_framerate, 2)
+        for epoch in self._epochs:
+            for ds in epoch:
+                for seg in ds:
+                    seg.pts = seg.pts*adjustment_ratio - 3/90e3
+
+    def scale_pcsfps(self) -> bool:
+        from SUPer.utils import BDVideo
+
+        I_LUT_PCS_FPS = {v: k for k, v in BDVideo.LUT_PCS_FPS.items()}
+        if (new_pcs_fps := BDVideo.LUT_PCS_FPS.get(2*I_LUT_PCS_FPS[self._epochs[0].ds[0].pcs.fps.value], None)):
+            for epoch in self._epochs:
+                for ds in epoch.ds:
+                    ds.pcs.fps = new_pcs_fps
+            scaled_fps = True
+        else:
+            logger.error(f"Expexcted 25 or 30 fps for 2x scaling. Got '{I_LUT_PCS_FPS[self._epochs[0].ds[0].pcs.fps.value]}'.")
+        return scaled_fps
+
+    def compute_set_dts(self) -> None:
+        logger.warning("Enforcing decoding timestamps. this should not be necessary...")
+        prev_ds_pts = 0
+        for epoch in self._epochs:
+            for ds in epoch:
+                for seg in ds: #skip END segment
+                    seg.dts = min(max(seg.pts - 0.66, 0), prev_ds_pts)
+                prev_ds_pts = seg.dts = seg.pts #enforce == for END segment
 
     def merge(self, input_sup) -> None:
         epochs = SUPFile(input_sup).epochs()

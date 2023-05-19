@@ -42,6 +42,7 @@ def get_kwargs() -> dict[str, int]:
         'kmeans_quant': kmeans_quant.value,
         'bt_colorspace': colorspace.value,
         'pup_compatibility': compat_mode.value,
+        'enforce_dts': set_dts.value,
     }
 
 def wrapper_mp() -> None:
@@ -195,11 +196,15 @@ if __name__ == '__main__':
     scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
 
     compat_mode = CheckBox(app, text="Compatibility mode for software players (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    tooltip = Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly.\n"\
+    compat_tooltip = Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly.\n"\
                                        "If enabled, SUPer insert instructions for the decoder to redraw the graphic plane.\n"\
                                        "I.e, the decoder re-copy existing objects in the buffer to the graphic plane and apply the new palette.\n"\
                                        "However, hardware decoders can only redraw a portion of the graphic plane per frame.\n"\
                                        "Should be unticked for commercial BDs.")
+
+    set_dts = CheckBox(app, text="Set rough DTS in stream, shouldn't be used (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    dts_tooltip = Hovertip(set_dts.tk, "Enforcing a DTS can help some (terrible) transport stream muxers.\n"\
+                                   "This should never be necessary. Even Scenarist BD apparently set it to zero at all time.")
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')
