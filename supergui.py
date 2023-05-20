@@ -194,6 +194,10 @@ if __name__ == '__main__':
 
     dropframebox = CheckBox(app, text="Correct NTSC timings (*1.001)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    scale_tooltip = Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
+                                   "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
+                                   "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
+                                   "as if it was 59.94. This flag is ignored for 23.976p or 24p content.")
 
     compat_mode = CheckBox(app, text="Compatibility mode for software players (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     compat_tooltip = Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly.\n"\
