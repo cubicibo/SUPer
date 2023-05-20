@@ -47,6 +47,12 @@ class BDNRender:
 
         bdn = BDNXML(path.expanduser(self.bdn_file))
 
+        if self.kwargs.get('scale_fps', False):
+            if bdn.fps >= 50:
+                logger.critical("BDNXML is not subsampled, aborting!")
+                import sys
+                sys.exit(1)
+
         clip_framerate = bdn.fps
         if self.kwargs.pop('adjust_dropframe', False):
             if isinstance(bdn.fps, float):
@@ -116,7 +122,7 @@ class BDNRender:
         for epoch in self._epochs:
             for ds in epoch:
                 for seg in ds:
-                    seg.pts = seg.pts*adjustment_ratio - 3/90e3
+                    seg.pts = seg.pts*adjustment_ratio - 5/90e3
 
     def scale_pcsfps(self) -> bool:
         from SUPer.utils import BDVideo

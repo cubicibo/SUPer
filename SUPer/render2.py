@@ -37,7 +37,7 @@ from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise, Preprocess
 from .pgraphics import PGraphics, PGDecoder, PGObject, FadeEffect
-from .palette import Palette
+from .palette import Palette, PaletteEntry
 
 _Region = TypeVar('Region')
 logger = get_super_logger('SUPer')
@@ -748,7 +748,25 @@ class WOBSAnalyzer:
                 if len(pals) == 1:
                     assert not has_two_objs
                     pals.append([])
-                for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
+                for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=None), i+1):
+                    if p1 is None:
+                        if len(cobjs) == 2:
+                            cobjs = cobjs[1:2]
+                            if not palup_compatibility_mode:
+                                p1 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(0, 128)})
+                            else:
+                                p1 = Palette()
+                        else:
+                            p1 = Palette()
+                    if p2 is None:
+                        if len(cobjs) == 2:
+                            cobjs = cobjs[0:1]
+                            if not palup_compatibility_mode:
+                                p2 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128, 256)})
+                            else:
+                                p2 = Palette()
+                        else:
+                            p2 = Palette()
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
                     pal |= (p1 | p2)
                     assert states[z] == PCS.CompositionState.NORMAL
@@ -767,6 +785,8 @@ class WOBSAnalyzer:
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
                     pal_vn += 1
                     pcs_id += 1
+                    if len(cobjs) == 1:
+                        has_two_objs = False
                 assert z+1 == k
             i = k
             if use_pbar:
@@ -799,7 +819,7 @@ class WOBSAnalyzer:
             for wid, wd in enumerate(windows):
                 if objs[wid] and not objs[wid].is_active(k):
                     objs[wid] = None
-                    force_acq = True
+                    #force_acq = True
                 if len(pgobjs_proc[wid]):
                     if not objs[wid] and pgobjs_proc[wid][0].is_active(k):
                         objs[wid] = pgobjs_proc[wid].pop(0)
