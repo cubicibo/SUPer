@@ -196,8 +196,8 @@ class TimeConv:
             round_f = lambda a : a # passthrough
         return int(round_f(s*fps))
 
-    @staticmethod
-    def s2tc(s: float, fps: float) -> str:
+    @classmethod
+    def s2tc(cls, s: float, fps: float) -> str:
         return str(Timecode(round(fps, 2), start_seconds=s+1/fps+1e-8, force_non_drop_frame=cls.FORCE_NDF))
 
     @classmethod

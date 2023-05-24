@@ -671,7 +671,7 @@ class WOBSAnalyzer:
         kwargs = self.kwargs.copy()
         kwargs.pop('colors')
 
-        palup_compatibility_mode = kwargs.pop('pup_compatibility', True)
+        palup_compatibility_mode = kwargs.pop('pup_compatibility', False)
 
         try:
             use_pbar = False
@@ -683,12 +683,11 @@ class WOBSAnalyzer:
 
         pbar = tqdm(range(n_actions))
         while i < n_actions:
-            for k in range(i+1, n_actions):
-                if states[k] != PCS.CompositionState.NORMAL:
+            for k in range(i+1, n_actions+1):
+                if k == n_actions or states[k] != PCS.CompositionState.NORMAL:
                     break
-            if i == n_actions-1:
-                k = i + 1
             assert k > i
+
             if durs[i][1] != 0:
                 assert i > 0
                 displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base))
@@ -696,7 +695,7 @@ class WOBSAnalyzer:
 
             c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
 
-            res, pals, o_ods, cobjs = [], [], [], []
+            res, pals, o_ods, cobjs, off_screen = [], [], [], [], []
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
@@ -713,6 +712,11 @@ class WOBSAnalyzer:
                 if not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
                     continue
                 imgs_chain = [Image.fromarray(img) for img in pgo.gfx[i-pgo.f:k-pgo.f]]
+                # imgs_chain = imgs_chain[:np.max(np.nonzero(pgo.mask[i-pgo.f:k-pgo.f]))+1]
+                # if len(imgs_chain) == 0:
+                #     logger.warning("Found an empty object, filtering it out.")
+                #     continue
+                off_screen.append(i+np.max(np.nonzero(pgo.mask[i-pgo.f:k-pgo.f])))
 
                 cobjs.append(CObject.from_scratch(wid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
                 res.append(Optimise.solve_sequence_fast(imgs_chain, 128 if has_two_objs else 256, **kwargs))
@@ -722,6 +726,7 @@ class WOBSAnalyzer:
                 o_ods += ODS.from_scratch(wid, ods_reg[wid] & 0xFF, res[-1][0].shape[1], res[-1][0].shape[0], ods_data, pts=c_pts)
                 ods_reg[wid] += 1
             ####
+
             if len(pals) == 0:
                 displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base))
                 pcs_id += 1
@@ -733,6 +738,9 @@ class WOBSAnalyzer:
                 for p in pals[1]:
                     p.offset(128)
                 pal |= pals[1][0]
+            else:
+                pals.append([Palette()] * len(pals[0]))
+                off_screen.append(np.inf)
 
             wds = WDS(bytes(wds_base))
             wds.pts = c_pts
@@ -745,34 +753,32 @@ class WOBSAnalyzer:
             displaysets.append(DisplaySet([pcs, wds, pds] + o_ods + [ends]))
 
             if len(pals[0]) > 1:
-                if len(pals) == 1:
-                    assert not has_two_objs
-                    pals.append([])
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=None), i+1):
-                    if p1 is None:
+                    if p1 is None or z > off_screen[0]:
                         if len(cobjs) == 2:
-                            cobjs = cobjs[1:2]
-                            if not palup_compatibility_mode:
-                                p1 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(0, 128)})
-                            else:
-                                p1 = Palette()
+                            assert has_two_objs
+                            p1 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[0].o_id, 128*(cobjs[0].o_id+1)*(not palup_compatibility_mode))})
+                            cobjs = cobjs[1:]
                         else:
                             p1 = Palette()
-                    if p2 is None:
+                    if p2 is None or z > off_screen[1]:
                         if len(cobjs) == 2:
-                            cobjs = cobjs[0:1]
-                            if not palup_compatibility_mode:
-                                p2 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128, 256)})
-                            else:
-                                p2 = Palette()
+                            assert has_two_objs
+                            p2 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[1].o_id, 128*(cobjs[1].o_id+1)*(not palup_compatibility_mode))})
+                            cobjs = cobjs[:1]
                         else:
                             p2 = Palette()
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
                     pal |= (p1 | p2)
                     assert states[z] == PCS.CompositionState.NORMAL
+
+                    ##Is there a know screen clear in the chain?
                     if durs[z][1] != 0:
                         displaysets.append(get_undisplay(self, z-1, pcs_id, wds_base))
                         pcs_id += 1
+                        if len(cobjs) == 1:
+                            has_two_objs = False
+
                     if has_two_objs and palup_compatibility_mode:
                         pcs = pcs_fn(pcs_id, states[z], False, cobjs, c_pts)
                         wds = WDS(bytes(wds_base))
@@ -788,6 +794,7 @@ class WOBSAnalyzer:
                     if len(cobjs) == 1:
                         has_two_objs = False
                 assert z+1 == k
+
             i = k
             if use_pbar:
                 pbar.n = i
