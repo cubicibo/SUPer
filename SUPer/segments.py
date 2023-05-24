@@ -191,17 +191,11 @@ class CObject:
         STANDARD = 0x00
 
         @classmethod
-        def _missing_(cls, value):
+        def _missing_(cls, value: int) -> 'COFlags':
             return cls.STANDARD
 
     def __init__(self, data: bytes, *, _cropped = False) -> None:
         self._data = data
-
-        #Autodetermine length w.r.t cropped flag
-        # NOTE: the patent claims there can be N>1 cropping windows… on the same window??
-
-        if len(self._data) > __class__.COOff.CO_COL.value:
-            logging.error("SUPer cannot parse numerous cropping windows on the same composition.")
 
         if self.cropped or _cropped:
             self._data = self._data[:__class__.COOff.CO_COL.value]
@@ -846,7 +840,6 @@ class DisplaySet:
     AUTO_SET_END_PTS = True
     def __init__(self, segments: list[Type[PGSegment]]) -> None:
         self.segments = segments
-
         if not isinstance(segments[-1], ENDS):
             self.segments.append(ENDS.from_scratch(self.pcs.pts, self.pcs.dts))
 

@@ -41,7 +41,7 @@ def get_kwargs() -> dict[str, int]:
         'kmeans_fade': kmeans_fade.value,
         'kmeans_quant': kmeans_quant.value,
         'bt_colorspace': colorspace.value,
-        'pup_compatibility': compat_mode.value,
+        'pgs_compatibility': compat_mode.value,
         'enforce_dts': set_dts.value,
     }
 
@@ -200,7 +200,7 @@ if __name__ == '__main__':
                                    "as if it was 59.94. This flag is ignored for 23.976p or 24p content.")
 
     compat_mode = CheckBox(app, text="Compatibility mode for software players (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    compat_tooltip = Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly.\n"\
+    compat_tooltip = Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly or cropping.\n"\
                                        "If enabled, SUPer insert instructions for the decoder to redraw the graphic plane.\n"\
                                        "I.e, the decoder re-copy existing objects in the buffer to the graphic plane and apply the new palette.\n"\
                                        "However, hardware decoders can only redraw a portion of the graphic plane per frame.\n"\

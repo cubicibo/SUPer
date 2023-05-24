@@ -638,26 +638,30 @@ class WOBSAnalyzer:
         n_actions = len(event_mask)
         displaysets = []
 
-        def get_obj(frame, pgobjs) -> None:
+        def get_obj(frame, pgobjs: dict[int, list[PGObject]]) -> dict[int, Optional[PGObject]]:
             objs = {k: None for k, objs in enumerate(pgobjs)}
 
+            # TODO: add support for 2 objects on one window
             for wid, pgobj in enumerate(pgobjs):
                 for obj in pgobj:
                     if obj.is_active(frame):
                         objs[wid] = obj
             return objs
 
-        def get_pts(c_pts):
+        def get_pts(c_pts: float) -> float:
             #Set PTS a few ticks before the real timestamp so we swap the graphic plane
             # on time for the frame it is supposed to be on screen !
             return c_pts - 4/90e3
 
-        def get_undisplay(self, i, pcs_id, wds_base):
+        def get_undisplay(self, i: int, pcs_id: int, wds_base: WDS) -> DisplaySet:
             c_pts = get_pts(TC.tc2s(self.events[i].tc_out, self.bdn.fps))
             pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, [], c_pts)
             wds = WDS(bytes(wds_base))
             wds.pts = c_pts
             return DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
+
+        def box_to_crop(box: Box) -> dict['str', int]:
+            return {'hc_pos': box.x, 'vc_pos': box.y, 'c_w': box.dx, 'c_h': box.dy}
 
         i = 0
         ods_reg = [0]*2
@@ -671,7 +675,7 @@ class WOBSAnalyzer:
         kwargs = self.kwargs.copy()
         kwargs.pop('colors')
 
-        palup_compatibility_mode = kwargs.pop('pup_compatibility', False)
+        is_compat_mode = kwargs.pop('pgs_compatibility', False)
 
         try:
             use_pbar = False
@@ -695,7 +699,7 @@ class WOBSAnalyzer:
 
             c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
 
-            res, pals, o_ods, cobjs, off_screen = [], [], [], [], []
+            res, pals, o_ods, cobjs, off_screen, cobjs_cropped = [], [], [], [], [], []
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
@@ -717,8 +721,11 @@ class WOBSAnalyzer:
                 #     logger.warning("Found an empty object, filtering it out.")
                 #     continue
                 off_screen.append(i+np.max(np.nonzero(pgo.mask[i-pgo.f:k-pgo.f])))
-
                 cobjs.append(CObject.from_scratch(wid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
+
+                cparams = box_to_crop(pgo.box)
+                cobjs_cropped.append(CObject.from_scratch(wid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
+                                                              cropped=True, **cparams))
                 res.append(Optimise.solve_sequence_fast(imgs_chain, 128 if has_two_objs else 256, **kwargs))
                 pals.append(Optimise.diff_cluts(res[-1][1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
 
@@ -747,25 +754,26 @@ class WOBSAnalyzer:
 
             pds = PDS.from_scratch(pal, pal_vn & 0xFF, 0, pts=c_pts)
             pal_vn += 1
-            pcs = pcs_fn(pcs_id, states[i], False, cobjs, c_pts)
+            pcs = pcs_fn(pcs_id, states[i], False, cobjs if is_compat_mode else cobjs_cropped, c_pts)
             pcs_id += 1
             ends = ENDS.from_scratch(pts=c_pts)
             displaysets.append(DisplaySet([pcs, wds, pds] + o_ods + [ends]))
 
             if len(pals[0]) > 1:
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=None), i+1):
+                    redraw = False
                     if p1 is None or z > off_screen[0]:
                         if len(cobjs) == 2:
                             assert has_two_objs
-                            p1 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[0].o_id, 128*(cobjs[0].o_id+1)*(not palup_compatibility_mode))})
-                            cobjs = cobjs[1:]
+                            p1 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[0].o_id, 128*(cobjs[0].o_id+1)*(not is_compat_mode))})
+                            cobjs, cobjs_cropped = cobjs[1:], cobjs_cropped[1:]
                         else:
                             p1 = Palette()
                     if p2 is None or z > off_screen[1]:
                         if len(cobjs) == 2:
                             assert has_two_objs
-                            p2 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[1].o_id, 128*(cobjs[1].o_id+1)*(not palup_compatibility_mode))})
-                            cobjs = cobjs[:1]
+                            p2 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[1].o_id, 128*(cobjs[1].o_id+1)*(not is_compat_mode))})
+                            cobjs, cobjs_cropped = cobjs[:1], cobjs_cropped[:1]
                         else:
                             p2 = Palette()
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
@@ -778,9 +786,10 @@ class WOBSAnalyzer:
                         pcs_id += 1
                         if len(cobjs) == 1:
                             has_two_objs = False
+                        redraw = True
 
-                    if has_two_objs and palup_compatibility_mode:
-                        pcs = pcs_fn(pcs_id, states[z], False, cobjs, c_pts)
+                    if has_two_objs and is_compat_mode or redraw:
+                        pcs = pcs_fn(pcs_id, states[z], False, cobjs if is_compat_mode else cobjs_cropped, c_pts)
                         wds = WDS(bytes(wds_base))
                         wds.pts = c_pts
                         pds = PDS.from_scratch(pal, pal_vn & 0xFF, 0, pts=c_pts)
@@ -791,10 +800,10 @@ class WOBSAnalyzer:
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
                     pal_vn += 1
                     pcs_id += 1
+                    redraw = False
                     if len(cobjs) == 1:
                         has_two_objs = False
                 assert z+1 == k
-
             i = k
             if use_pbar:
                 pbar.n = i
@@ -1042,6 +1051,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
     for ke, epoch in enumerate(epochs):
         ods_acc = 0
         window_area = {}
+        objects_sizes = {}
 
         for kd, ds in enumerate(epoch.ds):
             size_ds = 0
@@ -1056,21 +1066,28 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 logger.warning(f"Two displaysets at {current_pts} [s] (internal rendering error?)")
 
             for seg in ds.segments:
+                areas2gp = {}
                 size_ds += len(bytes(seg))
                 n_obj = 0
                 if seg.pts != current_pts and current_pts != -1 and _cnt_pts:
                     logger.warning(f"Display set has non-constant pts at {seg.pts} or {current_pts} [s].")
                     current_pts = -1
-                if isinstance(seg, PCS) and int(seg.composition_state) != 0:
-                    # On acquisition, the object buffer is flushed
-                    ods_acc = 0
-                    n_obj = len(seg.cobjects)
+                if isinstance(seg, PCS):
+                    if int(seg.composition_state) != 0:
+                        # On acquisition, the object buffer is flushed
+                        ods_acc = 0
+                        objects_sizes = {}
+                        n_obj = len(seg.cobjects)
+                    for cobj in seg.cobjects:
+                        areas2gp[cobj.o_id] = -1 if not cobj.cropped else cobj.c_w*cobj.c_h
+
                 elif isinstance(seg, WDS):
                     for w in seg.windows:
                         window_area[w.window_id] = w.width*w.height
                 elif isinstance(seg, ODS) and int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST):
                     decoded_this_ds += seg.width * seg.height
                     coded_this_ds += seg.rle_len
+                    objects_sizes[seg.o_id] = seg.width * seg.height
                 elif isinstance(seg, PDS):
                     if n_obj > 1 and seg.pal_flag:
                         logger.warning(f"Undefined behaviour: palette update with 2+ objects at {seg.pts}.")
@@ -1082,6 +1099,9 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                     and int(ds.pcs.composition_state) == 0 and isinstance(ds.segments[1], WDS):
                     logger.warning(f"Bad end displayset, graphics will not be undisplayed at {seg.pts} [s].")
 
+            area_copied = 0
+            for idx, area in areas2gp.items():
+                area_copied += area if area >= 0 else objects_sizes[idx]
             ####
             ods_acc += decoded_this_ds
             coded_this_ds *= 8
@@ -1133,7 +1153,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 continue
 
             #We clear the plane (window area) and copy the objects to window. This is done at 32MiB/s
-            Rc = fps*(sum(window_area.values()) + np.min([ods_acc, sum(window_area.values())]))
+            Rc = fps*(sum(window_area.values()) + np.min([area_copied, sum(window_area.values())]))
             nf = TC.s2f(seg.pts, fps) - TC.s2f(prev_pts, fps)
             if nf == 0:
                 last_rc += Rc
