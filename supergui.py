@@ -200,7 +200,7 @@ if __name__ == '__main__':
     refresh_txt = TextBox(brate, width=4, height=1, grid=[1,0], text="100")
     Hovertip(brate_txtstr.tk, "Affect the decay ratio that determines the compression factor and thus, PG acquisitions (object refreshes).\n"\
                               "Low values: slow decay -> fewer acquisitions. High values: more often (always within PG decoders limits).\n"\
-                              "A value of zero results in the minimum tolerable number of object and refreshes and may show artifacts.")
+                              "A value of zero results in the strict minimum number of refreshes and may show artifacts.")
 
     kmeans_fade = CheckBox(app, text="Use KMeans quantization on fades", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     kmeans_quant = CheckBox(app, text="Use KMeans quantization everywhere (slow)", grid=[0,pos_v:=pos_v+1,2,1], align='left')

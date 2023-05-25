@@ -781,12 +781,14 @@ class WOBSAnalyzer:
                     pal |= (p1 | p2)
                     assert states[z] == PCS.CompositionState.NORMAL
 
-                    ##Is there a know screen clear in the chain?
+                    #Is there a know screen clear in the chain? then use palette screen clear here
                     if durs[z][1] != 0:
-                        displaysets.append(get_undisplay(self, z-1, pcs_id, wds_base))
+                        c_pts_und = get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps))
+                        pcs = pcs_fn(pcs_id, states[z], True, cobjs[:1], c_pts_und)
+                        pds = PDS.from_scratch(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(0, max(pal.palette)+1)}), pal_vn & 0xFF, 0, pts=c_pts_und)
+                        displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts_und)]))
                         pcs_id += 1
-                        if len(cobjs) == 1:
-                            has_two_objs = False
+                        pal_vn += 1
                         redraw = True
 
                     if has_two_objs and is_compat_mode or redraw:
@@ -797,7 +799,7 @@ class WOBSAnalyzer:
                         displaysets.append(DisplaySet([pcs, wds, pds, ENDS.from_scratch(pts=c_pts)]))
                     else:
                         pcs = pcs_fn(pcs_id, states[z], True, cobjs[:1], c_pts)
-                        pds = PDS.from_scratch(p1 | p2, pal_vn & 0xFF, 0, pts=c_pts)
+                        pds = PDS.from_scratch(p1 | p2 if not redraw else pal, pal_vn & 0xFF, 0, pts=c_pts)
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
                     pal_vn += 1
                     pcs_id += 1
