@@ -406,13 +406,13 @@ class PGDecoder:
         return area/cls.RC
 
     @classmethod
-    def decode_display_duration(cls, gp_clear_dur: float, areas: list[int]) -> float:
+    def decode_display_duration(cls, gp_clear_dur: float, areas: list[int], gp_areas: list[int]) -> float:
         decode_duration = 0
         gp_duration = gp_clear_dur
-        for area in areas:
-            decode_duration += cls.decode_obj_duration(area)
+        for d_area, c_area in zip(areas, gp_areas):
+            decode_duration += cls.decode_obj_duration(d_area)
             gp_duration += (decode_duration-gp_duration) * (decode_duration > gp_duration)
-            gp_duration += cls.copy_gp_duration(area)
+            gp_duration += cls.copy_gp_duration(c_area)
         return gp_duration
 ####
 #%%

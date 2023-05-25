@@ -36,6 +36,7 @@ SUPER_STRING = "Make it SUPer!"
 def get_kwargs() -> dict[str, int]:
     return {
         'quality_factor': int(compression_txt.value)/100,
+        'refresh_rate': int(refresh_txt.value)/100,
         'adjust_dropframe': dropframebox.value,
         'scale_fps': scale_fps.value,
         'kmeans_fade': kmeans_fade.value,
@@ -51,11 +52,14 @@ def wrapper_mp() -> None:
     try:
         kwargs = get_kwargs()
     except ValueError:
-        logger.error("Incorrect parameter, aborting.")
+        logger.error("Incorrect parameter(s), aborting.")
         return
     else:
-        if not (0 <= kwargs['quality_factor'] <= 100):
-            logger.error("Incorrect compression factor, aborting.")
+        invalid = False
+        invalid |= not (0 <= kwargs['quality_factor'] <= 1)
+        invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
+        if invalid:
+            logger.error("Invalid parameter found, aborting.")
             return
 
     do_super.enabled = False
@@ -185,29 +189,38 @@ if __name__ == '__main__':
     do_super.text_color = 'red'
     do_super.sup_kwargs = {}
 
-    bcompre = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
-    Text(bcompre, "Compression [integer]%: ", grid=[0,0], align='right')
+    bcompre = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
+    brate = Box(app, layout="grid", grid=[1,pos_v])
+    compression_txtstr = Text(bcompre, "Compression [integer]%: ", grid=[0,0], align='left')
+    Hovertip(compression_txtstr.tk, "Defined as the minimum percentage of time to have between two events to perform an acquisition (object refresh).\n"\
+                              "-> 0: update as often as possible, -> 100 update as few times as possible.")
+
     compression_txt = TextBox(bcompre, width=4, height=1, grid=[1,0], text="80")
+    brate_txtstr = Text(brate, "Acquisition rate [integer]%: ", grid=[0,0], align='right')
+    refresh_txt = TextBox(brate, width=4, height=1, grid=[1,0], text="100")
+    Hovertip(brate_txtstr.tk, "Affect the decay ratio that determines the compression factor and thus, PG acquisitions (object refreshes).\n"\
+                              "Low values: slow decay -> fewer acquisitions. High values: more often (always within PG decoders limits).\n"\
+                              "A value of zero results in the minimum tolerable number of object and refreshes and may show artifacts.")
 
     kmeans_fade = CheckBox(app, text="Use KMeans quantization on fades", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     kmeans_quant = CheckBox(app, text="Use KMeans quantization everywhere (slow)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
 
     dropframebox = CheckBox(app, text="Correct NTSC timings (*1.001)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    scale_tooltip = Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
+    Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
                                    "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
                                    "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
                                    "as if it was 59.94. This flag is ignored for 23.976p or 24p content.")
 
     compat_mode = CheckBox(app, text="Compatibility mode for software players (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    compat_tooltip = Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly or cropping.\n"\
+    Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly or cropping.\n"\
                                        "If enabled, SUPer insert instructions for the decoder to redraw the graphic plane.\n"\
                                        "I.e, the decoder re-copy existing objects in the buffer to the graphic plane and apply the new palette.\n"\
                                        "However, hardware decoders can only redraw a portion of the graphic plane per frame.\n"\
                                        "Should be unticked for commercial BDs.")
 
     set_dts = CheckBox(app, text="Set rough DTS in stream, shouldn't be used (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    dts_tooltip = Hovertip(set_dts.tk, "Enforcing a DTS can help some (terrible) transport stream muxers.\n"\
+    Hovertip(set_dts.tk, "Enforcing a DTS can help some (terrible) transport stream muxers.\n"\
                                    "This should never be necessary. Even Scenarist BD apparently set it to zero at all time.")
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])

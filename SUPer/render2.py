@@ -617,7 +617,8 @@ class WOBSAnalyzer:
         drought = 0
 
         thresh = self.kwargs.get('quality_factor', 0.8)
-        dthresh = self.kwargs.get('dquality_factor', 0.05)
+        dthresh = self.kwargs.get('dquality_factor', 0.035)
+        refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
         for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
             if forced or (acq and margin > max(thresh-dthresh*drought, 0)):
@@ -625,7 +626,7 @@ class WOBSAnalyzer:
                 drought = 0
             else:
                 #try to not do too many acquisitions, as we want to compress the stream.
-                drought += 1
+                drought += 1*refresh_rate
         return self._convert(states, pgobjs, windows, durs)
 
     def _convert(self, states, pgobjs, windows, durs):
@@ -819,6 +820,7 @@ class WOBSAnalyzer:
     def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows):
         #get the frame count between each screen update and find where we can do acqs
         gp_clear_dur = PGDecoder.copy_gp_duration(sum(map(lambda x: x.area, windows)))
+        is_compat_mode = self.kwargs.get('pgs_compatibility', False)
 
         durs = self.get_durations()
 
@@ -844,7 +846,8 @@ class WOBSAnalyzer:
                         assert not pgobjs_proc[wid][0].is_active(k)
 
             areas = list(map(lambda obj: obj.area*obj.is_visible(k), filter(lambda x: x is not None, objs)))
-            td = PGDecoder.decode_display_duration(gp_clear_dur, areas)
+            c_areas = areas if is_compat_mode else map(lambda obj: obj.box.area*obj.is_visible(k), filter(lambda x: x is not None, objs))
+            td = PGDecoder.decode_display_duration(gp_clear_dur, areas, c_areas)
             valid[k] = (td < margin)
             dtl[k] = 1-td/margin
             absolutes[k] = force_acq
