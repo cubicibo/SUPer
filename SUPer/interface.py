@@ -138,13 +138,14 @@ class BDNRender:
         return scaled_fps
 
     def compute_set_dts(self) -> None:
-        logger.warning("Enforcing decoding timestamps. this should not be necessary...")
+        logger.info("Setting DTS values in the stream.")
         prev_ds_pts = 0
         for epoch in self._epochs:
             for ds in epoch:
                 for seg in ds: #skip END segment
-                    seg.dts = min(max(seg.pts - 0.66, 0), prev_ds_pts)
-                prev_ds_pts = seg.dts = seg.pts #enforce == for END segment
+                    seg.dts = min(max(seg.pts - 0.33, 0), prev_ds_pts)
+                seg.dts = seg.pts #enforce == for END segment
+                prev_ds_pts = seg.pts + 15/90e3
 
     def merge(self, input_sup) -> None:
         epochs = SUPFile(input_sup).epochs()
