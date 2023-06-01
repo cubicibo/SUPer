@@ -161,11 +161,11 @@ class BDVideo:
         0x10: 23.976,
         0x20: 24,
         0x30: 25,
-        0x40: 29.97,
         0x40: 30, #hack for NDF timing
+        0x40: 29.97,
         0x60: 50,
-        0x70: 59.94,
         0x70: 60, #hack for NDF timing
+        0x70: 59.94,
     }
 
     def __init__(self, fps: float, height: int, width: Optional[int] = None) -> None:

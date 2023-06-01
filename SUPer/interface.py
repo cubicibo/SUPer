@@ -126,15 +126,14 @@ class BDNRender:
 
     def scale_pcsfps(self) -> bool:
         from SUPer.utils import BDVideo
-
-        I_LUT_PCS_FPS = {v: k for k, v in BDVideo.LUT_PCS_FPS.items()}
-        if (new_pcs_fps := BDVideo.LUT_PCS_FPS.get(2*I_LUT_PCS_FPS[self._epochs[0].ds[0].pcs.fps.value], None)):
+        pcs_fps = self._epochs[0].ds[0].pcs.fps.value
+        if (new_pcs_fps := BDVideo.LUT_PCS_FPS.get(2*BDVideo.LUT_FPS_PCSFPS[pcs_fps], None)):
             for epoch in self._epochs:
                 for ds in epoch.ds:
                     ds.pcs.fps = new_pcs_fps
             scaled_fps = True
         else:
-            logger.error(f"Expexcted 25 or 30 fps for 2x scaling. Got '{I_LUT_PCS_FPS[self._epochs[0].ds[0].pcs.fps.value]}'.")
+            logger.error(f"Expexcted 25 or 30 fps for 2x scaling. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}'.")
         return scaled_fps
 
     def compute_set_dts(self) -> None:

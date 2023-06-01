@@ -174,13 +174,13 @@ if __name__ == '__main__':
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
 
     PushButton(app, command=get_sup, text="Select SUP to inject (opt.)", grid=[0,pos_v], align='left', width=15)
-    supname = Text(app, grid=[1,pos_v], align='left')
+    supname = Text(app, grid=[1,pos_v], align='left', size=10)
 
     PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,pos_v:=pos_v+1],align='left', width=15)
-    bdnname = Text(app, grid=[1,pos_v], align='left')
+    bdnname = Text(app, grid=[1,pos_v], align='left', size=10)
 
     PushButton(app, command=set_outputsup, text="Set output", grid=[0,pos_v:=pos_v+1], align='left', width=15)
-    supout = Text(app, grid=[1,pos_v], align='left')
+    supout = Text(app, grid=[1,pos_v], align='left', size=10)
 
     do_super = PushButton(app, command=wrapper_mp, text=SUPER_STRING, grid=[0,pos_v:=pos_v+1,2,1], align='left', enabled=False)
     do_super.queue = mp.Queue(10)
@@ -191,12 +191,12 @@ if __name__ == '__main__':
 
     bcompre = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
     brate = Box(app, layout="grid", grid=[1,pos_v])
-    compression_txtstr = Text(bcompre, "Compression [integer]%: ", grid=[0,0], align='left')
+    compression_txtstr = Text(bcompre, "Compression [int]%: ", grid=[0,0], align='left', size=11)
     Hovertip(compression_txtstr.tk, "Defined as the minimum percentage of time to have between two events to perform an acquisition (object refresh).\n"\
                               "-> 0: update as often as possible, -> 100 update as few times as possible.")
 
     compression_txt = TextBox(bcompre, width=4, height=1, grid=[1,0], text="80")
-    brate_txtstr = Text(brate, "Acquisition rate [integer]%: ", grid=[0,0], align='right')
+    brate_txtstr = Text(brate, "Acquisition rate [int]%: ", grid=[0,0], align='left', size=11)
     refresh_txt = TextBox(brate, width=4, height=1, grid=[1,0], text="100")
     Hovertip(brate_txtstr.tk, "Affect the decay ratio that determines the compression factor and thus, PG acquisitions (object refreshes).\n"\
                               "Low values: slow decay -> fewer acquisitions. High values: more often (always within PG decoders limits).\n"\

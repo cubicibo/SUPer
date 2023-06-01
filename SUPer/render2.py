@@ -32,7 +32,7 @@ from skimage.filters import gaussian
 from skimage.measure import regionprops, label
 
 #%%
-from .utils import get_super_logger, Pos, Dim, Shape, BDVideo, TimeConv as TC
+from .utils import get_super_logger, Pos, Dim, BDVideo, TimeConv as TC
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise, Preprocess

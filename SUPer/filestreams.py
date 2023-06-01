@@ -248,8 +248,6 @@ class BaseEvent:
         self._width = self._img.width
         self._height = self._img.height
 
-        return self._img
-
     def unload(self) -> None:
         if not self._custom:
             self._open = False
@@ -522,4 +520,3 @@ class BDNXML(SeqIO):
         TC.FORCE_NDF = not dropframe
         if dropframe:
             logging.warning("WARNING: Detected drop frame flag in BDNXML! SUPer is untested with drop frame timecodes!")
-
