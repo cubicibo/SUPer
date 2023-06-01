@@ -17,6 +17,7 @@
 # along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
+import re
 import xml.etree.ElementTree as ET
 import numpy as np
 
@@ -452,14 +453,18 @@ class BDNXML(SeqIO):
         self._parse_events()
 
     def parse_header(self) -> None:
-        with open(self._file, 'r') as f:
-            content = ET.parse(f).getroot()
-            header, self._raw_events = content[0:2]
+        escape_xml = lambda c: re.sub(u'[\x00-\x08\x0b\x0c\x0e-\x1F\uD800-\uDFFF\uFFFE\uFFFF]', '', c)
 
-            hformat = header.find('Format')
-            self.fps = float(hformat.attrib['FrameRate'])
-            self.dropframe = bool(1 if hformat.attrib['DropFrame'].lower() == 'true' else 0)
-            self.format = hformat.attrib['VideoFormat']
+        content = None
+        with open(self._file, 'r') as f:
+            content = ET.fromstring(escape_xml(f.read()))
+        assert content is not None, "Failed to parse file."
+        header, self._raw_events = content[0:2]
+
+        hformat = header.find('Format')
+        self.fps = float(hformat.attrib['FrameRate'])
+        self.dropframe = bool(1 if hformat.attrib['DropFrame'].lower() == 'true' else 0)
+        self.format = hformat.attrib['VideoFormat']
 
     def _parse_events(self) -> None:
         """
