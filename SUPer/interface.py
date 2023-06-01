@@ -118,11 +118,11 @@ class BDNRender:
     ####
 
     def ndf_shift(self, bdn: BDNXML, clip_framerate: float) -> None:
-        adjustment_ratio = bdn.fps/round(clip_framerate, 2)
+        adjustment_ratio = 1.001
         for epoch in self._epochs:
             for ds in epoch:
                 for seg in ds:
-                    seg.pts = seg.pts*adjustment_ratio - 5/90e3
+                    seg.pts = seg.pts*adjustment_ratio - 2/90e3
 
     def scale_pcsfps(self) -> bool:
         from SUPer.utils import BDVideo

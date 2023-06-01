@@ -202,7 +202,8 @@ class TimeConv:
 
     @classmethod
     def tc2s(cls, tc: str, fps: float, *, ndigits: int = 6) -> float:
-        return round(Timecode(round(fps, 2), tc, force_non_drop_frame=cls.FORCE_NDF).float -\
+        fps = round(fps, 2)
+        return round(Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF).float -\
                      Timecode(fps, '00:00:00:00', force_non_drop_frame=cls.FORCE_NDF).float, ndigits)
 
     @classmethod
