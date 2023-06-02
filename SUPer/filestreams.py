@@ -442,9 +442,17 @@ class SeqIO(ABC):
 
 
 class BDNXML(SeqIO):
-    def __init__(self, file: Union[str, Path], folder: Optional[Union[str, Path]] = None) -> None:
+    def __init__(self,
+            file: Union[str, Path],
+            folder: Optional[Union[str, Path]] = None,
+            skip_zero_dur: bool = True,
+        ) -> None:
+        """
+        BDNXML handler object/parser
+        """
         super().__init__(file, folder)
 
+        self._skip_zero_duration = skip_zero_dur
         self.events: list[BDNXMLEvent] = []
         self.parse()
 
@@ -483,6 +491,7 @@ class BDNXML(SeqIO):
         # have subgroup for a given timestamp to not break the SeqIO class
         # so, we merge sub-evnets on the same plane.
         prev_f_out = -1
+        self.events = []
 
         for event in self._raw_events:
             cnt = 0
@@ -508,7 +517,10 @@ class BDNXML(SeqIO):
                     ea.set_custom_image(image)
                 else:
                     ea = BDNXMLEvent(event.attrib, dict(event[cnt].attrib, fp=os.path.join(self.folder, event[cnt].text)), effects)
-                self.events.append(ea)
+                if not (ea.tc_in == ea.tc_out and self._skip_zero_duration):
+                    self.events.append(ea)
+                else:
+                    logging.warning(f"Ignored zero-duration graphic: '{ea.gfxfile.split(os.path.sep)[-1]}' @ '{ea.tc_in}'.")
                 new_out = TC.tc2f(ea.tc_out, self.fps)
                 assert prev_f_out <= new_out, "Event ahead finish before last event!"
                 prev_f_out = new_out
