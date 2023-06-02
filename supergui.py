@@ -203,9 +203,15 @@ if __name__ == '__main__':
                               "A value of zero results in the strict minimum number of refreshes and may show artifacts.")
 
     kmeans_fade = CheckBox(app, text="Use KMeans quantization on fades", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(kmeans_fade.tk, "Use K-Means to quantize highly transparent image. This is a work-around\n"\
+                             "to a known bug in Pillow (PIL) with RGBA images.")
+
     kmeans_quant = CheckBox(app, text="Use KMeans quantization everywhere (slow)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(kmeans_quant.tk, "Use K-Means to quantize and palettize images. This offers the highest quality.")
 
     dropframebox = CheckBox(app, text="Correct NTSC timings (*1.001)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(dropframebox.tk, "Multiply timestamps by 1.001 to fix NTSC drifts (30/29.97, 24/23.976...).")
+
     scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
                                    "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
@@ -219,9 +225,9 @@ if __name__ == '__main__':
                                        "However, hardware decoders can only redraw a portion of the graphic plane per frame.\n"\
                                        "Should be unticked for commercial BDs.")
 
-    set_dts = CheckBox(app, text="Set rough DTS in stream, shouldn't be used (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(set_dts.tk, "Enforcing a DTS can help some (terrible) transport stream muxers.\n"\
-                                   "This should never be necessary. Even Scenarist BD apparently set it to zero at all time.")
+    set_dts = CheckBox(app, text="Set rough DTS in stream (for PES output)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(set_dts.tk, "PG streams can include a decoding timestamp. This is used by some muxers.\n"\
+                         "This should only be required for PES+MUI output (Scenarist BD format).")
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')
