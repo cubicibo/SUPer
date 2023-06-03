@@ -108,8 +108,11 @@ def get_bdnxml() -> None:
 def set_outputsup() -> None:
     pg_sup_types = ('*.sup', '*.SUP')
     pg_pes_types = ('*.pes', '*.PES')
-    file_returned = app.select_file(filetypes=[["SUP", pg_sup_types], ['PES', pg_pes_types], ["All files", "*"]], save=True)
-    supout.value = file_returned
+    supout.value = app.select_file(filetypes=[["SUP", pg_sup_types], ['PES', pg_pes_types], ["All files", "*"]], save=True)
+
+    if supout.value.lower().endswith('pes'):
+        set_dts.value = True
+
     if bdnname.value != '':
         do_super.enabled = True
 
@@ -173,8 +176,10 @@ if __name__ == '__main__':
 
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
 
-    PushButton(app, command=get_sup, text="Select SUP to inject (opt.)", grid=[0,pos_v], align='left', width=15)
+    inject_button = PushButton(app, command=get_sup, text="Select SUP to inject (opt.)", grid=[0,pos_v], align='left', width=15)
     supname = Text(app, grid=[1,pos_v], align='left', size=10)
+    Hovertip(inject_button.tk, "Use to specify an input SUP file to merge with the BDNXML conversion result. No overlapping event supported.\n"\
+                               "This is optional and should only be used if you want to inject new events in existing SUP files.")
 
     PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,pos_v:=pos_v+1],align='left', width=15)
     bdnname = Text(app, grid=[1,pos_v], align='left', size=10)
@@ -216,7 +221,7 @@ if __name__ == '__main__':
     Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
                                    "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
                                    "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
-                                   "as if it was 59.94. This flag is ignored for 23.976p or 24p content.")
+                                   "as if it was 59.94. This flag is meaningless with 23.976 or 24p.")
 
     compat_mode = CheckBox(app, text="Compatibility mode for software players (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly or cropping.\n"\
