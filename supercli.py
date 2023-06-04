@@ -45,7 +45,7 @@ if __name__ == '__main__':
             fp = str(fp) + '.sup'
         elif fp.name.split('.')[-1].lower() not in ['pes', 'sup']:
             exit_msg("Not a known PG stream extension, aborting.")
-        return str(fp)
+        return str(os.path.expandvars(os.path.expanduser(fp)))
 
     def check_ext(fp: Union[Path, str]) -> None:
         fp = Path(fp)
