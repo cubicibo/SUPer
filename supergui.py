@@ -22,6 +22,7 @@ if __name__ == '__main__':
 import sys
 import time
 import signal
+from pathlib import Path
 
 from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
@@ -109,6 +110,13 @@ def set_outputsup() -> None:
     pg_sup_types = ('*.sup', '*.SUP')
     pg_pes_types = ('*.pes', '*.PES')
     supout.value = app.select_file(filetypes=[["SUP", pg_sup_types], ['PES', pg_pes_types], ["All files", "*"]], save=True)
+
+    if supout.value == '':
+        return
+
+    if len(Path(supout.value).name.split('.')) == 1:
+        logger.info("No extension given, assuming SUP.")
+        supout.value += '.sup'
 
     if supout.value.lower().endswith('pes'):
         set_dts.value = True
