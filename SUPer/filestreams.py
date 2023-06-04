@@ -366,7 +366,7 @@ class SeqIO(ABC):
             td = TC.tc2ms(event.tc_in, self.fps) - TC.tc2ms(le[-1].tc_out, self.fps)
 
             if _hard and td < 0:
-                raise Exception("Events are not ordered in time: {event.tc_in},"
+                raise Exception(f"Events are not ordered in time: {event.tc_in}, "
                                 f"{event.gfxfile.split(os.path.sep)[-1]} predates previous event.")
             if le == [] or abs(td) < nf_split:
                 le.append(event)

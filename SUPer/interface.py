@@ -142,9 +142,12 @@ class BDNRender:
         for epoch in self._epochs:
             for ds in epoch:
                 for seg in ds:
-                    seg.dts = min(max(seg.pts - 0.4, 0), prev_ds_pts)
+                    # -0.3735 because: (decode 4 MiB + screen flush + screen refresh)
+                    # i.e this is the max shift we would need in the worst case
+                    seg.dts = max(seg.pts - 0.3735, prev_ds_pts)
                 seg.dts = seg.pts #enforce == for END segment
-                prev_ds_pts = seg.pts + 13/90e3
+                # set DTS one tick in the future.
+                prev_ds_pts = seg.pts + 1/90e3
 
     def merge(self, input_sup) -> None:
         epochs = SUPFile(input_sup).epochs()
