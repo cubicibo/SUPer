@@ -20,7 +20,7 @@ from numpy import typing as npt
 import numpy as np
 from typing import Union, Optional, Type
 from enum import IntEnum
-from itertools import chain
+from itertools import chain, starmap
 
 from .palette import Palette, PaletteEntry
 from .segments import WDS, ODS, DisplaySet, PDS
@@ -320,9 +320,9 @@ class PGraphics:
 ####
 #%%
 class PGDecoder:
-    RX =  2*(1024**2)
-    RD = 16*(1024**2)
-    RC = 32*(1024**2)
+    RX =  2e6
+    RD = 16e6
+    RC = 32e6
     FREQ = 90e3
     DECODED_BUF_SIZE = 4*(1024**2)
     CODED_BUF_SIZE   = 1*(1024**2)
@@ -620,6 +620,30 @@ class PGObjectBuffer:
         hw = self._slots.get(obj_id, None)
         assert hw is not None, f"No slot allocated for {obj_id}"
         assert hw == (height, width), "Dimensions mismatch."
+
+    def get(self, slot_id: int) -> Optional[tuple[int, int]]:
+        """
+        Get a slot if it exists.
+        :param slot_id: id of the slot to get
+        :return: the slot size, if it exist
+        """
+        return self._slots.get(slot_id, None)
+
+    def allocate_id(self, slot_id: int, height: int, width: int) -> bool:
+        """
+        Allocate a buffer slot with given dimensions.
+        :param slot_id: desired slot id
+        :param height: Object height
+        :param width: Object width
+        :return: success of the operation
+        """
+        assert 0 <= slot_id < 64
+
+        desired_id = self._slots.get(slot_id, None)
+        if desired_id is None and self.get_free_size() - width*height >= 0:
+            self._slots[slot_id] = (height, width)
+            return True
+        return False
 
     def allocate(self, height: int, width: int) -> Optional[int]:
         """
