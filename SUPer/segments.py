@@ -85,6 +85,23 @@ class PGSegment:
         self._bytes[__class__.PGSOff.DECODE_TS.value] = pack(">I", round(n_dts*__class__.FREQ_PGS))
 
     @property
+    def tpts(self) -> int:
+        return unpack(">I", self._bytes[__class__.PGSOff.PRES_TS.value])[0]
+
+    @tpts.setter
+    def tpts(self, n_pts: int) -> None:
+        self._bytes[__class__.PGSOff.PRES_TS.value] = pack(">I", int(n_pts))
+
+    @property
+    def tdts(self) -> int:
+        return unpack(">I", self._bytes[__class__.PGSOff.DECODE_TS.value])[0]
+
+    @tdts.setter
+    def tdts(self, n_dts: int) -> None:
+        self._bytes[__class__.PGSOff.DECODE_TS.value] = pack(">I", int(n_dts))
+
+
+    @property
     def type(self) -> str:
         return __class__.SEGMENT[self._bytes[__class__.PGSOff.SEG_TYPE.value]]
 
