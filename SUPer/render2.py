@@ -36,7 +36,7 @@ from .utils import get_super_logger, Pos, Dim, BDVideo, TimeConv as TC
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise, Preprocess
-from .pgraphics import PGraphics, PGDecoder, PGObject, FadeEffect
+from .pgraphics import PGraphics, PGDecoder, PGObject, FadeEffect, PGObjectBuffer
 from .palette import Palette, PaletteEntry
 
 _Region = TypeVar('Region')
@@ -654,9 +654,9 @@ class WOBSAnalyzer:
             # on time for the frame it is supposed to be on screen !
             return c_pts - 4/90e3
 
-        def get_undisplay(self, i: int, pcs_id: int, wds_base: WDS) -> DisplaySet:
+        def get_undisplay(self, i: int, pcs_id: int, wds_base: WDS, palette_id: int) -> DisplaySet:
             c_pts = get_pts(TC.tc2s(self.events[i].tc_out, self.bdn.fps))
-            pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, [], c_pts)
+            pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, palette_id, [], c_pts)
             wds = WDS(bytes(wds_base))
             wds.pts = c_pts
             return DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
@@ -669,9 +669,10 @@ class WOBSAnalyzer:
         pcs_id = 0
         pal_vn = 0
         c_pts = 0
+        pal_id = 0
 
-        pcs_fn = lambda pcs_cnt, state, pal_flag, cl, pts:\
-                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, 0, cl, pts=pts)
+        pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
+                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
         kwargs = self.kwargs.copy()
         kwargs.pop('colors')
@@ -695,7 +696,7 @@ class WOBSAnalyzer:
 
             if durs[i][1] != 0:
                 assert i > 0
-                displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base))
+                displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base, pal_id))
                 pcs_id += 1
 
             c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
@@ -736,7 +737,7 @@ class WOBSAnalyzer:
             ####
 
             if len(pals) == 0:
-                displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base))
+                displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base, pal_id))
                 pcs_id += 1
                 i = k
                 continue
@@ -753,16 +754,22 @@ class WOBSAnalyzer:
             wds = WDS(bytes(wds_base))
             wds.pts = c_pts
 
-            pds = PDS.from_scratch(pal, pal_vn & 0xFF, 0, pts=c_pts)
-            pal_vn += 1
-            pcs = pcs_fn(pcs_id, states[i], False, cobjs if is_compat_mode else cobjs_cropped, c_pts)
-            pcs_id += 1
+
+            pds = PDS.from_scratch(pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
+            pcs = pcs_fn(pcs_id, states[i], False, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts)
             ends = ENDS.from_scratch(pts=c_pts)
             displaysets.append(DisplaySet([pcs, wds, pds] + o_ods + [ends]))
 
+            next_pal_full = False
+            pcs_id += 1
+            pal_vn += 1
+            if pal_vn >= 256:
+                pal_id = (pal_id + 1) & 0b111
+                pal_vn = 0
+                next_pal_full = True
+
             if len(pals[0]) > 1:
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=None), i+1):
-                    redraw = False
                     if p1 is None or z > off_screen[0]:
                         if len(cobjs) == 2:
                             assert has_two_objs
@@ -784,26 +791,33 @@ class WOBSAnalyzer:
                     #Is there a know screen clear in the chain? then use palette screen clear here
                     if durs[z][1] != 0:
                         c_pts_und = get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps))
-                        pcs = pcs_fn(pcs_id, states[z], True, cobjs[:1], c_pts_und)
-                        pds = PDS.from_scratch(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(0, max(pal.palette)+1)}), pal_vn & 0xFF, 0, pts=c_pts_und)
+                        pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs[:1], c_pts_und)
+                        pds = PDS.from_scratch(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(0, max(pal.palette)+1)}), p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts_und)
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts_und)]))
                         pcs_id += 1
                         pal_vn += 1
-                        redraw = True
+                        if pal_vn >= 256:
+                            pal_id = (pal_id + 1) & 0b111
+                            pal_vn = 0
+                        next_pal_full = True
 
-                    if has_two_objs and is_compat_mode or redraw:
-                        pcs = pcs_fn(pcs_id, states[z], False, cobjs if is_compat_mode else cobjs_cropped, c_pts)
+                    if has_two_objs and is_compat_mode:
+                        pcs = pcs_fn(pcs_id, states[z], False, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts)
                         wds = WDS(bytes(wds_base))
                         wds.pts = c_pts
-                        pds = PDS.from_scratch(pal, pal_vn & 0xFF, 0, pts=c_pts)
+                        pds = PDS.from_scratch(pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
                         displaysets.append(DisplaySet([pcs, wds, pds, ENDS.from_scratch(pts=c_pts)]))
                     else:
-                        pcs = pcs_fn(pcs_id, states[z], True, cobjs[:1], c_pts)
-                        pds = PDS.from_scratch(p1 | p2 if not redraw else pal, pal_vn & 0xFF, 0, pts=c_pts)
+                        pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs[:1], c_pts)
+                        pds = PDS.from_scratch(p1 | p2 if not next_pal_full else pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
+                    next_pal_full = False
                     pal_vn += 1
+                    if pal_vn >= 256:
+                        pal_id = (pal_id + 1) & 0b111
+                        pal_vn = 0
+                        next_pal_full = True
                     pcs_id += 1
-                    redraw = False
                     if len(cobjs) == 1:
                         has_two_objs = False
                 assert z+1 == k
@@ -815,7 +829,7 @@ class WOBSAnalyzer:
             pbar.close()
         ####while
         #final "undisplay" displayset
-        displaysets.append(get_undisplay(self, -1, pcs_id, wds_base))
+        displaysets.append(get_undisplay(self, -1, pcs_id, wds_base, pal_id))
         pcs_id += 1
         return Epoch(displaysets)
 
@@ -1043,6 +1057,113 @@ class WOBAnalyzer:
 #     assert ds.end.pts >= ds.end.dts, "Not MPEG2 standard compliant."
     ####
 
+def set_pts_dts(ds: DisplaySet, buffer: PGObjectBuffer, _wrong: bool = False):
+    """
+    Set PTS and DTS of a DisplaySet.
+    Hypothesis: All segments in the DS have their PTS equal to the desired on-screen PTS
+    This function will then adapt everything in time according to this desired PTS.
+
+    :param ds:     DisplaySet with PTS set as stated, and DTS=0 for all segments
+    :param buffer: PG Object Buffer that can be allocated and fetched during the epoch.
+    :param _wrong: Implement Scenarist BD behaviour.
+    """
+    if ds.pcs.pal_flag:
+        assert len(ds) == 3 and isinstance(ds[1], PDS), "Not a valid DS."
+        ds.end.tpts = ds.end.tdts = ds.pds[0].tpts = ds.pds[0].tdts = ds.pcs.tdts = ds.pcs.tpts
+        return
+
+    ddurs = {}
+    for ods in ds.ods:
+        if ods.flags & ods.ODSFlags.SEQUENCE_FIRST:
+            assert ods.o_id not in ddurs, f"Object {ods.o_id} defined twice in DS."
+            if (shape := buffer.get(ods.o_id)) is not None:
+                assert (ods.height, ods.width) == shape, "Dimension mismatch, buffer corruption."
+            else:
+                # Allocate a buffer slot for this object
+                assert buffer.allocate_id(ods.o_id, ods.height, ods.width) is True, "Slot already allocated or buffer overflow."
+            ddurs[ods.o_id] = np.ceil(ods.height*ods.width*PGDecoder.FREQ/PGDecoder.RD)
+
+    t_copy_window = 0
+    t_decoding = 0
+
+    if ds.wds:
+        # WDS exist -> display refresh
+        wipe_duration = 0
+        windows = {wd.window_id: (wd.height, wd.width) for wd in ds.wds.windows}
+
+        if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
+            wipe_duration = np.ceil(ds.pcs.width*ds.pcs.height*PGDecoder.FREQ/PGDecoder.RC)
+        else: #elif ds.pcs.composition_state & ds.pcs.CompositionState.ACQUISITION:
+            wipe_duration = sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values()))
+
+        decode_duration = wipe_duration
+        object_decode_duration = ddurs.copy()
+
+        #For every composition object, compute the transfer time
+        # taking into account decoding and copying, with cropping parameters
+        for cobj in ds.pcs.cobjects:
+            shape = buffer.get(cobj.o_id)
+            assert shape is not None, "Object does not exist in buffer."
+            h, w = shape
+            area = h*w if cobj.cropped is False else cobj.c_w*cobj.c_h
+
+            #we copy at most window_area
+            area = min(windows[cobj.window_id][0]*windows[cobj.window_id][1], area)
+            copy_dur = np.ceil(area*PGDecoder.FREQ/PGDecoder.RC)
+            t_copy_window += copy_dur
+
+            t_decoding += object_decode_duration.pop(cobj.o_id, 0)
+            decode_duration = max(decode_duration, t_decoding) + copy_dur
+
+        #if both objects are in the same window, they are copied at the same time
+        # according to the patent... (probably not, there's no reason for that unless the objects are blended)
+        # here I assume a worse condition: combination of both copying time, => overlapping area is counted twice.
+        if len(ds.pcs.cobjects) == 2 and ds.pcs.cobjects[0].window_id == ds.pcs.cobjects[1].window_id:
+            decode_duration = t_decoding + t_copy_window
+
+        if _wrong and len(ds.ods) == 0:
+            # Makes no sense but this is what Scenarist does on [PCS, WDS, (PDS), END]
+            # because we only give the time to wipe the windows, not to copy the object
+            decode_duration = ds.wds.n_windows + wipe_duration
+
+        # The display set may contain more object that will be displayed later.
+        if len(object_decode_duration) > 0:
+            #we assume that the objects are properly ordered in the stream (displayed ODS are already processed)
+            t_decoding += sum(object_decode_duration.values())
+
+            #the decode duration is then either the total decoding length or the transfer time
+            # (PROBABLY WRONG -> Can a DS continue to be decoded after PTS(pcs) has passed?)
+            decode_duration = max(decode_duration, t_decoding)
+    else: #if ds.wds
+        decode_duration = sum(ddurs.values())
+        t_decoding = decode_duration
+
+    ds.pcs.tdts = ds.pcs.tpts - decode_duration
+
+    # Doubt: on [PCS(no composition), WDS, END] (= epoch end), we have:
+    # DTS(pcs) == DTS(wds), PTS(wds) - DTS(wds) = SUM(CLEAR(WDi)), and PTS(pcs)==PTS(wds)
+    # as we don't need any margin to copy any object (there's none to process)
+    if ds.wds:
+        ds.wds.tdts = ds.pcs.tdts
+        ds.wds.tpts -= t_copy_window
+    if ds.pds:
+        ds.pds[0].tdts = ds.pds[0].tpts = ds.pcs.tdts
+    last_dts = ds.pcs.tdts
+
+    #Propagate DTS(ODSi+1) = PTS(ODSi) by ODS blocks (groups of ODS sharing an object_id)
+    for k, ods in enumerate(ds.ods):
+        if ods.ODSFlags.SEQUENCE_FIRST & ods.flags:
+            for ods_other in ds.ods[k:]:
+                if ods_other.o_id != ods.o_id:
+                    break
+                ods.tdts = last_dts
+                ods.tpts = ods.tdts + ddurs.get(ods.o_id)
+            last_dts = ods.tpts
+    ds.end.tdts = ds.end.tpts = ds.pcs.tdts + t_decoding
+    if ds.ods:
+        assert ds.end.tdts == ds.ods[-1].tpts, "PTS(END) != PTS(ODSlast)"
+    return #don't return the DS because we modified by reference already
+
 def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> bool:
     prev_pts = -1
     last_cbbw = 0
@@ -1109,8 +1230,6 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 area_copied += area if area >= 0 else objects_sizes[idx]
             ####
             ods_acc += decoded_this_ds
-            coded_this_ds *= 8
-            decoded_this_ds *= 8
 
             coded_buffer_pts = last_cbbw + coded_this_ds
             decoded_buffer_pts = last_dbbw + decoded_this_ds
@@ -1126,7 +1245,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 coded_buffer_bandwidth, decoded_buffer_bandwidth = 0, 0
 
             # This is probably the hardest constraint to meet: ts_packet are read at, at most Rx=16Mbps
-            if coded_buffer_bandwidth > (max_rate := 16*(1024**2)):
+            if coded_buffer_bandwidth > (max_rate := PGDecoder.RX):
                 if coded_buffer_bandwidth/max_rate >= 2:
                     logger.warning(f"High instantaneous coded bandwidth at {seg.pts:.03f} [s] (not critical - fair warning)")
                 else:
@@ -1143,12 +1262,12 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 logger.warning(f"Exceeding coded bandwidth at ~{seg.pts:.03f} [s] {100*rate/max_rate:.03f}%.")
                 warnings += 1
 
-            if decoded_buffer_bandwidth > 128*(1024**2):
+            if decoded_buffer_bandwidth > PGDecoder.RD:
                 logger.warning(f"Exceeding decoded buffer bandwidth at {seg.pts} [s].")
                 warnings +=1
 
             # Decoded object plane is 4 MiB
-            if ods_acc >= 4*(1024**2):
+            if ods_acc >= PGDecoder.DECODED_BUF_SIZE:
                 logger.warning(f"Decoded obect buffer overrun at {seg.pts} [s].")
                 compliant = False
 
@@ -1162,7 +1281,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
             nf = TC.s2f(seg.pts, fps) - TC.s2f(prev_pts, fps)
             if nf == 0:
                 last_rc += Rc
-            elif (last_rc+Rc)/nf > 1920*1080/4*29.97*2:
+            elif (last_rc+Rc)/nf > PGDecoder.RC:
                 logger.warning(f"Graphic plane overloaded. Graphics may flicker at {seg.pts} [s].")
                 warnings += 1
 
