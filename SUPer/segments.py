@@ -68,6 +68,20 @@ class PGSegment:
     def __bytes__(self) -> bytes:
         return bytes(self._bytes)
 
+    def copy(self, pts: Optional[float] = None, dts: Optional[float] = None, in_ticks: bool = False) -> Type['PGSegment']:
+        copied = self.__class__(bytes(self))
+        if pts:
+            if in_ticks:
+                copied.tpts = pts
+            else:
+                copied.pts = pts
+        if dts:
+            if in_ticks:
+                copied.tdts = dts
+            else:
+                copied.dts = dts
+        return copied
+
     @property
     def pts(self) -> float:
         return unpack(">I", self._bytes[__class__.PGSOff.PRES_TS.value])[0] / __class__.FREQ_PGS
@@ -143,8 +157,20 @@ class PGSegment:
     def __len__(self):
         return len(self._bytes)
 
-    def __equ__(self, other):
-        return self._bytes == other._bytes
+    def __eq__(self, other):
+        if isinstance(other, __class__):
+            return self._bytes == other._bytes
+        elif isinstance(other, (bytes, bytearray)):
+            return self._bytes == other
+        else:
+            return NotImplemented
+
+    def __ne__(self, other):
+        eq = (self == other)
+        if isinstance(eq, bool):
+            return not eq
+        else:
+            return NotImplemented
 
     def __hash__(self):
         return hash(self._bytes)
