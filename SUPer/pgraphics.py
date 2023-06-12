@@ -328,23 +328,21 @@ class PGDecoder:
     CODED_BUF_SIZE   = 1*(1024**2)
 
     @classmethod
-    def gplane_write_time(cls, *shape, coeff: int = 1):
-        return cls.FREQ * np.ceil(coeff*shape[0]*shape[1]/cls.RC)
+    def gplane_write_time(cls, *shape, coeff: int = 1) -> int:
+        return  int(np.ceil((cls.FREQ*coeff*shape[0]*shape[1])/cls.RC))
 
     @classmethod
     def plane_initilaization_time(cls, ds: DisplaySet) -> int:
         init_d = 0
-        if PCS.CompositionState.EPOCH_START & ds.pcs.composition_state:
+        if ds.pcs.CompositionState.EPOCH_START & ds.pcs.composition_state:
             #The patent gives the coeff 8 but does not explain where it comes from
             # and the statements in the documentation says it is just the size of the
-            # graphic plane. But there are two graphics planes (swapped on each
-            # composition). So I assume the coefficient of two. Also, it makes no
-            # sense for an epoch start to be faster than an acquisition or a normal
-            # case and this is not validated with empirical trials.
-            init_d = cls.gplane_write_time(ds.pcs.width, ds.pcs.height, coeff=2)
+            # graphic plane. However there are two graphic plane so coeff could be
+            # equal to 2 but who knows.
+            init_d = cls.gplane_write_time(ds.pcs.width, ds.pcs.height, coeff=1)
         else:
             for window in ds.wds.windows:
-                init_d += cls.gplane_write_time(ds.pcs.width, ds.pcs.height)
+                init_d += cls.gplane_write_time(window.width, window.height)
         return init_d
 
     @classmethod
@@ -355,18 +353,16 @@ class PGDecoder:
                 c_time = ds.pcs.dts + current_duration
                 if c_time < object_def.pts:
                     wait_duration += object_def.pts - c_time
-                return np.ceil(wait_duration*cls.FREQ)
+                return int(np.ceil(wait_duration*cls.FREQ))
+        #Stream is either corrupted or object already in buffer
         return wait_duration
     ####
     @staticmethod
     def size(ds: DisplaySet, window_id: int) -> Shape:
-        window = None
-        for wd in ds.pcs.wds.window:
-            if ds.pcs.cobjects[0].window_id == wd.window_id:
-                window = wd
-                break
-        assert window is not None, "Did not find window definition."
-        return Shape(window.width, window.height)
+        for wd in ds.wds.windows:
+            if wd.window_id == window_id:
+                return Shape(wd.width, wd.height)
+        assert False, "Did not find window definition."
 
     @staticmethod
     def object_areas(ods: list[ODS]) -> int:
@@ -399,11 +395,11 @@ class PGDecoder:
 
     @classmethod
     def decode_obj_duration(cls, area: int) -> float:
-        return area/cls.RD
+        return np.ceil(cls.FREQ*area/cls.RD)/cls.FREQ
 
     @classmethod
     def copy_gp_duration(cls, area: int) -> float:
-        return area/cls.RC
+        return np.ceil(cls.FREQ*area/cls.RC)/cls.FREQ
 
     @classmethod
     def decode_display_duration(cls, gp_clear_dur: float, areas: list[int], gp_areas: list[int]) -> float:
