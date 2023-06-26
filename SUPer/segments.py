@@ -397,6 +397,7 @@ class PCS(PGSegment):
         NORMAL      = 0x00 #Update
         ACQUISITION = 0x40 #Update current composition with new objects
         EPOCH_START = 0x80 #Display update (new "group of DSs")
+        EPOCH_CONTINUE = ACQUISITION | EPOCH_START #Acquisition else Epoch start
 
     _py2pg_pal_update_flag = {False: 0x00, True: 0x80}
     _pg2py_pal_update_flag = {v: k for k, v in _py2pg_pal_update_flag.items()}

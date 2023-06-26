@@ -433,7 +433,7 @@ class PGObject:
         Return a mask that gives timing when a bitmap is still and
         only requires alpha updates (or none at all)
         """
-        mask = np.zeros((len(mask),), dtype=np.bool_)
+        mask = np.zeros((len(self.mask),), dtype=np.bool_)
         for k, eff in enumerate(self.effects.get('fade', [])):
             #Fade effect defines alpha-ONLY effect applied on a given bitmap
             # so if alpha does not vary, it IS classified as a fade effect
