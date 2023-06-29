@@ -70,12 +70,12 @@ class PGSegment:
 
     def copy(self, pts: Optional[float] = None, dts: Optional[float] = None, in_ticks: bool = False) -> Type['PGSegment']:
         copied = self.__class__(bytes(self))
-        if pts:
+        if pts != None:
             if in_ticks:
                 copied.tpts = pts
             else:
                 copied.pts = pts
-        if dts:
+        if dts != None:
             if in_ticks:
                 copied.tdts = dts
             else:
