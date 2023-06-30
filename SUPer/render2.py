@@ -754,7 +754,6 @@ class WOBSAnalyzer:
             wds = WDS(bytes(wds_base))
             wds.pts = c_pts
 
-
             pds = PDS.from_scratch(pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
             pcs = pcs_fn(pcs_id, states[i], False, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts)
             ends = ENDS.from_scratch(pts=c_pts)
@@ -769,21 +768,13 @@ class WOBSAnalyzer:
                 next_pal_full = True
 
             if len(pals[0]) > 1:
-                for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=None), i+1):
-                    if p1 is None or z > off_screen[0]:
-                        if len(cobjs) == 2:
-                            assert has_two_objs
-                            p1 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[0].o_id, 128*(cobjs[0].o_id+1)*(not is_compat_mode))})
-                            cobjs, cobjs_cropped = cobjs[1:], cobjs_cropped[1:]
-                        else:
-                            p1 = Palette()
-                    if p2 is None or z > off_screen[1]:
-                        if len(cobjs) == 2:
-                            assert has_two_objs
-                            p2 = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[1].o_id, 128*(cobjs[1].o_id+1)*(not is_compat_mode))})
-                            cobjs, cobjs_cropped = cobjs[:1], cobjs_cropped[:1]
-                        else:
-                            p2 = Palette()
+                zip_length = max(map(len, pals))
+                if off_screen[0] != np.inf and len(pals[0]) < zip_length:
+                    pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[0].o_id, 128*(cobjs[0].o_id+1))})]
+                if off_screen[1] != np.inf and len(pals[1]) < zip_length:
+                    pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[1].o_id, 128*(cobjs[1].o_id+1))})]
+
+                for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
                     pal |= (p1 | p2)
                     assert states[z] == PCS.CompositionState.NORMAL
@@ -791,7 +782,7 @@ class WOBSAnalyzer:
                     #Is there a know screen clear in the chain? then use palette screen clear here
                     if durs[z][1] != 0:
                         c_pts_und = get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps))
-                        pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs[:1], c_pts_und)
+                        pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts_und)
                         pds = PDS.from_scratch(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(0, max(pal.palette)+1)}), p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts_und)
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts_und)]))
                         pcs_id += 1
@@ -801,16 +792,10 @@ class WOBSAnalyzer:
                             pal_vn = 0
                         next_pal_full = True
 
-                    if has_two_objs and is_compat_mode:
-                        pcs = pcs_fn(pcs_id, states[z], False, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts)
-                        wds = WDS(bytes(wds_base))
-                        wds.pts = c_pts
-                        pds = PDS.from_scratch(pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
-                        displaysets.append(DisplaySet([pcs, wds, pds, ENDS.from_scratch(pts=c_pts)]))
-                    else:
-                        pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs[:1], c_pts)
-                        pds = PDS.from_scratch(p1 | p2 if not next_pal_full else pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
-                        displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
+                    pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts)
+                    pds = PDS.from_scratch(p1 | p2 if not next_pal_full else pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
+                    displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
+
                     next_pal_full = False
                     pal_vn += 1
                     if pal_vn >= 256:
@@ -818,8 +803,6 @@ class WOBSAnalyzer:
                         pal_vn = 0
                         next_pal_full = True
                     pcs_id += 1
-                    if len(cobjs) == 1:
-                        has_two_objs = False
                 assert z+1 == k
             i = k
             if use_pbar:

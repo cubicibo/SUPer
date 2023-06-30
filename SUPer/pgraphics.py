@@ -617,6 +617,10 @@ class PGObjectBuffer:
         assert hw is not None, f"No slot allocated for {obj_id}"
         assert hw == (height, width), "Dimensions mismatch."
 
+    @classmethod
+    def get_capacity(cls) -> int:
+        return cls._MAX_SIZE
+
     def get(self, slot_id: int) -> Optional[tuple[int, int]]:
         """
         Get a slot if it exists.

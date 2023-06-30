@@ -232,15 +232,14 @@ if __name__ == '__main__':
                                    "as if it was 59.94. This flag is meaningless with 23.976 or 24p.")
 
     compat_mode = CheckBox(app, text="Compatibility mode for software players (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(compat_mode.tk, "Software players don't decode palette updates with two objects correctly or cropping.\n"\
-                                       "If enabled, SUPer insert instructions for the decoder to redraw the graphic plane.\n"\
-                                       "I.e, the decoder re-copy existing objects in the buffer to the graphic plane and apply the new palette.\n"\
-                                       "However, hardware decoders can only redraw a portion of the graphic plane per frame.\n"\
-                                       "Should be unticked for commercial BDs.")
+    Hovertip(compat_mode.tk, "FFmpeg does not decode cropping parameters. If enabled, SUPer will not use those instructions.\n"\
+                             "This may increase the transfer time of objects on hardware decoders (BD players).\n"\
+                             "As those decoders are bandwidth constrained, this should be unticked for commercial BDs.")
 
-    set_dts = CheckBox(app, text="Set rough DTS in stream (for PES output)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(set_dts.tk, "PG streams can include a decoding timestamp. This is used by some muxers.\n"\
-                         "This should only be required for PES+MUI output (Scenarist BD format).")
+    set_dts = CheckBox(app, text="Set rough DTS in stream (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(set_dts.tk, "PG streams can include a decoding timestamp. This is required by very old decoders.\n"\
+                         "This must be ticked for PES+MUI output (Scenarist BD format).\n"\
+                         "WARNING: SUPer does not verify that the DTS are monotonic, which is a hard requirement!")
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')
