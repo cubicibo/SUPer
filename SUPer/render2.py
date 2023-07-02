@@ -664,8 +664,9 @@ class WOBSAnalyzer:
         def box_to_crop(box: Box) -> dict['str', int]:
             return {'hc_pos': box.x, 'vc_pos': box.y, 'c_w': box.dx, 'c_h': box.dy}
 
+        double_buffering = 2
         i = 0
-        ods_reg = [0]*2
+        ods_reg = [0]*64
         pcs_id = 0
         pal_vn = 0
         c_pts = 0
@@ -712,7 +713,10 @@ class WOBSAnalyzer:
                 has_two_objs += 1
             has_two_objs = has_two_objs > 1
 
+            double_buffering = abs(double_buffering - 2)
+
             for wid, pgo in pgobs_items:
+                oid = wid + double_buffering
                 if pgo is None:
                     continue
                 if not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
@@ -723,17 +727,17 @@ class WOBSAnalyzer:
                 #     logger.warning("Found an empty object, filtering it out.")
                 #     continue
                 off_screen.append(i+np.max(np.nonzero(pgo.mask[i-pgo.f:k-pgo.f])))
-                cobjs.append(CObject.from_scratch(wid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
+                cobjs.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
 
                 cparams = box_to_crop(pgo.box)
-                cobjs_cropped.append(CObject.from_scratch(wid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
+                cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
                                                               cropped=True, **cparams))
                 res.append(Optimise.solve_sequence_fast(imgs_chain, 128 if has_two_objs else 256, **kwargs))
                 pals.append(Optimise.diff_cluts(res[-1][1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
 
                 ods_data = PGraphics.encode_rle(res[-1][0] + 128*(wid == 1 and has_two_objs))
-                o_ods += ODS.from_scratch(wid, ods_reg[wid] & 0xFF, res[-1][0].shape[1], res[-1][0].shape[0], ods_data, pts=c_pts)
-                ods_reg[wid] += 1
+                o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, res[-1][0].shape[1], res[-1][0].shape[0], ods_data, pts=c_pts)
+                ods_reg[oid] += 1
             ####
 
             if len(pals) == 0:
@@ -770,9 +774,9 @@ class WOBSAnalyzer:
             if len(pals[0]) > 1:
                 zip_length = max(map(len, pals))
                 if off_screen[0] != np.inf and len(pals[0]) < zip_length:
-                    pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[0].o_id, 128*(cobjs[0].o_id+1))})]
+                    pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*(cobjs[0].o_id & 0x01), 128*((cobjs[0].o_id & 0x01)+1))})]
                 if off_screen[1] != np.inf and len(pals[1]) < zip_length:
-                    pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*cobjs[1].o_id, 128*(cobjs[1].o_id+1))})]
+                    pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*(cobjs[1].o_id & 0x01), 128*((cobjs[1].o_id & 0x01)+1))})]
 
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
@@ -1031,7 +1035,6 @@ class WOBAnalyzer:
 #     if ds.pds:
 #         for pds in ds.pds:
 #             if ds.pcs.pal_flag:
-#                 assert len(ds.pcs.cobjects) == 1, "Undefined behaviour: palette update with 2+ objects."
 #                 assert ds.pcs.pal_id == pds.p_id, "Palette ID mismatch between PCS and PDS on palette update."
 #                 assert len(ds) == 3, "Unusual display set structure for a palette update."
 #             assert pds.p_id < 8, "Using undefined palette ID."
@@ -1213,15 +1216,9 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                             warnings += 1
                         cumulated_ods_size = 0
                 elif isinstance(seg, PDS):
-                    if n_obj > 1 and seg.pal_flag:
-                        logger.warning(f"Undefined behaviour: palette update with 2+ objects at {to_tc(seg.pts)}.")
-                        compliant = False
                     if seg.p_id >= 8:
                         logger.warning(f"Using an undefined palette ID at {to_tc(seg.pts)}.")
                         compliant = False
-                elif isinstance(seg, ENDS) and n_obj == 0 and ds.pcs.pal_flag \
-                    and int(ds.pcs.composition_state) == 0 and isinstance(ds.segments[1], WDS):
-                    logger.warning(f"Bad end displayset, graphics will not be undisplayed at {to_tc(seg.pts)}.")
 
             area_copied = 0
             for idx, area in areas2gp.items():

@@ -196,9 +196,8 @@ class Palette:
 
     def __or__(self, other) -> 'Palette':
         """
-        OR two palette togethers. The output inherits:
-        - palette id and (version number + 1) of the left operand.
-        - entries from both palette, with the right operand values for the dupe keys.
+        OR two palette togethers. The output inherits entries from both palette,
+        the right operand wins when a dupe key exists.
         """
         if isinstance(other, self.__class__):
             return self.__class__(self.palette | other.palette)
