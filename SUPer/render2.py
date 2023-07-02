@@ -1043,6 +1043,87 @@ class WOBAnalyzer:
 #     assert ds.end.pts >= ds.end.dts, "Not MPEG2 standard compliant."
     ####
 
+
+#%%
+def get_wipe_duration(wds: WDS) -> int:
+    return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.height*w.width/PGDecoder.RC, wds.windows)))
+
+#%%
+def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int) -> list[tuple[int, int]]:
+    ddurs = {}
+    for ods in ds.ods:
+        if ods.flags & ods.ODSFlags.SEQUENCE_FIRST:
+            assert ods.o_id not in ddurs, f"Object {ods.o_id} defined twice in DS."
+            if (shape := buffer.get(ods.o_id)) is not None:
+                assert (ods.height, ods.width) == shape, "Dimension mismatch, buffer corruption."
+            else:
+                # Allocate a buffer slot for this object
+                assert buffer.allocate_id(ods.o_id, ods.height, ods.width) is True, "Slot already allocated or buffer overflow."
+            ddurs[ods.o_id] = np.ceil(ods.height*ods.width*PGDecoder.FREQ/PGDecoder.RD)
+
+    t_decoding = 0
+    decode_duration = 0
+
+    if ds.ods:
+        if ds.wds:
+            if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
+                decode_duration = np.ceil(ds.pcs.width*ds.pcs.height*PGDecoder.FREQ/PGDecoder.RC)
+            else:
+                decode_duration = wipe_duration
+            object_decode_duration = ddurs.copy()
+
+            windows = {wd.window_id: (wd.height, wd.width) for wd in ds.wds.windows}
+
+            #For every composition object, compute the transfer time
+            for k, cobj in enumerate(ds.pcs.cobjects):
+                shape = buffer.get(cobj.o_id)
+                assert shape is not None, "Object does not exist in buffer."
+                w, h = windows[cobj.window_id][0], windows[cobj.window_id][1]
+
+                t_decoding += object_decode_duration.pop(cobj.o_id, 0)
+
+                # Same window -> patent claims the plane is written only once after the two cobj are processed.
+                if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1] == cobj.window_id:
+                    continue
+                copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
+                decode_duration = max(decode_duration, t_decoding) + copy_dur
+        #This DS defines new objects without displaying them
+        elif not ds.pcs.pal_flag:
+            decode_duration = sum(ddurs.values())
+            t_decoding = decode_duration
+        #pal flag with ODS, not desirable.
+        else:
+            raise AssertionError("Illegal DS (palette update with ODS!)")
+    elif ds.wds or ds.pcs.pal_flag:
+        assert ds.pcs.composition_state == ds.pcs.CompositionState.NORMAL, "DS refreshes the screen but no valid object exists."
+        decode_duration = wipe_duration + 1
+    else:
+        # No ODS, no WDS, no palette update -> We're just writing palette data or doing a NOP (PCS, END)
+        # In this case, PTS and DTS are equals for all segments.
+        ...
+
+    #PCS always exist
+    dts = np.uint32(ds.pcs.tpts - decode_duration)
+    ts_pairs = [(ds.pcs.tpts, dts)]
+
+    if ds.wds:
+        ts_pairs.append((np.uint32(ds.pcs.tpts - wipe_duration), dts))
+    for pds in ds.pds:
+        ts_pairs.append((dts, dts))
+
+    for ods in ds.ods:
+        ods_pts = np.uint32(dts + ddurs.get(ods.o_id))
+        ts_pairs.append((ods_pts, dts))
+        if ods.flags & ods.ODSFlags.SEQUENCE_LAST:
+            dts = ods_pts
+    ts_pairs.append((dts, dts))
+    return ts_pairs
+
+def apply_pts_dts(ds: DisplaySet, ts: tuple[int, int]) -> None:
+    assert len(ds) == len(ts), "Timestamps-DS size mismatch."
+    for seg, (pts, dts) in zip(ds, ts):
+        seg.tpts, seg.tdts = pts, dts
+
 def set_pts_dts(ds: DisplaySet, buffer: PGObjectBuffer, _wrong: bool = False):
     """
     Set PTS and DTS of a DisplaySet.
@@ -1183,7 +1264,6 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
             for seg in ds.segments:
                 areas2gp = {}
                 size_ds += len(bytes(seg))
-                n_obj = 0
                 if seg.pts != current_pts and current_pts != -1 and _cnt_pts:
                     logger.warning(f"Display set has non-constant pts at {to_tc(seg.pts)} or {to_tc(current_pts)}.")
                     current_pts = -1
@@ -1192,7 +1272,6 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                         # On acquisition, the object buffer is flushed
                         ods_acc = 0
                         objects_sizes = {}
-                        n_obj = len(seg.cobjects)
                     for cobj in seg.cobjects:
                         areas2gp[cobj.o_id] = -1 if not cobj.cropped else cobj.c_w*cobj.c_h
 
