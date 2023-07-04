@@ -33,11 +33,7 @@ class BDNRender:
         self.bdn_file = bdnf
         self._epochs = []
         self.skip_errors = kwargs.pop("skip_errors", False)
-        #Leave norm threshold to zero, it can generate unexpected behaviours.
-        #Colors should be 256. Anything above is illegal, anything below results in a
-        # loss of quality.
-        self.kwargs = {'colors': 256}
-        self.kwargs |= kwargs
+        self.kwargs = kwargs
 
     def optimise(self) -> None:
         kwargs = self.kwargs

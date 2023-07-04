@@ -451,19 +451,8 @@ class PGObject:
         if self.is_active(frame):
             return self.mask[frame-self.f]
         return False
-
-    def decode_duration(self) -> float:
-        return self.area/PGDecoder.RD
-
-    def transfer_duration(self) -> float:
-        return self.area/PGDecoder.RC
-
-    def estimate_rle_length(self) -> int:
-        return int(self.area*0.33)
-
-    def estimate_arrival_duration(self) -> float:
-        return self.estimate_rle_length()/PGDecoder.RX
 ####
+
 #%%
 @dataclass
 class FadeEffect:
@@ -659,3 +648,78 @@ class PGObjectBuffer:
             self._slots[new_id] = (height, width)
             return new_id
         return None
+####
+
+#%%
+@dataclass
+class PGPalette(Palette):
+    version: int = 0
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self._pts = -1
+
+    def lock_until(self, pts: float) -> None:
+        self._pts = pts
+
+    def diff(self, other: Palette) -> Palette:
+        return Palette({k: pe for k, pe in other.palette.items() if self.palette.get(k, None) != pe})
+
+    def writable_at(self, dts: float) -> bool:
+        return self._pts < dts
+
+    @property
+    def pts(self) -> float:
+        return self._pts
+
+    def version_as_byte(self) -> int:
+        return self.version & 0xFF
+
+    def store(self, palette: [dict[int, ...] | Type['PGPalette'] | Palette], pts: float) -> None:
+        self.palette |= palette if isinstance(palette, dict) else palette.palette
+        self.sort()
+        self.version += 1
+        self._pts = pts
+
+class PaletteManager:
+    def __init__(self, n_palettes: int = 8) -> None:
+        self._palettes = [PGPalette() for k in range(n_palettes)]
+
+    def get_palette(self, dts: float) -> int:
+        """
+        Find a palette in the decoder that can be written to at a given dts.
+
+        :param dts: decoding timestamp as a float (seconds)
+        """
+        versions = list(map(lambda palette: palette.version >> 8, self._palettes))
+
+        best_k = None
+        for k, p in enumerate(self._palettes):
+            if p.writable_at(dts) and (best_k is None or versions[best_k] > versions[k]):
+                best_k = k
+        assert best_k is not None, f"No palette available at dts {dts} [s]"
+        return best_k
+
+    def assign_palette(self, palette_id: int, palette: Palette, pts: float, dts: float, only_diff: bool) -> list[PDS]:
+        """
+        Generate the PDSegment to assign a given PGDecoder palette. The palette
+        is then not writable until the PTS has passed.
+
+        :param palette_id: ID of the palette to use (previously obtained via get_palette())
+        :param palette: The (full) palette to be displayed
+        :param pts: Presentation timestamp of the palette
+        :param dts: Decoding timestamp of the palette
+        :param only_diff: True if the palette assignement should only contain the difference.
+        :return: a list with the PDS.
+        """
+        assert palette_id < len(self._palettes), "Not an internal palette of the decoder!"
+        pgpal = self._palettes[palette_id]
+        assert pgpal.writable_at(dts) is True, f"Using locked palette at {dts} [s]."
+        pds_fn = lambda pal: PDS.from_scratch(pal, p_vn=pgpal.version_as_byte(), p_id=palette_id, pts=pts, dts=dts)
+        pds = pds_fn(pgpal.diff(palette) if only_diff else Palette(pgpal.palette | palette.palette))
+        if pds.n_entries == 0:
+            # write the entire palette, not too sure of the effect of [PCS(palette_update_flag), END] on a decoder...
+            pds = pds_fn(Palette(pgpal | palette))
+        assert pds.n_entries > 0, "Empty PDS generated."
+        pgpal.store(palette, pts)
+        return [pds]

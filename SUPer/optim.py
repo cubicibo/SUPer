@@ -95,7 +95,7 @@ class Preprocess:
         :return:        The events with optimised images.
         """
         if 2 <= colors > 256:
-            raise ValueError("Palettization is always performed on 2<'colors'<=256.")
+            raise ValueError("Palettization is always performed on 2< colors <=256.")
 
         if not PalettizeMode(flags):
             logging.info("No known optimisation selected, skipping.")
@@ -213,115 +213,6 @@ class Preprocess:
 
 
 class Optimise:
-    @staticmethod
-    def prepare_sequence(events: list[ImageEvent], **kwargs) -> tuple[npt.NDArray[np.uint8],
-                                                             npt.NDArray[np.uint8],
-                                                             list[int]]:
-        """
-        This functions gets a list of image to optimize as a single one + PAL updates
-
-        :param events:  Set of images events where a palette animation takes places.
-        :return: color look up table for each image (stacked), sequence of pixels and
-                   length of each CLUT
-        """
-
-        n_colors = kwargs.get('colors', 256)
-
-        maps = []
-        clut = []
-        clut_lens = []
-        for event in events:
-            img, img_pal = Preprocess.quantize(event.img, n_colors, **kwargs)
-            maps.append(img)
-
-            a = np.zeros((256, 4))
-            pilpal = list(img_pal.keys())
-            clut_lens.append(len(pilpal))
-
-            b = np.asarray(pilpal, dtype=np.uint8)
-            a[:b.shape[0], :b.shape[1]] = b
-            clut.append(a)
-
-        cluts = np.stack(clut).astype(np.uint8) # Stack all CLUT in the sequence
-        px_sequences = np.asarray(maps, dtype=np.uint8) #All cmaps
-
-        return cluts, px_sequences, clut_lens
-
-    @staticmethod
-    def solve_sequence(cluts, cmaps, clut_len, **kwargs) -> tuple[npt.NDArray[np.uint8],
-                                                                  npt.NDArray[np.uint8]]:
-        """
-        This functions finds a solution for the provided subtitle animation.
-        :param cluts:  Color look-up tables of each bitmap, stacked one after the other
-        :param cmaps:  P-Images linked to their respective CLUT, stacked like CLUTs
-        :param clut_len: Length for each CLUT
-        :param **kwargs: Additional parameters to adjust inner params of the solver.
-
-        :return: P-Image for the PGStream, Sequence of RGBA values for the animation.
-        """
-
-        N_SEQUENCES_MAX = kwargs.get('colors', 256)
-
-        sequences = [clut[cmap] for clut, cmap in zip(cluts, cmaps)]
-        sequences = np.stack(sequences, axis=2).astype(np.uint8) #(LEN_SEQ, H, W, RGBA=4)
-
-        #Find all sequences and count them
-        seq_occ = {}
-        for i in range(sequences.shape[0]):
-            for j in range(sequences.shape[1]):
-                seq = hash(sequences[i, j, :, :].data.tobytes())
-                try:
-                    seq_occ[seq][0] += 1
-                except KeyError:
-                    seq_occ[seq] = [1, sequences[i, j, :, :]]
-
-        #Sort sequences by commonness
-        seq_sorted = {k: v[1] for k, v in list(sorted(seq_occ.items(),
-                                                      key=lambda item: item[1][0],
-                                                      reverse=True))}
-
-        #Fill a new array with kept sequences to perform fast norm calculations
-        norm_mat = np.ndarray((N_SEQUENCES_MAX,
-                               sequences[i,j,:,:].shape[0],
-                               sequences[i,j,:,:].shape[1]))
-        seqs, cnt = {}, 0
-        remap = {}
-
-        for k, v in seq_sorted.items():
-            if cnt < N_SEQUENCES_MAX:
-                seqs[k] = (cnt, v) # cnt will be the CLUT id for v
-                norm_mat[cnt, :, :] = v
-                cnt += 1
-            elif k not in remap:
-                nm = np.linalg.norm(norm_mat - v[None, :], 2, axis=2)
-
-                id1 = np.argsort(np.sum(nm, axis=1))
-                id2 = np.argsort(np.sum(nm, axis=1)/np.sum(nm != 0, axis=1))
-
-                best_fit = np.abs(id1 - id2[:, None])
-                id1_i, id2_i = best_fit.argmin() % id1.size, best_fit.argmin()//id1.size
-
-                assert id1[id1_i] ==  id2[id2_i], "Something unconceivable has happened."
-
-                remap[k] = hash(norm_mat[id1[id1_i]].astype(np.uint8).data.tobytes())
-
-        out_map = np.zeros(sequences.shape[0:2], dtype=np.uint8)
-
-        for i in range(sequences.shape[0]):
-            for j in range(sequences.shape[1]):
-                seq_hash = hash(sequences[i, j, :, :].data.tobytes())
-                if seq_hash in seqs:
-                    assert np.all(sequences[i, j] == seqs[seq_hash][1]), \
-                        "Sequences did not match (hash collision?)"
-                    out_map[i, j] = seqs[seq_hash][0]
-                elif seq_hash in remap:
-                    out_map[i, j] = seqs[remap[seq_hash]][0]
-                else:
-                    logging.error("Sequence not found in any map.")
-        # Output map, Sequences for the N_SEQUENCES_MAX RGBA values
-        return out_map, \
-            np.asarray(list(seq_sorted.values())[:N_SEQUENCES_MAX]).astype(np.uint8)
-
     @staticmethod
     def solve_sequence_fast(events, colors: int = 256, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
         """

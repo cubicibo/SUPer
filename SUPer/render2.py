@@ -676,8 +676,6 @@ class WOBSAnalyzer:
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
         kwargs = self.kwargs.copy()
-        kwargs.pop('colors')
-
         is_compat_mode = kwargs.pop('pgs_compatibility', False)
 
         try:
@@ -732,7 +730,8 @@ class WOBSAnalyzer:
                 cparams = box_to_crop(pgo.box)
                 cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
                                                               cropped=True, **cparams))
-                res.append(Optimise.solve_sequence_fast(imgs_chain, 128 if has_two_objs else 256, **kwargs))
+                n_colors = (128 if wid == 0 else 127) if has_two_objs else 255
+                res.append(Optimise.solve_sequence_fast(imgs_chain, n_colors, **kwargs))
                 pals.append(Optimise.diff_cluts(res[-1][1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
 
                 ods_data = PGraphics.encode_rle(res[-1][0] + 128*(wid == 1 and has_two_objs))
@@ -774,9 +773,9 @@ class WOBSAnalyzer:
             if len(pals[0]) > 1:
                 zip_length = max(map(len, pals))
                 if off_screen[0] != np.inf and len(pals[0]) < zip_length:
-                    pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*(cobjs[0].o_id & 0x01), 128*((cobjs[0].o_id & 0x01)+1))})]
+                    pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[0][0].palette), max(pals[0][0].palette)+1)})]
                 if off_screen[1] != np.inf and len(pals[1]) < zip_length:
-                    pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(128*(cobjs[1].o_id & 0x01), 128*((cobjs[1].o_id & 0x01)+1))})]
+                    pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[1][0].palette), max(pals[1][0].palette)+1)})]
 
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
