@@ -1120,6 +1120,14 @@ def get_wipe_duration(wds: WDS) -> int:
 
 #%%
 def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int) -> list[tuple[int, int]]:
+    """
+    This function generates the timestamps (PTS and DTS) associated to a given DisplaySet.
+
+    :param ds: DisplaySet, PTS of PCS must be set to the right value.
+    :param buffer: Object buffer that supports allocation and returning a size of allocated slots.
+    :param wipe_duration: Time it takes in ticks to wipe out the graphic plane.
+    :return: Pairs of timestamps in ticks for each segment in the displayset.
+    """
     ddurs = {}
     for ods in ds.ods:
         if ods.flags & ods.ODSFlags.SEQUENCE_FIRST:
@@ -1196,7 +1204,8 @@ def apply_pts_dts(ds: DisplaySet, ts: tuple[int, int]) -> None:
 
 def set_pts_dts(ds: DisplaySet, buffer: PGObjectBuffer, _wrong: bool = False):
     """
-    Set PTS and DTS of a DisplaySet.
+    Set PTS and DTS of a DisplaySet as if the decoder uses memcopies on the displayed
+    object dimension. less restrictive than the _sc version.
     Hypothesis: All segments in the DS have their PTS equal to the desired on-screen PTS
     This function will then adapt everything in time according to this desired PTS.
 
@@ -1318,6 +1327,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
         ods_acc = 0
         window_area = {}
         objects_sizes = {}
+        buffer = PGObjectBuffer()
 
         for kd, ds in enumerate(epoch.ds):
             size_ds = 0
@@ -1350,6 +1360,13 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                         window_area[w.window_id] = w.width*w.height
                 elif isinstance(seg, ODS):
                     if int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST):
+                        if (slot := buffer.get(seg.o_id)) is None:
+                            if not buffer.allocate_id(seg.o_id, seg.height, seg.width):
+                                logger.error("Object buffer overflow (not enough memory for all object slots).")
+                                compliant = False
+                        elif slot != (seg.height, seg.width):
+                            logger.error(f"Object-slot {seg.o_id} dimensions mismatch. Slot: {slot}, object: {(seg.height, seg.width)}")
+                            compliant = False
                         if cumulated_ods_size > 0:
                             logger.error("A past ODS was not properly terminated! Stream is critically corrupted!")
                             compliant = False
