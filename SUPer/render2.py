@@ -18,7 +18,7 @@
 
 
 
-from typing import Any, TypeVar, Optional, Type, Union
+from typing import Any, TypeVar, Optional, Type, Union, Callable
 from enum import Enum
 from dataclasses import dataclass
 from itertools import combinations, chain, zip_longest
@@ -63,8 +63,8 @@ class Box:
         return self.dx * self.dy
 
     @property
-    def coords(self) -> tuple[Pos, Pos]:
-        return (Pos(self.x, self.y), Pos(self.x2, self.y2))
+    def coords(self) -> tuple[int, int, int, int]:
+        return (self.x, self.y, self.x2, self.y2)
 
     @property
     def dims(self) -> Dim:
@@ -629,6 +629,113 @@ class WOBSAnalyzer:
                 drought += 1*refresh_rate
         return self._convert(states, pgobjs, windows, durs)
 
+    @staticmethod
+    def _get_stack_direction(*box) -> tuple[npt.NDArray[np.uint16], tuple[int, int]]:
+        widths = list(map(lambda b: b.dx, box))
+        heights = list(map(lambda b: b.dy, box))
+
+        if max(heights)*sum(widths) <= max(widths)*sum(heights):
+            return np.array([widths[0], 0], np.int32), (sum(widths), max(heights))
+        return np.array([0, heights[0]], np.int32), (max(widths), sum(heights))
+
+    def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, windows,
+                                    double_buffering: int, has_two_objs: bool,
+                                    ods_reg: list[int], c_pts: float) -> ...:
+        box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
+        cobjs, cobjs_cropped = [], []
+        res, pals, o_ods = [], [], []
+
+        #In this mode, we re-combine the two objects in a smaller areas than in the original box
+        # and then pass that to the optimiser. Colors are efficiently distributed on the objects.
+        # In the future, this will be the default behaviour unless there's a NORMAL CASE to update
+        # to redefine an object in the middle.
+        if has_two_objs:
+            compositions = [pgo for _, pgo in pgobs_items if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]))]
+
+            offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x.box, compositions)))
+            imgs_chain = []
+
+            for j in range(i, k):
+                coords = np.zeros((2,), np.int32)
+                a_img = Image.new('RGBA', dims, (0, 0, 0, 0))
+                for pgo in compositions:
+                    if len(pgo.mask[j-pgo.f:j+1-pgo.f]) == 1:
+                        paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
+                        a_img.paste(Image.fromarray(pgo.gfx[j-pgo.f, :, : ,:], 'RGBA').crop(pgo.box.coords), paste_box)
+                    coords += offset
+                imgs_chain.append(a_img)
+            ####
+            #We have "packed" the object, let's optimise it
+            bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 255, **self.kwargs)
+            #rare case: both objects have the same shape and no fully transparent sequence
+            # -> reduce the color by one and add a transparent entry manually.
+            palette_entry_tsp = np.nonzero(np.all(palettes[:,:,-1] == 0, axis=1))[0]
+            if len(palette_entry_tsp) > 0:
+                palette_entry_tsp = int(palette_entry_tsp[0])
+            elif np.max(bitmap) < 254:
+                palette_entry_tsp = np.max(bitmap) + 1
+            else:
+                bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 254, **self.kwargs)
+                palette_entry_tsp = np.max(bitmap) + 1
+
+            pals.append(Optimise.diff_cluts(palettes, matrix=self.kwargs.get('bt_colorspace', 'bt709')))
+
+            #Add the transparent entry if this color is not in the bitmap
+            if palette_entry_tsp == np.max(bitmap) + 1:
+                pals[0][0][palette_entry_tsp] = PaletteEntry(16, 128, 128, 0)
+
+            coords = np.zeros((2,), np.int32)
+
+            for wid, pgo in pgobs_items:
+                if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f])):
+                    oid = wid + double_buffering
+                    #get bitmap
+                    window_bitmap = palette_entry_tsp*np.ones((windows[wid].dy, windows[wid].dx), np.uint8)
+                    nx, ny = coords
+                    window_bitmap[pgo.box.slice] = bitmap[ny:ny+pgo.box.dy, nx:nx+pgo.box.dx]
+
+                    #Generate object related segments objects
+                    cobjs.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
+                    cparams = box_to_crop(pgo.box)
+                    cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
+                                                              cropped=True, **cparams))
+
+                    ods_data = PGraphics.encode_rle(window_bitmap)
+                    o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, window_bitmap.shape[1], window_bitmap.shape[0], ods_data, pts=c_pts)
+                    ods_reg[oid] += 1
+                    coords += offset
+            pals.append([Palette()] * len(pals[0]))
+            ####for wid, pgo
+        else:
+            # If in the chain there's a NORMAL CASE redefinition, we
+            # must work with separate palette for each object (window0: 128, window1:127)
+            for wid, pgo in pgobs_items:
+                if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
+                    continue
+                oid = wid + double_buffering
+                imgs_chain = [Image.fromarray(img) for img in pgo.gfx[i-pgo.f:k-pgo.f]]
+                cobjs.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
+
+                cparams = box_to_crop(pgo.box)
+                cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
+                                                              cropped=True, **cparams))
+                #Do not use 256 colors because some authoring software reserve palette entry 0xFF.
+                # if two objects, window_1 has only 127 colours.
+                n_colors = (128 if wid == 0 else 127) if has_two_objs else 255
+                res.append(Optimise.solve_sequence_fast(imgs_chain, n_colors, **self.kwargs))
+                pals.append(Optimise.diff_cluts(res[-1][1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
+
+                ods_data = PGraphics.encode_rle(res[-1][0] + 128*(wid == 1 and has_two_objs))
+                o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, res[-1][0].shape[1], res[-1][0].shape[0], ods_data, pts=c_pts)
+                ods_reg[oid] += 1
+        return cobjs, cobjs_cropped, res, pals, o_ods
+
+    def _get_undisplay(self, c_pts: float, pcs_id: int, wds_base: WDS, palette_id: int, pcs_fn: Callable[[...], PCS]) -> DisplaySet:
+        pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, palette_id, [], c_pts)
+        wds = wds_base.copy(pts=c_pts, in_ticks=False)
+        return DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
+
+
     def _convert(self, states, pgobjs, windows, durs):
         event_mask = self.wobs[0].event_mask()
         for wb in self.wobs[1:]:
@@ -653,16 +760,7 @@ class WOBSAnalyzer:
             #Set PTS a few ticks before the real timestamp so we swap the graphic plane
             # on time for the frame it is supposed to be on screen !
             return c_pts - 4/90e3
-
-        def get_undisplay(self, i: int, pcs_id: int, wds_base: WDS, palette_id: int) -> DisplaySet:
-            c_pts = get_pts(TC.tc2s(self.events[i].tc_out, self.bdn.fps))
-            pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, palette_id, [], c_pts)
-            wds = WDS(bytes(wds_base))
-            wds.pts = c_pts
-            return DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
-
-        def box_to_crop(box: Box) -> dict['str', int]:
-            return {'hc_pos': box.x, 'vc_pos': box.y, 'c_w': box.dx, 'c_h': box.dy}
+        ####
 
         double_buffering = 2
         i = 0
@@ -695,52 +793,29 @@ class WOBSAnalyzer:
 
             if durs[i][1] != 0:
                 assert i > 0
-                displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base, pal_id))
+                displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, wds_base, pal_id, pcs_fn))
                 pcs_id += 1
 
             c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
 
-            res, pals, o_ods, cobjs, off_screen, cobjs_cropped = [], [], [], [], [], []
+            res, pals, o_ods, cobjs, cobjs_cropped = [], [], [], [], []
+            #off_screen = []
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
-                if pgo is None:
-                    continue
-                if not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
+                if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
                     continue
                 has_two_objs += 1
-            has_two_objs = has_two_objs > 1
 
+            has_two_objs = has_two_objs > 1
             double_buffering = abs(double_buffering - 2)
 
-            for wid, pgo in pgobs_items:
-                oid = wid + double_buffering
-                if pgo is None:
-                    continue
-                if not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
-                    continue
-                imgs_chain = [Image.fromarray(img) for img in pgo.gfx[i-pgo.f:k-pgo.f]]
-                # imgs_chain = imgs_chain[:np.max(np.nonzero(pgo.mask[i-pgo.f:k-pgo.f]))+1]
-                # if len(imgs_chain) == 0:
-                #     logger.warning("Found an empty object, filtering it out.")
-                #     continue
-                off_screen.append(i+np.max(np.nonzero(pgo.mask[i-pgo.f:k-pgo.f])))
-                cobjs.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
-
-                cparams = box_to_crop(pgo.box)
-                cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
-                                                              cropped=True, **cparams))
-                n_colors = (128 if wid == 0 else 127) if has_two_objs else 255
-                res.append(Optimise.solve_sequence_fast(imgs_chain, n_colors, **kwargs))
-                pals.append(Optimise.diff_cluts(res[-1][1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
-
-                ods_data = PGraphics.encode_rle(res[-1][0] + 128*(wid == 1 and has_two_objs))
-                o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, res[-1][0].shape[1], res[-1][0].shape[0], ods_data, pts=c_pts)
-                ods_reg[oid] += 1
-            ####
+            r = self._generate_acquisition_ds(i, k, pgobs_items, windows, double_buffering, has_two_objs, ods_reg, c_pts)
+            cobjs, cobjs_cropped, res, pals, o_ods = r
 
             if len(pals) == 0:
-                displaysets.append(get_undisplay(self, i-1, pcs_id, wds_base, pal_id))
+                logger.error(f"Replaced an empty acquisition by a screen wipe at {self.events[i].tc_in}!")
+                displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, wds_base, pal_id, pcs_fn))
                 pcs_id += 1
                 i = k
                 continue
@@ -752,15 +827,11 @@ class WOBSAnalyzer:
                 pal |= pals[1][0]
             else:
                 pals.append([Palette()] * len(pals[0]))
-                off_screen.append(np.inf)
 
-            wds = WDS(bytes(wds_base))
-            wds.pts = c_pts
-
+            wds = wds_base.copy(pts=c_pts, in_ticks=False)
             pds = PDS.from_scratch(pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
             pcs = pcs_fn(pcs_id, states[i], False, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts)
-            ends = ENDS.from_scratch(pts=c_pts)
-            displaysets.append(DisplaySet([pcs, wds, pds] + o_ods + [ends]))
+            displaysets.append(DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)]))
 
             next_pal_full = False
             pcs_id += 1
@@ -772,9 +843,9 @@ class WOBSAnalyzer:
 
             if len(pals[0]) > 1:
                 zip_length = max(map(len, pals))
-                if off_screen[0] != np.inf and len(pals[0]) < zip_length:
+                if len(pals[0]) < zip_length:
                     pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[0][0].palette), max(pals[0][0].palette)+1)})]
-                if off_screen[1] != np.inf and len(pals[1]) < zip_length:
+                if has_two_objs and len(pals[1]) < zip_length:
                     pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[1][0].palette), max(pals[1][0].palette)+1)})]
 
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
@@ -815,7 +886,7 @@ class WOBSAnalyzer:
             pbar.close()
         ####while
         #final "undisplay" displayset
-        displaysets.append(get_undisplay(self, -1, pcs_id, wds_base, pal_id))
+        displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, wds_base, pal_id, pcs_fn))
         pcs_id += 1
         return Epoch(displaysets)
 
@@ -1361,7 +1432,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
     if warnings == 0 and compliant:
         logger.info("Output PGS seems compliant.")
     if warnings > 0 and compliant:
-        logger.warning(f"Excessive bandwidth detected, requires HW testing (PGS may go out of sync).")
+        logger.warning("Excessive bandwidth detected, requires HW testing (PGS may go out of sync).")
     elif not compliant:
         logger.error("PGStream will crash a HW decoder.")
     return compliant

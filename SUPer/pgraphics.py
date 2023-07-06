@@ -675,7 +675,7 @@ class PGPalette(Palette):
     def version_as_byte(self) -> int:
         return self.version & 0xFF
 
-    def store(self, palette: [dict[int, ...] | Type['PGPalette'] | Palette], pts: float) -> None:
+    def store(self, palette: Union[dict[int, ...], Type['PGPalette'], Palette], pts: float) -> None:
         self.palette |= palette if isinstance(palette, dict) else palette.palette
         self.sort()
         self.version += 1
