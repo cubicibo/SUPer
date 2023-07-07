@@ -214,49 +214,6 @@ class WindowOnBuffer:
         self.srs = screen_regions
         self.duration = duration
 
-    def bitmap_update_mask(self,
-           main_box: Box,
-           overlap_threshold: float = 0
-        ) -> npt.NDArray[np.uint16]:
-        """
-        Find pixel collisions of different screen areas. Areas that don't collide can
-        be optimised on the same bitmap without any visual artifact.
-        """
-        if not (0 <= overlap_threshold <= 1):
-            raise ValueError(f"Overlap threshold not within [0;1], got '{overlap_threshold}'")
-
-        update_mask = np.zeros(self.duration, np.uint8)
-        buffer = np.zeros(main_box.shape, dtype=np.uint8)
-
-        #we want to have the time of appearance in order
-        srs = sorted(self.srs, key=lambda sr: sr.t)
-        active_until = -1
-        for ctime in range(self.duration):
-            for sr in srs:
-                if ctime not in sr.temporal_range:
-                    continue
-                percentage = np.sum(buffer[sr.spatial_slice] & sr.region.image[ctime-sr.t])/np.sum(sr.region.image[ctime-sr.t])
-                if (sr.t > active_until or percentage >= overlap_threshold):
-                    update_mask[ctime] = 1
-                    buffer *= 0
-                active_until = max(active_until, sr.t + sr.dt)
-                buffer[sr.spatial_slice] |= sr.region.image[ctime-sr.t]
-        return update_mask
-
-    def event_mask(self, boolean: bool = True) -> npt.NDArray[np.uint8]:
-        """
-        event mask defines the times during which the window displays a composition.
-        When zero, the window is just fully transparent, without any composition obj.
-        """
-        mask = np.zeros(self.duration, dtype=np.uint16)
-        if boolean:
-            for sr in self.srs:
-                mask[sr.temporal_slice] = 1
-        else:
-            for sr in self.srs:
-                mask[sr.temporal_slice] += 1
-        return mask
-
     def get_window(self) -> Box:
         mxy = np.asarray([np.inf, np.inf])
         Mxy = np.asarray([-1, -1])
@@ -268,25 +225,6 @@ class WindowOnBuffer:
 
     def area(self) -> int:
         return self.get_window().area
-
-    def update_mask(self, boolean: bool = True) -> npt.NDArray[np.uint16]:
-        """
-        Update mask defines roughly when the buffer associated to the window should
-        be updated. This is likely to catch false positives, we have to filter them.
-        """
-        mask = np.zeros((self.duration,), dtype=np.uint16)
-        assert_str = "Caught an empty event."
-
-        if boolean:
-            for sr in self.srs:
-                assert sr.dt > 0, assert_str
-                # the event shows up at sr.t
-                mask[sr.t] = 1
-        else:
-            #Usable to filter times when an update is needed and what not.
-            for sr in self.srs:
-                assert sr.dt > 0, assert_str
-                mask[sr.t] += 1
 #%%
 
 class PGConvert:
@@ -352,25 +290,12 @@ class PGConvert:
 
 #%%
 class GroupingEngine:
-    class Mode(Enum):
-        SMALLEST_WINDOWS = 'area'
-        LEAST_ACQUISITIONS = 'acq'
-        SPECIAL_EFFECTS = 'special'
-
-        def __eq__(self, other: Any) -> bool:
-            if isinstance(self, self.__class__):
-                return self.value == other.value
-            if isinstance(other, str):
-                return self.value == other.lower()
-            return NotImplemented
-
     def __init__(self, n_groups: int = 2, **kwargs) -> None:
         if n_groups not in range(1, 3):
             raise AssertionError(f"GroupingEngine expects 1 or 2 groups, not '{n_groups}'.")
 
         self.n_groups = n_groups
         self.candidates = kwargs.pop('candidates', 25)
-        self.mode = kwargs.pop('mode', __class__.Mode.SMALLEST_WINDOWS)
 
         self.no_blur = True
         self.blur_mul = kwargs.pop('blur_mul', 1.1)
@@ -392,59 +317,21 @@ class GroupingEngine:
         ratio_how = 1/ratio_woh if 1/ratio_woh <= 1 else 1
         ratio_woh = ratio_woh if ratio_woh <= 1.3 else 1.3
 
-        ne_imgs = []
-        for event in group:
-            imgg = np.asarray(event.img.getchannel('A'), dtype=np.uint8)
-            img_blurred = (255*gaussian(imgg, (blur_c + blur_mul*ratio_how, blur_c + blur_mul*ratio_woh)))
-            img_blurred[img_blurred <= 0.25] = 0
-            img_blurred[img_blurred > 0.25] = 1
-            ne_imgs.append(img_blurred)
+        gs_blur = np.zeros((1, h, w), dtype=np.uint8)
+        gs_orig = np.zeros_like(gs_blur)
 
-        gs_graph = np.zeros((len(group), h, w), dtype=np.uint8)
-        gs_orig = np.zeros((len(group), h, w), dtype=np.uint8)
-        for k, (event, b_img) in enumerate(zip(group, ne_imgs)):
+        for k, event in enumerate(group):
             slice_x = slice(event.x-pxtl, event.x-pxtl+event.width)
             slice_y = slice(event.y-pytl, event.y-pytl+event.height)
-            gs_graph[k, slice_y, slice_x] = b_img.astype(np.uint8)
-            gs_orig[k, slice_y, slice_x] = np.array(event.img.getchannel('A'))
-        return regionprops(label(gs_graph)), gs_orig, box
-
-    def group_and_sort_flat(self, tbox: list[ScreenRegion], box: Box, duration: int) -> Optional[list[tuple[WindowOnBuffer]]]:
-        screen = np.zeros((box.dy, box.dx), np.uint16)
-        for sr in tbox:
-            screen[sr.spatial_slice] = 1
-
-        labeled_screen = label(screen)
-        regions = regionprops(labeled_screen)
-
-        if len(regions) == 1:
-            return [(WindowOnBuffer(tbox, duration),)]
-
-        # Too many regions, increase blurring and try again
-        if len(regions) > 16:
-            return None
-
-        new_tbox = [[] for reg in regions]
-        fake_srs = []
-        for sr in tbox:
-            id_owner = labeled_screen[sr.spatial_slice][0,0]-1
-            new_tbox[id_owner].append(sr)
-
-        for k, (region, ntb) in enumerate(zip(regions, new_tbox)):
-            region.slice = (slice(min(map(lambda x: x.t, ntb)), max(map(lambda x: x.t2, ntb))), *region.slice)
-            region._SUPer_rid = k
-            fake_srs.append(ScreenRegion.from_region(region))
-
-        results = self.group_and_sort(fake_srs, duration)
-
-        #Inject back the original ScreenRegions
-        for res in results:
-            for w in res:
-                new_sr = []
-                for sr in w.srs:
-                    new_sr.extend(new_tbox[sr.region._SUPer_rid])
-                w.srs = new_sr
-        return results
+            alpha = np.array(event.img.getchannel('A'), dtype=np.uint8)
+            event.unload()
+            blurred = (255*gaussian(alpha, (blur_c + blur_mul*ratio_how, blur_c + blur_mul*ratio_woh)))
+            blurred[blurred <= 0.25] = 0
+            blurred[blurred > 0.25] = 1
+            alpha[alpha > 0] = 1
+            gs_blur[0, slice_y, slice_x] |= (blurred > 0)
+            gs_orig[0, slice_y, slice_x] |= (alpha > 0)
+        return regionprops(label(gs_blur)), gs_orig, box
 
     @staticmethod
     def _get_combinations(n_regions: int) -> map:
@@ -491,7 +378,7 @@ class GroupingEngine:
                 region.slice = cls.crop_region(region, gs_origs)
                 tbox.append(ScreenRegion.from_region(region))
 
-            wobs = self.group_and_sort_flat(tbox, box, len(subgroup))
+            wobs = self.group_and_sort(tbox, len(subgroup))
             if wobs is None:
                 self.no_blur = False
                 self.blur_mul += 0.5
@@ -499,35 +386,7 @@ class GroupingEngine:
         if wobs is None:
             logger.warning("Grouping Engine giving up optimising layout. Using a single window.")
             wobs = [(WindowOnBuffer(tbox, duration=len(subgroup)),)]
-        return self.select_best_wob(wobs, box), box
-
-    def select_best_wob(self, wobs: list[tuple[WindowOnBuffer]], box: Box) -> tuple[WindowOnBuffer]:
-        """
-        This function has three mode, depending of the config mode:
-            - return the pair of WOBs with the minimum area
-            - return the pair of WOBs with the least amount of acquisition (rough est)
-            - TODOs: the pair of WOBs that would separate best special effects.
-
-        :param wobs: list of wobs pair
-        :param box: box containing all wobs
-        :return: list of wobs pair ordered ascendingly by total refreshed area.
-        """
-        if self.mode == __class__.Mode.SPECIAL_EFFECTS:
-            logger.warning("Not implemented yet, returning min area.")
-        if self.mode in [__class__.Mode.SPECIAL_EFFECTS, __class__.Mode.SMALLEST_WINDOWS]:
-            return tuple(sorted(wobs[0], key=lambda x: x.srs[0].t))
-        elif self.mode == __class__.Mode.LEAST_ACQUISITIONS:
-            scores = []
-            #wobs is a list of pairs of wob
-            for wobp in wobs[:self.candidates]:
-                area_refreshed = 0
-                for wob in wobp:
-                    mask = wob.bitmap_update_mask(box)
-                    area_refreshed += wob.area()*np.sum(mask)
-                scores.append(area_refreshed)
-            return next(map(lambda ws: ws[0], sorted(zip(wobs, scores), key=lambda ws : ws[1])))
-        else:
-            raise NotImplementedError("Unknown grouping choice mode.")
+        return tuple(sorted(wobs[0], key=lambda x: x.srs[0].t)), box
 
     @staticmethod
     def crop_region(region: _Region, gs_origs: npt.NDArray[np.uint8]) -> _Region:
@@ -737,13 +596,9 @@ class WOBSAnalyzer:
 
 
     def _convert(self, states, pgobjs, windows, durs):
-        event_mask = self.wobs[0].event_mask()
-        for wb in self.wobs[1:]:
-            event_mask += wb.event_mask()
-
         wd_base = [WindowDefinition.from_scratch(k, w.x+self.box.x, w.y+self.box.y, w.dx, w.dy) for k, w in enumerate(windows)]
         wds_base = WDS.from_scratch(wd_base, pts=0.0)
-        n_actions = len(event_mask)
+        n_actions = len(durs)
         displaysets = []
 
         def get_obj(frame, pgobjs: dict[int, list[PGObject]]) -> dict[int, Optional[PGObject]]:
