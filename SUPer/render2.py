@@ -18,8 +18,7 @@
 
 
 
-from typing import Any, TypeVar, Optional, Type, Union, Callable
-from enum import Enum
+from typing import TypeVar, Optional, Type, Union, Callable
 from dataclasses import dataclass
 from itertools import combinations, chain, zip_longest
 
@@ -36,7 +35,7 @@ from .utils import get_super_logger, Pos, Dim, BDVideo, TimeConv as TC
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise, Preprocess
-from .pgraphics import PGraphics, PGDecoder, PGObject, FadeEffect, PGObjectBuffer
+from .pgraphics import PGraphics, PGDecoder, PGObject, PGObjectBuffer
 from .palette import Palette, PaletteEntry
 
 _Region = TypeVar('Region')
@@ -170,14 +169,6 @@ class ScreenRegion(Box):
         if len(slices) != 3:
             raise ValueError("Expected 3 slices (t, y, x).")
         return cls(*Y, *X, *T, region)
-
-    @property
-    def temporal_slice(self) -> slice:
-        return slice(self.t, self.t2)
-
-    @property
-    def temporal_range(self) -> range:
-        return range(self.t, self.t2)
 
     @property
     def spatial_slice(self) -> tuple[slice]:

@@ -20,7 +20,7 @@ from numpy import typing as npt
 import numpy as np
 from typing import Union, Optional, Type
 from enum import IntEnum
-from itertools import chain, starmap
+from itertools import starmap
 
 from .palette import Palette, PaletteEntry
 from .segments import WDS, ODS, DisplaySet, PDS
@@ -441,9 +441,6 @@ class PGObject:
             mask[eff.t:eff.t+eff.dt] = True
         return len(mask) == sum(mask) + np.sum(np.asarray(self.mask, np.bool_) == 0)
 
-    def evaluate_fades(self) -> None:
-        self._effects['fade'] = FadeEffect.get_fade_chain(self.gfx)
-
     def is_active(self, frame) -> bool:
         return frame in range(self.f, self.f+len(self.mask))
 
@@ -451,50 +448,6 @@ class PGObject:
         if self.is_active(frame):
             return self.mask[frame-self.f]
         return False
-####
-
-#%%
-@dataclass
-class FadeEffect:
-    ref_img_idx: int
-    t: int
-    dt: int
-    coeffs: npt.NDArray[np.uint8]
-
-    @classmethod
-    def get_fade_chain(cls, chain: npt.NDArray[np.uint8]) -> float:
-        if len(chain) > 1:
-            I = np.zeros((len(chain)))
-            Imax = np.zeros((len(chain)))
-
-            for k, img in enumerate(chain):
-                I[k:k+1] = np.sum(img[:,:,3])/(img.shape[0]*img.shape[1])
-                Imax[k] = np.max(img[:,:,3])
-            I /= np.max(I)
-            dI = np.diff(I)
-            dImax = np.diff(Imax)
-            if np.all(dI*dImax >= 0):
-                # Get the fade effects (where we don't need to update the image!)
-                return cls.check_mse(chain, I)
-        return None
-
-    @classmethod
-    def check_mse(cls, imgs: npt.NDArray[np.uint8], I: npt.NDArray[float]) -> list['FadeEffect']:
-        fade_start = None
-        effects = []
-        chain32 = imgs.astype(np.int32)
-        for k, rgba_img in enumerate(chain(chain32[1:], [None])):
-            if rgba_img is not None:
-                mse = np.square(np.subtract(chain32[k,:,:,:3], rgba_img[:,:,:3]))
-            if rgba_img is not None and 70 > mse.mean() and mse.max() < 1500:
-                if fade_start is None:
-                    fade_start = k
-            elif fade_start is not None:
-                ref_idx = fade_start + np.argmax(I[fade_start:k+1])
-                effects.append(cls(ref_idx, fade_start, k+1-fade_start, I[fade_start:k+1]/I[ref_idx]))
-                fade_start = None
-        return effects
-
 ####
 #%%
 class PGObjectBuffer:
