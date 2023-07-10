@@ -921,44 +921,7 @@ class WOBAnalyzer:
             event_cnt += 1
         ####while
         return # StopIteration
-
-
-# def test_diplayset(ds: DisplaySet) -> None:
-#     """
-#     This function performs hard check on the display set
-#     if its structure is bad, it raises an assertion error.
-#     This is preferred over a "return false" because a bad displayset
-#     will typically crash a hardware decoder and we don't want that.
-#     """
-#     current_pts = ds.pcs.pts
-#     if epoch.ds[kd-1].pcs.pts != prev_pts and current_pts != epoch.ds[kd-1].pcs.pts:
-#         prev_pts = epoch.ds[kd-1].pcs.pts
-#     else:
-#         logger.warning(f"Two displaysets at {current_pts} [s] (internal rendering error?)")
-
-#     if ds.pcs.composition_state != PCS.CompositionState.NORMAL:
-#         assert ds.pcs.pal_flag is False, "Palette update on epoch start or acquisition."
-#     if ds.wds:
-#         assert ds.pcs.pal_flag is False, "Manipulating windows on palette update."
-#         assert len(ds.wds.windows) <= 2, "More than two windows."
-#     if ds.ods:
-#         assert ds.pcs.pal_flag is False, "Defining ODS in palette update."
-#         start_cnt, close_cnt = 0, 0
-#         for ods in ds.ods:
-#             start_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST))
-#             close_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_LAST))
-#         assert start_cnt == close_cnt, "ODS segments flags mismatch."
-#     if ds.pds:
-#         for pds in ds.pds:
-#             if ds.pcs.pal_flag:
-#                 assert ds.pcs.pal_id == pds.p_id, "Palette ID mismatch between PCS and PDS on palette update."
-#                 assert len(ds) == 3, "Unusual display set structure for a palette update."
-#             assert pds.p_id < 8, "Using undefined palette ID."
-#             assert pds.n_entries <= 256, "Defining more than 256 palette entries."
-#     assert ds.end, "No END segment in DS."
-#     assert ds.end.pts >= ds.end.dts, "Not MPEG2 standard compliant."
-    ####
-
+####
 
 #%%
 def get_wipe_duration(wds: WDS) -> int:
@@ -1156,6 +1119,38 @@ def set_pts_dts(ds: DisplaySet, buffer: PGObjectBuffer, _wrong: bool = False):
         assert ds.end.tdts == ds.ods[-1].tpts, "PTS(END) != PTS(ODSlast)"
     return #don't return the DS because we modified by reference already
 
+def test_diplayset(ds: DisplaySet) -> bool:
+    """
+    This function performs hard check on the display set
+    if its structure is bad, it raises an assertion error.
+    This is preferred over a "return false" because a bad displayset
+    will typically crash a hardware decoder and we don't want that.
+
+    :param ds: Display Set to test for structural compliancy
+    """
+    comply = ds.pcs is not None
+    if ds.pcs.composition_state != PCS.CompositionState.NORMAL:
+        comply &= ds.pcs.pal_flag is False # "Palette update on epoch start or acquisition."
+        comply &= ds.pcs.pal_id < 8 # "Using undefined palette ID."
+    if ds.wds:
+        comply &= ds.pcs.pal_flag is False # "Manipulating windows on palette update (conflicting display updates)."
+        comply &= len(ds.wds.windows) <= 2 # "More than two windows."
+    if ds.pds:
+        for pds in ds.pds:
+            if ds.pcs.pal_flag:
+                comply &= len(ds) == 3 # "Unusual display set structure for a palette update."
+                comply &= ds.pcs.pal_id == pds.p_id # "Palette ID mismatch between PCS and PDS on palette update."
+            comply &= pds.p_id < 8 # "Using undefined palette ID."
+            comply &= pds.n_entries <= 256 # "Defining more than 256 palette entries."
+    if ds.ods:
+        start_cnt = close_cnt = 0
+        for ods in ds.ods:
+            start_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST))
+            close_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_LAST))
+        comply &= start_cnt == close_cnt # "ODS segments flags mismatch."
+    return comply & (ds.end is not None) # "No END segment in DS."
+    ####
+
 def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> bool:
     prev_pts = -1
     last_cbbw = 0
@@ -1170,13 +1165,15 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
     to_tc = lambda pts: TC.s2tc(pts, fps)
 
     for ke, epoch in enumerate(epochs):
-        ods_acc = 0
         window_area = {}
         objects_sizes = {}
         buffer = PGObjectBuffer()
 
         for kd, ds in enumerate(epoch.ds):
-            size_ds = 0
+            prev_pcs_id = -1
+            ods_vn = {}
+            pds_vn = [-1] * 8
+            compliant = test_diplayset(ds)
             decoded_this_ds = 0
             coded_this_ds = 0
 
@@ -1189,14 +1186,15 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
 
             for seg in ds.segments:
                 areas2gp = {}
-                size_ds += len(bytes(seg))
                 if seg.pts != current_pts and current_pts != -1 and _cnt_pts:
                     logger.warning(f"Display set has non-constant pts at {to_tc(seg.pts)} or {to_tc(current_pts)}.")
                     current_pts = -1
                 if isinstance(seg, PCS):
+                    if seg.composition_n == prev_pcs_id:
+                        logger.warning(f"Displayset does not increment composition number. Composition will be ignored by HW decoder at {to_tc(seg.pts)}.")
+                    prev_pcs_id = seg.composition_n
                     if int(seg.composition_state) != 0:
                         # On acquisition, the object buffer is flushed
-                        ods_acc = 0
                         objects_sizes = {}
                     for cobj in seg.cobjects:
                         areas2gp[cobj.o_id] = -1 if not cobj.cropped else cobj.c_w*cobj.c_h
@@ -1204,15 +1202,23 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 elif isinstance(seg, WDS):
                     for w in seg.windows:
                         window_area[w.window_id] = w.width*w.height
+                elif isinstance(seg, PDS):
+                    if pds_vn[seg.p_id] == seg.p_vn:
+                        logger.warning(f"Palette version not incremented, will be discarded by decoder. Palette {seg.p_id} at {to_tc(seg.pts)}.")
+                    pds_vn[seg.p_id] = seg.p_vn
                 elif isinstance(seg, ODS):
                     if int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST):
                         if (slot := buffer.get(seg.o_id)) is None:
                             if not buffer.allocate_id(seg.o_id, seg.height, seg.width):
                                 logger.error("Object buffer overflow (not enough memory for all object slots).")
                                 compliant = False
+                            ods_vn[seg.o_id] = seg.o_vn
                         elif slot != (seg.height, seg.width):
                             logger.error(f"Object-slot {seg.o_id} dimensions mismatch. Slot: {slot}, object: {(seg.height, seg.width)}")
                             compliant = False
+                        elif ods_vn[seg.o_id] == seg.o_vn:
+                            logger.warning(f"Object version not incremented, will be discarded by decoder. ODS {seg.o_id} at {to_tc(seg.pts)}.")
+                        ods_vn[seg.o_id] = seg.o_vn
                         if cumulated_ods_size > 0:
                             logger.error("A past ODS was not properly terminated! Stream is critically corrupted!")
                             compliant = False
@@ -1224,20 +1230,14 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
 
                     if int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_LAST):
                         if cumulated_ods_size > PGDecoder.CODED_BUF_SIZE:
-                            logger.warning(f"Object has size >1 MiB at {to_tc(seg.pts)}. Some decoders don't support this. Reduce object complexity?")
+                            logger.warning(f"Object size >1 MiB at {to_tc(seg.pts)} is unsupported by some decoders. Reduce object horizontal complexity.")
                             warnings += 1
                         cumulated_ods_size = 0
-                elif isinstance(seg, PDS):
-                    if seg.p_id >= 8:
-                        logger.warning(f"Using an undefined palette ID at {to_tc(seg.pts)}.")
-                        compliant = False
-
+                ####elif
+            ####for
             area_copied = 0
             for idx, area in areas2gp.items():
                 area_copied += area if area >= 0 else objects_sizes[idx]
-            ####
-            ods_acc += decoded_this_ds
-
             coded_buffer_pts = last_cbbw + coded_this_ds
             decoded_buffer_pts = last_dbbw + decoded_this_ds
 
@@ -1251,12 +1251,10 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 last_dbbw = decoded_buffer_pts
                 coded_buffer_bandwidth, decoded_buffer_bandwidth = 0, 0
 
-            # This is probably the hardest constraint to meet: ts_packet are read at, at most Rx=16Mbps
+            # This is probably the hardest constraint to meet: ts_packet are read at Rx=16Mbps
             if coded_buffer_bandwidth > (max_rate := PGDecoder.RX):
                 if coded_buffer_bandwidth/max_rate >= 2:
                     logger.warning(f"High instantaneous coded bandwidth at {to_tc(seg.pts)} (not critical - fair warning)")
-                else:
-                    logger.info(f"High coded bandwidth at {to_tc(seg.pts)} (not critical - fair warning).")
                 # This is not an issue unless it happens very frequently, so we don't mark as not compliant
 
             if prev_pts != seg.pts:
@@ -1265,18 +1263,13 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 coded_bw_ra.append(coded_buffer_pts)
                 coded_bw_ra_pts.append(seg.pts)
 
-            if (rate:=sum(coded_bw_ra)/abs(coded_bw_ra_pts[-1]-coded_bw_ra_pts[0])) > (max_rate:=16*(1024**2)):
-                logger.warning(f"Exceeding coded bandwidth at ~{to_tc(seg.pts)}, {100*rate/max_rate:.03f}%.")
+            if (rate:=sum(coded_bw_ra)/abs(coded_bw_ra_pts[-1]-coded_bw_ra_pts[0])) > PGDecoder.RX:
+                logger.warning(f"Exceeding coded bandwidth at ~{to_tc(seg.pts)}, {100*rate/PGDecoder.RX:.03f}%.")
                 warnings += 1
 
             if decoded_buffer_bandwidth > PGDecoder.RD:
                 logger.warning(f"Exceeding decoded buffer bandwidth at {to_tc(seg.pts)}.")
-                warnings +=1
-
-            # Decoded object plane is 4 MiB
-            if ods_acc >= PGDecoder.DECODED_BUF_SIZE:
-                logger.warning(f"Decoded obect buffer overrun at {to_tc(seg.pts)}.")
-                compliant = False
+                warnings += 1
 
             #On palette update, we re-evaluate the existing graphic plane with a new CLUT.
             # so we are not subject to the Rc constraint.
@@ -1289,7 +1282,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
             if nf == 0:
                 last_rc += Rc
             elif (last_rc+Rc)/nf > PGDecoder.RC:
-                logger.warning(f"Graphic plane overloaded. Graphics may flicker at {to_tc(seg.pts)}.")
+                logger.warning(f"Graphic plane overloaded. Display is not ensured at {to_tc(seg.pts)}.")
                 warnings += 1
 
     if warnings == 0 and compliant:
