@@ -1149,7 +1149,7 @@ def test_diplayset(ds: DisplaySet) -> bool:
             close_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_LAST))
         comply &= start_cnt == close_cnt # "ODS segments flags mismatch."
     return comply & (ds.end is not None) # "No END segment in DS."
-    ####
+####
 
 def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> bool:
     prev_pts = -1
@@ -1299,5 +1299,5 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
     if warnings > 0 and compliant:
         logger.warning("Excessive bandwidth detected, requires HW testing (PGS may go out of sync).")
     elif not compliant:
-        logger.error("PGStream will crash a HW decoder.")
+        logger.error("Output PGS is not compliant. Expect display issues or decoder crash.")
     return compliant

@@ -23,6 +23,7 @@ from os import path
 from scenaristream import EsMuiStream
 
 from .utils import Shape, TimeConv as TC, _pinit_fn, get_super_logger
+from .pgraphics import PGDecoder
 from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
 from .filestreams import BDNXML, SUPFile
 
@@ -59,34 +60,30 @@ class BDNRender:
 
         logger.info("Finding epochs...")
 
-        #Empirical max: we need <=6 frames @23.976 to clear the buffers and windows.
-        # This is doing coarse epoch definitions, without any consideration to
-        # what's being displayed on screen.
-        delay_refresh = 0.01+0.25*np.multiply(*bdn.format.value)/(1920*1080)
-        for group in bdn.groups(delay_refresh):
-            offset = len(group)-1
+        #In the worst case, there is a single composition object for the whole screen.
+        screen_area = np.multiply(*bdn.format.value)
+        epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
+        #Round up to tick
+        epochstart_dd_fnr = lambda o_area: round(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
+
+        for group in bdn.groups(epochstart_dd_fn(screen_area)):
             subgroups = []
-            last_split = len(group)
-            largest_shape = Shape(0, 0)
+            offset = len(group)
+            max_area = 0
 
-            #Backward pass for fine epochs definition
-            # We consider the delay between events and the size of the overall
-            # graphic that we want to display.
-            for k, event in enumerate(reversed(group[1:])):
-                offset -= 1
-                if np.multiply(*group[offset].shape) > np.multiply(*largest_shape):
-                    largest_shape = event.shape
-                nf = TC.tc2f(event.tc_in, bdn.fps) - TC.tc2f(group[offset].tc_out, bdn.fps)
+            for k, event in enumerate(reversed(group[1:]), 1):
+                max_area = max(np.multiply(*event.shape), max_area)
 
-                if nf > 0 and nf/bdn.fps > 3*_pinit_fn(largest_shape)/90e3:
-                    subgroups.append(group[offset+1:last_split])
-                    last_split = offset + 1
-            if group[offset+1:last_split] != []:
-                subgroups.append(group[offset+1:last_split])
-            if subgroups:
-                subgroups[-1].insert(0, group[0])
+                delay = TC.tc2s(event.tc_in, bdn.fps) - TC.tc2s(group[len(group)-k-1].tc_out, bdn.fps)
+                if epochstart_dd_fnr(max_area) <= delay:
+                    subgroups.append(group[offset-k:offset])
+                    offset -= len(subgroups[-1])
+                    max_area = 0
+            if len(group[:offset]) > 0:
+                subgroups.append(group[:offset])
             else:
-                subgroups = [[group[0]]]
+                assert offset == 0
+            assert sum(map(len, subgroups)) == len(group)
 
             #Epoch generation (each subgroup will be its own epoch)
             for subgroup in reversed(subgroups):
@@ -118,7 +115,7 @@ class BDNRender:
         for epoch in self._epochs:
             for ds in epoch:
                 for seg in ds:
-                    seg.pts = seg.pts*adjustment_ratio - 3/90e3
+                    seg.pts = seg.pts*adjustment_ratio - 3/PGDecoder.FREQ
 
     def scale_pcsfps(self) -> bool:
         from SUPer.utils import BDVideo
@@ -143,7 +140,7 @@ class BDNRender:
                     seg.dts = max(seg.pts - 0.3735, prev_ds_pts)
                 seg.dts = seg.pts #enforce == for END segment
                 # set DTS one tick in the future.
-                prev_ds_pts = seg.pts + 1/90e3
+                prev_ds_pts = seg.pts + 1/PGDecoder.FREQ
 
     def merge(self, input_sup) -> None:
         epochs = SUPFile(input_sup).epochs()
