@@ -352,8 +352,13 @@ class GroupingEngine:
             windows[key] = (WindowOnBuffer(arr_sr, duration=duration), WindowOnBuffer(other_sr, duration=duration))
             areas[key] = sum(map(lambda wb: wb.area(), windows[key]))
 
+        output = []
         #Here, we can sort by ascending area – first has the smallest windows
-        return [windows[k] for k, _ in sorted(areas.items(), key=lambda x: x[1])]
+        # we also discard overlapping windows
+        for k, _ in sorted(areas.items(), key=lambda x: x[1]):
+            if len(windows[k]) == 1 or 0 == windows[k][0].get_window().overlap_with(windows[k][1].get_window()):
+                output.append(windows[k])
+        return output if len(output) else None
 
     def group(self, subgroup: list[Type[BaseEvent]]) -> tuple[list[tuple[WindowOnBuffer]], Box]:
         cls = self.__class__
