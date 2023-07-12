@@ -785,7 +785,7 @@ class WOBSAnalyzer:
         for event in self.events:
             tic = TC.tc2f(event.tc_in, self.bdn.fps)
             toc = TC.tc2f(event.tc_out,self.bdn.fps)
-            delays.append((toc-tic, top-tic))
+            delays.append((toc-tic, tic-top))
             top = toc
         return delays
 ####
@@ -1165,15 +1165,17 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
     to_tc = lambda pts: TC.s2tc(pts, fps)
 
     for ke, epoch in enumerate(epochs):
+        prev_pcs_id = -1
         window_area = {}
         objects_sizes = {}
+        ods_vn = {}
+        pds_vn = [-1] * 8
         buffer = PGObjectBuffer()
 
+        compliant &= bool(epoch[0].pcs.composition_state & epoch[0].pcs.CompositionState.EPOCH_START)
+
         for kd, ds in enumerate(epoch.ds):
-            prev_pcs_id = -1
-            ods_vn = {}
-            pds_vn = [-1] * 8
-            compliant = test_diplayset(ds)
+            compliant &= test_diplayset(ds)
             decoded_this_ds = 0
             coded_this_ds = 0
 
@@ -1184,12 +1186,13 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
             else:
                 logger.warning(f"Two displaysets at {to_tc(current_pts)} (internal rendering error?)")
 
-            for seg in ds.segments:
+            for ks, seg in enumerate(ds.segments):
                 areas2gp = {}
                 if seg.pts != current_pts and current_pts != -1 and _cnt_pts:
                     logger.warning(f"Display set has non-constant pts at {to_tc(seg.pts)} or {to_tc(current_pts)}.")
                     current_pts = -1
                 if isinstance(seg, PCS):
+                    compliant &= (ks == 0) #PCS is not first in DisplaySet
                     if seg.composition_n == prev_pcs_id:
                         logger.warning(f"Displayset does not increment composition number. Composition will be ignored by HW decoder at {to_tc(seg.pts)}.")
                     prev_pcs_id = seg.composition_n
@@ -1200,6 +1203,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                         areas2gp[cobj.o_id] = -1 if not cobj.cropped else cobj.c_w*cobj.c_h
 
                 elif isinstance(seg, WDS):
+                    compliant &= (ks == 1) #WDS is not second segment of DS, if present
                     for w in seg.windows:
                         window_area[w.window_id] = w.width*w.height
                 elif isinstance(seg, PDS):
@@ -1233,8 +1237,13 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                             logger.warning(f"Object size >1 MiB at {to_tc(seg.pts)} is unsupported by some decoders. Reduce object horizontal complexity.")
                             warnings += 1
                         cumulated_ods_size = 0
+                elif isinstance(seg, ENDS):
+                    compliant &= ks == len(ds)-1 # END segment is not last or not alone
                 ####elif
             ####for
+            if ds.pcs.pal_flag or ds.wds is not None:
+                compliant &= pds_vn[ds.pcs.pal_id] >= 0 #Check that the used palette is indeed set in the decoder.
+
             area_copied = 0
             for idx, area in areas2gp.items():
                 area_copied += area if area >= 0 else objects_sizes[idx]
