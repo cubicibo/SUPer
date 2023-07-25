@@ -183,6 +183,7 @@ class BDVideo:
 
 
 class TimeConv:
+    CLS = Timecode
     FORCE_NDF = True
     @staticmethod
     def s2f(s: float, fps: float, *, round_f: Optional[Callable[[float], float]] = round) -> float:

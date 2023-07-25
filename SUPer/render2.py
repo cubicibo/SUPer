@@ -211,73 +211,12 @@ class WindowOnBuffer:
         for sr in self.srs:
             mxy[:] = np.min([np.asarray((sr.y,  sr.x)),  mxy], axis=0)
             Mxy[:] = np.max([np.asarray((sr.y2, sr.x2)), Mxy], axis=0)
-        mxy, Mxy = np.int16((mxy, Mxy))
+        mxy, Mxy = np.int32((mxy, Mxy))
         return Box(mxy[0], max(Mxy[0]-mxy[0], 8), mxy[1], max(Mxy[1]-mxy[1], 8))
 
     def area(self) -> int:
         return self.get_window().area
-#%%
-
-class PGConvert:
-    def __init__(self, windows: dict[int, WindowOnBuffer], events: list[Type[BaseEvent]]) -> None:
-        assert type(windows) is dict
-        self.windows = windows
-
-    def render_single(self, box: Box, event: Type[BaseEvent], window_id: int) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
-        assert window_id in self.windows, "Unknown window ID."
-
-        bitmap, palette, padding = self._quantize_adapt_palette(event.img)
-
-        bitmap_box = padding*np.ones(box.shape, dtype=np.uint8)
-        bitmap_box[event.y-box.y:event.y-box.y+event.height, event.x-box.x:event.x-box.x+event.width] = bitmap
-
-        return palette, bitmap_box[self.windows[window_id].get_window().slice]
-
-    @staticmethod
-    def _find_most_transparent(palette: dict[tuple[int], int]) -> tuple[npt.NDArray[np.uint8], Optional[int]]:
-        padding_entry = None
-        min_alpha = (256, None)
-        if len(palette) >= 256:
-            assert len(palette) == 256, "More than 256 colors."
-            for entry, k in palette.items():
-                if entry[-1] == 0 and padding_entry is None:
-                    padding_entry = k
-                if min_alpha[0] < entry[-1]:
-                    min_alpha = (entry[-1], k)
-            if padding_entry is None:
-                return None, None #Do another turn with 255 colors
-        else:
-            if (0, 0, 0, 0) in palette:
-                padding_entry = palette[(0, 0, 0, 0)]
-            else:
-                padding_entry = len(palette)
-                palette[(0, 0, 0, 0)] = padding_entry
-        return np.asarray(list(palette.keys()), dtype=np.uint8), padding_entry
-
-    def _quantize_adapt_palette(self, img) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8], int]:
-        padding, k = None, 0
-        while padding is None:
-            bitmap, palette = Preprocess.quantize(img, 256-k, kmeans_fade=self.kwargs.get('kmeans_fade', False),
-                                                  kmeans_quant=self.kwargs.get('kmeans_quant', False))
-            palette, padding = __class__._find_most_transparent(palette)
-            k+=1
-        return bitmap, palette, padding
-
-    def render_multiple(self,
-          box: Box,
-          event: Type[BaseEvent],
-        ) -> tuple[npt.NDArray[np.uint8], tuple[npt.NDArray[np.uint8]]]:
-        """
-        Essentially find the PDS and CLU-bitmaps when 2+ compositions
-        are on screen simultaneously (they share the same palette)
-        """
-        bitmap, palette, padding = self._quantize_adapt_palette(event.img)
-
-        bitmap_box = padding*np.ones(box.shape, dtype=np.uint8)
-        bitmap_box[event.y-box.y:event.y-box.y+event.height, event.x-box.x:event.x-box.x+event.width] = bitmap
-
-        imgs = [bitmap_box[wob.get_window().slice] for wob in self.windows.values()]
-        return (palette, tuple(imgs))
+####
 
 #%%
 class GroupingEngine:
@@ -466,22 +405,30 @@ class WOBSAnalyzer:
                     pgobjs[wid].append(pgobj)
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
-        acqs, absolutes, margins, durs = self.find_acqs(pgobjs_proc, windows)
+        acqs, absolutes, margins, durs, nodes = self.find_acqs(pgobjs_proc, windows)
         states = [PCS.CompositionState.NORMAL] * len(acqs)
         states[0] = PCS.CompositionState.EPOCH_START
         drought = 0
 
-        thresh = self.kwargs.get('quality_factor', 0.8)
+        thresh = self.kwargs.get('quality_factor', 0.75)
         dthresh = self.kwargs.get('dquality_factor', 0.035)
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
         for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
             if forced or (acq and margin > max(thresh-dthresh*drought, 0)):
+                if forced and not acq:
+                    logger.debug("Impossible acquisition")
                 states[k] = PCS.CompositionState.ACQUISITION
                 drought = 0
             else:
                 #try to not do too many acquisitions, as we want to compress the stream.
                 drought += 1*refresh_rate
+
+        # offset = 0
+        # actions = [None]*len(nodes)
+        # for k, node in enumerate(nodes):
+        #     actions[k] if
+
         return self._convert(states, pgobjs, windows, durs)
 
     @staticmethod
@@ -590,7 +537,6 @@ class WOBSAnalyzer:
         wds = wds_base.copy(pts=c_pts, in_ticks=False)
         return DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
 
-
     def _convert(self, states, pgobjs, windows, durs):
         wd_base = [WindowDefinition.from_scratch(k, w.x+self.box.x, w.y+self.box.y, w.dx, w.dy) for k, w in enumerate(windows)]
         wds_base = WDS.from_scratch(wd_base, pts=0.0)
@@ -620,6 +566,7 @@ class WOBSAnalyzer:
         pal_vn = 0
         c_pts = 0
         pal_id = 0
+        last_cobjs = []
 
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
@@ -650,7 +597,6 @@ class WOBSAnalyzer:
             c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
 
             res, pals, o_ods, cobjs, cobjs_cropped = [], [], [], [], []
-            #off_screen = []
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
@@ -730,6 +676,7 @@ class WOBSAnalyzer:
                     pcs_id += 1
                 assert z+1 == k
             i = k
+            last_cobjs = cobjs if is_compat_mode else cobjs_cropped
             if use_pbar:
                 pbar.n = i
                 pbar.update()
@@ -738,7 +685,6 @@ class WOBSAnalyzer:
         ####while
         #final "undisplay" displayset
         displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, wds_base, pal_id, pcs_fn))
-        pcs_id += 1
         return Epoch(displaysets)
 
     def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows):
@@ -746,7 +692,7 @@ class WOBSAnalyzer:
         gp_clear_dur = PGDecoder.copy_gp_duration(sum(map(lambda x: x.area, windows)))
         is_compat_mode = self.kwargs.get('pgs_compatibility', False)
 
-        durs = self.get_durations()
+        durs, nodes = self.get_durations()
 
         dtl = np.zeros((len(durs)), dtype=float)
         valid = np.zeros((len(durs),), dtype=np.bool_)
@@ -755,13 +701,16 @@ class WOBSAnalyzer:
         objs = [None for objs in pgobjs_proc]
 
         prev_dt = 6
+        offset = 0
         for k, (dt, delay) in enumerate(durs):
-            margin = (delay + prev_dt)*1/self.bdn.fps
+            nodes[k+offset].windows = windows
+            if nodes[k+offset].is_flush:
+                nodes[k+(offset:=offset + 1)].windows = windows
+            margin = (delay + prev_dt)/self.bdn.fps
             force_acq = False
             for wid, wd in enumerate(windows):
                 if objs[wid] and not objs[wid].is_active(k):
                     objs[wid] = None
-                    #force_acq = True
                 if len(pgobjs_proc[wid]):
                     if not objs[wid] and pgobjs_proc[wid][0].is_active(k):
                         objs[wid] = pgobjs_proc[wid].pop(0)
@@ -769,14 +718,14 @@ class WOBSAnalyzer:
                     else:
                         assert not pgobjs_proc[wid][0].is_active(k)
 
-            areas = list(map(lambda obj: obj.area*obj.is_visible(k), filter(lambda x: x is not None, objs)))
-            c_areas = areas if is_compat_mode else map(lambda obj: obj.box.area*obj.is_visible(k), filter(lambda x: x is not None, objs))
-            td = PGDecoder.decode_display_duration(gp_clear_dur, areas, c_areas)
-            valid[k] = (td < margin)
-            dtl[k] = 1-td/margin
+            nodes[k+offset].objects = objs.copy()
+            valid[k] = nodes[k+offset].dts() > nodes[k+offset-1].dts_end() if k > 0 else True
             absolutes[k] = force_acq
+            #margin is computed on the PTSes but we use it to normalise the DTS delta.
+            # so this is not really the right margin, but it is a good enough indicaiton.
+            dtl[k] = (nodes[k+offset].dts() - nodes[k+offset-1].dts_end())/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
             prev_dt = dt
-        return valid, absolutes, dtl, durs
+        return valid, absolutes, dtl, durs, nodes
     ####
 
     def get_durations(self) -> npt.NDArray[np.uint32]:
@@ -787,12 +736,16 @@ class WOBSAnalyzer:
         """
         top = TC.tc2f(self.events[0].tc_in, self.bdn.fps)
         delays = []
+        nodes = []
         for event in self.events:
             tic = TC.tc2f(event.tc_in, self.bdn.fps)
             toc = TC.tc2f(event.tc_out,self.bdn.fps)
             delays.append((toc-tic, tic-top))
             top = toc
-        return delays
+            if tic-top > 0:
+                nodes.append(DSNode([], {}, tc_pts=TC.CLS(self.bdn.fps, event.tc_out), is_flush=True))
+            nodes.append(DSNode([], {}, tc_pts=TC.CLS(self.bdn.fps, event.tc_in)))
+        return delays, nodes
 ####
 #%%
 
@@ -927,6 +880,47 @@ class WOBAnalyzer:
         ####while
         return # StopIteration
 ####
+class DSNode:
+    def __init__(self, objects: list[tuple[int, Box]], windows: dict[int, Box], tc_pts: TC.CLS, is_flush: bool = False) -> None:
+        self.windows = windows
+        self.objects = objects
+        self.tc_pts = tc_pts
+        self.is_flush = is_flush
+
+    def _wipe_duration(self) -> float:
+        return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
+
+    def dts_end(self) -> float:
+        return sum(self.get_dts_markers())/PGDecoder.FREQ
+
+    def dts(self) -> float:
+        return self.get_dts_markers()[0]/PGDecoder.FREQ
+
+    def delta_dts(self) -> float:
+        return self.get_dts_markers()[1]/PGDecoder.FREQ
+
+    def pts(self) -> float:
+        return self.tc_pts.float
+
+    def get_dts_markers(self) -> float:
+        t_decoding = 0
+        decode_duration = self._wipe_duration()
+
+        for wid, obj in enumerate(self.objects):
+            if obj is None:
+                continue
+            box = self.windows[wid]
+            read = box.dy*box.dx*PGDecoder.FREQ
+            dec = np.ceil(read/PGDecoder.RD)
+            cop = np.ceil(read/PGDecoder.RC)
+            t_decoding += dec
+            decode_duration = max(decode_duration, t_decoding) + cop
+        ####
+
+        if t_decoding == 0:
+            decode_duration += 1
+        return (round(self.tc_pts.float*PGDecoder.FREQ) - decode_duration, t_decoding)
+
 
 #%%
 def get_wipe_duration(wds: WDS) -> int:
@@ -982,7 +976,6 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int) -
         #This DS defines new objects without displaying them
         elif not ds.pcs.pal_flag:
             decode_duration = sum(ddurs.values())
-            t_decoding = decode_duration
         #pal flag with ODS, not desirable.
         else:
             raise AssertionError("Illegal DS (palette update with ODS!)")
@@ -1015,114 +1008,6 @@ def apply_pts_dts(ds: DisplaySet, ts: tuple[int, int]) -> None:
     assert len(ds) == len(ts), "Timestamps-DS size mismatch."
     for seg, (pts, dts) in zip(ds, ts):
         seg.tpts, seg.tdts = pts, dts
-
-def set_pts_dts(ds: DisplaySet, buffer: PGObjectBuffer, _wrong: bool = False):
-    """
-    Set PTS and DTS of a DisplaySet as if the decoder uses memcopies on the displayed
-    object dimension. less restrictive than the _sc version.
-    Hypothesis: All segments in the DS have their PTS equal to the desired on-screen PTS
-    This function will then adapt everything in time according to this desired PTS.
-
-    :param ds:     DisplaySet with PTS set as stated, and DTS=0 for all segments
-    :param buffer: PG Object Buffer that can be allocated and fetched during the epoch.
-    :param _wrong: Implement Scenarist BD behaviour.
-    """
-    if ds.pcs.pal_flag:
-        assert len(ds) == 3 and isinstance(ds[1], PDS), "Not a valid DS."
-        ds.end.tpts = ds.end.tdts = ds.pds[0].tpts = ds.pds[0].tdts = ds.pcs.tdts = ds.pcs.tpts
-        return
-
-    ddurs = {}
-    for ods in ds.ods:
-        if ods.flags & ods.ODSFlags.SEQUENCE_FIRST:
-            assert ods.o_id not in ddurs, f"Object {ods.o_id} defined twice in DS."
-            if (shape := buffer.get(ods.o_id)) is not None:
-                assert (ods.height, ods.width) == shape, "Dimension mismatch, buffer corruption."
-            else:
-                # Allocate a buffer slot for this object
-                assert buffer.allocate_id(ods.o_id, ods.height, ods.width) is True, "Slot already allocated or buffer overflow."
-            ddurs[ods.o_id] = np.ceil(ods.height*ods.width*PGDecoder.FREQ/PGDecoder.RD)
-
-    t_copy_window = 0
-    t_decoding = 0
-
-    if ds.wds:
-        # WDS exist -> display refresh
-        wipe_duration = 0
-        windows = {wd.window_id: (wd.height, wd.width) for wd in ds.wds.windows}
-
-        if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
-            wipe_duration = np.ceil(ds.pcs.width*ds.pcs.height*PGDecoder.FREQ/PGDecoder.RC)
-        else: #elif ds.pcs.composition_state & ds.pcs.CompositionState.ACQUISITION:
-            wipe_duration = sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values()))
-
-        decode_duration = wipe_duration
-        object_decode_duration = ddurs.copy()
-
-        #For every composition object, compute the transfer time
-        # taking into account decoding and copying, with cropping parameters
-        for cobj in ds.pcs.cobjects:
-            shape = buffer.get(cobj.o_id)
-            assert shape is not None, "Object does not exist in buffer."
-            h, w = shape
-            area = h*w if cobj.cropped is False else cobj.c_w*cobj.c_h
-
-            #we copy at most window_area
-            area = min(windows[cobj.window_id][0]*windows[cobj.window_id][1], area)
-            copy_dur = np.ceil(area*PGDecoder.FREQ/PGDecoder.RC)
-            t_copy_window += copy_dur
-
-            t_decoding += object_decode_duration.pop(cobj.o_id, 0)
-            decode_duration = max(decode_duration, t_decoding) + copy_dur
-
-        #if both objects are in the same window, they are copied at the same time
-        # according to the patent... (probably not, there's no reason for that unless the objects are blended)
-        # here I assume a worse condition: combination of both copying time, => overlapping area is counted twice.
-        if len(ds.pcs.cobjects) == 2 and ds.pcs.cobjects[0].window_id == ds.pcs.cobjects[1].window_id:
-            decode_duration = t_decoding + t_copy_window
-
-        if _wrong and len(ds.ods) == 0:
-            # Makes no sense but this is what Scenarist does on [PCS, WDS, (PDS), END]
-            # because we only give the time to wipe the windows, not to copy the object
-            decode_duration = ds.wds.n_windows + wipe_duration
-
-        # The display set may contain more object that will be displayed later.
-        if len(object_decode_duration) > 0:
-            #we assume that the objects are properly ordered in the stream (displayed ODS are already processed)
-            t_decoding += sum(object_decode_duration.values())
-
-            #the decode duration is then either the total decoding length or the transfer time
-            # (PROBABLY WRONG -> Can a DS continue to be decoded after PTS(pcs) has passed?)
-            decode_duration = max(decode_duration, t_decoding)
-    else: #if ds.wds
-        decode_duration = sum(ddurs.values())
-        t_decoding = decode_duration
-
-    ds.pcs.tdts = ds.pcs.tpts - decode_duration
-
-    # Doubt: on [PCS(no composition), WDS, END] (= epoch end), we have:
-    # DTS(pcs) == DTS(wds), PTS(wds) - DTS(wds) = SUM(CLEAR(WDi)), and PTS(pcs)==PTS(wds)
-    # as we don't need any margin to copy any object (there's none to process)
-    if ds.wds:
-        ds.wds.tdts = ds.pcs.tdts
-        ds.wds.tpts -= t_copy_window
-    if ds.pds:
-        ds.pds[0].tdts = ds.pds[0].tpts = ds.pcs.tdts
-    last_dts = ds.pcs.tdts
-
-    #Propagate DTS(ODSi+1) = PTS(ODSi) by ODS blocks (groups of ODS sharing an object_id)
-    for k, ods in enumerate(ds.ods):
-        if ods.ODSFlags.SEQUENCE_FIRST & ods.flags:
-            for ods_other in ds.ods[k:]:
-                if ods_other.o_id != ods.o_id:
-                    break
-                ods.tdts = last_dts
-                ods.tpts = ods.tdts + ddurs.get(ods.o_id)
-            last_dts = ods.tpts
-    ds.end.tdts = ds.end.tpts = ds.pcs.tdts + t_decoding
-    if ds.ods:
-        assert ds.end.tdts == ds.ods[-1].tpts, "PTS(END) != PTS(ODSlast)"
-    return #don't return the DS because we modified by reference already
 
 def test_diplayset(ds: DisplaySet) -> bool:
     """
