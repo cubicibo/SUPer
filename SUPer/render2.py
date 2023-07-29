@@ -405,7 +405,7 @@ class WOBSAnalyzer:
                     pgobjs[wid].append(pgobj)
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
-        acqs, absolutes, margins, durs, nodes = self.find_acqs(pgobjs_proc, windows)
+        acqs, absolutes, margins, durs, nodes, flags = self.find_acqs(pgobjs_proc, windows)
         states = [PCS.CompositionState.NORMAL] * len(acqs)
         states[0] = PCS.CompositionState.EPOCH_START
         drought = 0
@@ -415,21 +415,15 @@ class WOBSAnalyzer:
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
         for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
-            if forced or (acq and margin > max(thresh-dthresh*drought, 0)):
-                if forced and not acq:
+            if (forced or (acq and margin > max(thresh-dthresh*drought, 0))) and flags[k] != 1:
+                if forced and not acq and flags[k] != 1:
                     logger.debug("Impossible acquisition")
                 states[k] = PCS.CompositionState.ACQUISITION
                 drought = 0
             else:
                 #try to not do too many acquisitions, as we want to compress the stream.
                 drought += 1*refresh_rate
-
-        # offset = 0
-        # actions = [None]*len(nodes)
-        # for k, node in enumerate(nodes):
-        #     actions[k] if
-
-        return self._convert(states, pgobjs, windows, durs)
+        return self._convert(states, pgobjs, windows, durs, flags, nodes)
 
     @staticmethod
     def _get_stack_direction(*box) -> tuple[npt.NDArray[np.uint16], tuple[int, int]]:
@@ -440,18 +434,18 @@ class WOBSAnalyzer:
             return np.array([widths[0], 0], np.int32), (sum(widths), max(heights))
         return np.array([0, heights[0]], np.int32), (max(widths), sum(heights))
 
-    def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, windows,
-                                    double_buffering: int, has_two_objs: bool,
-                                    ods_reg: list[int], c_pts: float) -> ...:
+    def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, windows: list[Box],
+                                    double_buffering: int, has_two_objs: bool, is_compat_mode: bool,
+                                    ods_reg: list[int], c_pts: float, normal_case_refresh: bool) -> ...:
         box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
         cobjs, cobjs_cropped = [], []
-        res, pals, o_ods = [], [], []
+        pals, o_ods = [], []
 
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
         # and then pass that to the optimiser. Colors are efficiently distributed on the objects.
         # In the future, this will be the default behaviour unless there's a NORMAL CASE to update
         # to redefine an object in the middle.
-        if has_two_objs:
+        if has_two_objs and normal_case_refresh is False:
             compositions = [pgo for _, pgo in pgobs_items if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]))]
 
             offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x.box, compositions)))
@@ -490,7 +484,8 @@ class WOBSAnalyzer:
 
             for wid, pgo in pgobs_items:
                 if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f])):
-                    oid = wid + double_buffering
+                    oid = wid + double_buffering[wid]
+                    double_buffering[wid] = abs(2 - double_buffering[wid])
                     #get bitmap
                     window_bitmap = palette_entry_tsp*np.ones((windows[wid].dy, windows[wid].dx), np.uint8)
                     nx, ny = coords
@@ -511,33 +506,70 @@ class WOBSAnalyzer:
         else:
             # If in the chain there's a NORMAL CASE redefinition, we
             # must work with separate palette for each object (window0: 128, window1:127)
+            id_skipped = None
             for wid, pgo in pgobs_items:
                 if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
                     continue
-                oid = wid + double_buffering
+                n_colors = (128 if wid == 0 else 127) if has_two_objs else 255
+
+                if isinstance(normal_case_refresh, list) and not normal_case_refresh[wid]:
+                    assert sum(normal_case_refresh) == 1
+                    #Take latest used object id
+                    oid = wid + abs(2 - double_buffering[wid])
+                    cobjs.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
+                    cparams = box_to_crop(pgo.box)
+                    cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'],
+                                                              False, cropped=True, **cparams))
+                    pals.append([Palette()] * (k-i))
+                    id_skipped = oid
+                    continue
+                oid = wid + double_buffering[wid]
+                double_buffering[wid] = abs(2 - double_buffering[wid])
                 imgs_chain = [Image.fromarray(img) for img in pgo.gfx[i-pgo.f:k-pgo.f]]
                 cobjs.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x, windows[wid].y+self.box.y, False))
 
                 cparams = box_to_crop(pgo.box)
                 cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
-                                                              cropped=True, **cparams))
+                                                          cropped=True, **cparams))
                 #Do not use 256 colors because some authoring software reserve palette entry 0xFF.
                 # if two objects, window_1 has only 127 colours.
-                n_colors = (128 if wid == 0 else 127) if has_two_objs else 255
-                res.append(Optimise.solve_sequence_fast(imgs_chain, n_colors, **self.kwargs))
-                pals.append(Optimise.diff_cluts(res[-1][1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
+                wd_bitmap = Optimise.solve_sequence_fast(imgs_chain, n_colors, **self.kwargs)
+                pals.append(Optimise.diff_cluts(wd_bitmap[1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
+                ods_data = PGraphics.encode_rle(wd_bitmap[0] + 128*(wid == 1 and has_two_objs))
 
-                ods_data = PGraphics.encode_rle(res[-1][0] + 128*(wid == 1 and has_two_objs))
-                o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, res[-1][0].shape[1], res[-1][0].shape[0], ods_data, pts=c_pts)
+                #On normal case, we generate one chain of palette update and
+                #add in a screen wipe if necessary. This is not used if the object is changed.
+                if normal_case_refresh and len(pals[-1]) < k-i:
+                    mibm, mabm = np.min(wd_bitmap[0]), np.max(wd_bitmap[0])
+                    pals[-1].append(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(mibm, mabm+1)}))
+                    pals[-1].extend([Palette()] * ((k-i)-len(pals[-1])))
+                if wid == 1 and has_two_objs:
+                    assert len(pals) == 2
+                    for p in pals[-1]:
+                        p.offset(128)
+
+                o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, wd_bitmap[0].shape[1], wd_bitmap[0].shape[0], ods_data, pts=c_pts)
                 ods_reg[oid] += 1
-        return cobjs, cobjs_cropped, res, pals, o_ods
+            if id_skipped is not None:
+                assert isinstance(normal_case_refresh, list)
+                #The existing object should be the first composition (so key has to eval to False for it to be first)
+                cobjs_cropped = sorted(cobjs_cropped, key=lambda cobj: cobj.o_id != id_skipped)
+                cobjs = sorted(cobjs, key=lambda cobj: cobj.o_id != id_skipped)
+
+        pal = pals[0][0]
+        if has_two_objs:
+            pal |= pals[1][0]
+        else:
+            pals.append([Palette()] * len(pals[0]))
+
+        return cobjs if is_compat_mode else cobjs_cropped, pals, o_ods, pal
 
     def _get_undisplay(self, c_pts: float, pcs_id: int, wds_base: WDS, palette_id: int, pcs_fn: Callable[[...], PCS]) -> DisplaySet:
         pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, palette_id, [], c_pts)
         wds = wds_base.copy(pts=c_pts, in_ticks=False)
         return DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
 
-    def _convert(self, states, pgobjs, windows, durs):
+    def _convert(self, states, pgobjs, windows, durs, flags, nodes):
         wd_base = [WindowDefinition.from_scratch(k, w.x+self.box.x, w.y+self.box.y, w.dx, w.dy) for k, w in enumerate(windows)]
         wds_base = WDS.from_scratch(wd_base, pts=0.0)
         n_actions = len(durs)
@@ -556,12 +588,12 @@ class WOBSAnalyzer:
         def get_pts(c_pts: float) -> float:
             #Set PTS a few ticks before the real timestamp so we swap the graphic plane
             # on time for the frame it is supposed to be on screen !
-            return c_pts - 4/90e3
+            return max(c_pts - 3/PGDecoder.FREQ, 0)
         ####
 
-        double_buffering = 2
         i = 0
-        ods_reg = [0]*64
+        double_buffering = [0]*2
+        ods_reg = [0]*4
         pcs_id = 0
         pal_vn = 0
         c_pts = 0
@@ -584,7 +616,10 @@ class WOBSAnalyzer:
 
         pbar = tqdm(range(n_actions))
         while i < n_actions:
+            normal_case_refresh = False
             for k in range(i+1, n_actions+1):
+                if k < n_actions:
+                    normal_case_refresh |= (flags[k] == 1)
                 if k == n_actions or states[k] != PCS.CompositionState.NORMAL:
                     break
             assert k > i
@@ -596,7 +631,6 @@ class WOBSAnalyzer:
 
             c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
 
-            res, pals, o_ods, cobjs, cobjs_cropped = [], [], [], [], []
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
@@ -604,30 +638,15 @@ class WOBSAnalyzer:
                     continue
                 has_two_objs += 1
 
-            has_two_objs = has_two_objs > 1
-            double_buffering = abs(double_buffering - 2)
+            #Normal case refresh implies we are refreshing one object out of two displayed.
+            has_two_objs = has_two_objs > 1 or normal_case_refresh
 
-            r = self._generate_acquisition_ds(i, k, pgobs_items, windows, double_buffering, has_two_objs, ods_reg, c_pts)
-            cobjs, cobjs_cropped, res, pals, o_ods = r
-
-            if len(pals) == 0:
-                logger.error(f"Replaced an empty acquisition by a screen wipe at {self.events[i].tc_in}!")
-                displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, wds_base, pal_id, pcs_fn))
-                pcs_id += 1
-                i = k
-                continue
-
-            pal = pals[0][0]
-            if has_two_objs:
-                for p in pals[1]:
-                    p.offset(128)
-                pal |= pals[1][0]
-            else:
-                pals.append([Palette()] * len(pals[0]))
+            r = self._generate_acquisition_ds(i, k, pgobs_items, windows, double_buffering, has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
+            cobjs, pals, o_ods, pal = r
 
             wds = wds_base.copy(pts=c_pts, in_ticks=False)
             pds = PDS.from_scratch(pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
-            pcs = pcs_fn(pcs_id, states[i], False, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts)
+            pcs = pcs_fn(pcs_id, states[i], False, pal_id, cobjs, c_pts)
             displaysets.append(DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)]))
 
             next_pal_full = False
@@ -639,21 +658,25 @@ class WOBSAnalyzer:
                 next_pal_full = True
 
             if len(pals[0]) > 1:
-                zip_length = max(map(len, pals))
-                if len(pals[0]) < zip_length:
-                    pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[0][0].palette), max(pals[0][0].palette)+1)})]
-                if has_two_objs and len(pals[1]) < zip_length:
-                    pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[1][0].palette), max(pals[1][0].palette)+1)})]
+                # Pad palette chains
+                if not normal_case_refresh:
+                    zip_length = max(map(len, pals))
+                    if len(pals[0]) < zip_length:
+                        pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[0][0].palette), max(pals[0][0].palette)+1)})]
+                    if has_two_objs and len(pals[1]) < zip_length:
+                        pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[1][0].palette), max(pals[1][0].palette)+1)})]
+                pals[0] += [Palette()] * (k-i - len(pals[0]))
+                pals[1] += [Palette()] * (k-i - len(pals[1]))
 
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
-                    pal |= (p1 | p2)
+                    pal |= (pals[0][z-i] | pals[1][z-i])
                     assert states[z] == PCS.CompositionState.NORMAL
 
                     #Is there a know screen clear in the chain? then use palette screen clear here
                     if durs[z][1] != 0:
                         c_pts_und = get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps))
-                        pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts_und)
+                        pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs, c_pts_und)
                         pds = PDS.from_scratch(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(0, max(pal.palette)+1)}), p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts_und)
                         displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts_und)]))
                         pcs_id += 1
@@ -663,10 +686,21 @@ class WOBSAnalyzer:
                             pal_vn = 0
                         next_pal_full = True
 
-                    pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs if is_compat_mode else cobjs_cropped, c_pts)
-                    pds = PDS.from_scratch(p1 | p2 if not next_pal_full else pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
-                    displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)]))
+                    if flags[z] == 1:
+                        normal_case_refresh = nodes[pcs_id].new_mask
+                        r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), windows, double_buffering, has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
+                        cobjs, n_pals, o_ods, new_pal = r
+                        pal |= new_pal
+                        for nz, (new_p1, new_p2) in enumerate(zip_longest(n_pals[0], n_pals[1], fillvalue=Palette()), z):
+                            pals[0][nz-i] |= new_p1
+                            pals[1][nz-i] |= new_p2
+                        normal_case_refresh = True
 
+                    pcs = pcs_fn(pcs_id, states[z], flags[z] != 1, pal_id, cobjs, c_pts)
+                    pds = PDS.from_scratch(pals[0][z-i] | pals[1][z-i] if not next_pal_full else pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
+                    wds_upd = [wds_base.copy(pts=c_pts, in_ticks=False)] if flags[z] == 1 else []
+                    ods_upd = o_ods if flags[z] == 1 else []
+                    displaysets.append(DisplaySet([pcs] + wds_upd + [pds] + ods_upd +[ENDS.from_scratch(pts=c_pts)]))
                     next_pal_full = False
                     pal_vn += 1
                     if pal_vn >= 256:
@@ -674,9 +708,11 @@ class WOBSAnalyzer:
                         pal_vn = 0
                         next_pal_full = True
                     pcs_id += 1
+                    if z+1 == k:
+                        break
                 assert z+1 == k
             i = k
-            last_cobjs = cobjs if is_compat_mode else cobjs_cropped
+            last_cobjs = cobjs
             if use_pbar:
                 pbar.n = i
                 pbar.update()
@@ -689,43 +725,53 @@ class WOBSAnalyzer:
 
     def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows):
         #get the frame count between each screen update and find where we can do acqs
-        gp_clear_dur = PGDecoder.copy_gp_duration(sum(map(lambda x: x.area, windows)))
-        is_compat_mode = self.kwargs.get('pgs_compatibility', False)
-
         durs, nodes = self.get_durations()
 
         dtl = np.zeros((len(durs)), dtype=float)
         valid = np.zeros((len(durs),), dtype=np.bool_)
         absolutes = np.zeros_like(valid)
+        flags = [0] * len(durs)
 
         objs = [None for objs in pgobjs_proc]
 
         prev_dt = 6
         offset = 0
         for k, (dt, delay) in enumerate(durs):
+            is_new = [False]*len(windows)
             nodes[k+offset].windows = windows
             if nodes[k+offset].is_flush:
                 nodes[k+(offset:=offset + 1)].windows = windows
             margin = (delay + prev_dt)/self.bdn.fps
             force_acq = False
             for wid, wd in enumerate(windows):
+                is_new[wid] = False
                 if objs[wid] and not objs[wid].is_active(k):
                     objs[wid] = None
                 if len(pgobjs_proc[wid]):
                     if not objs[wid] and pgobjs_proc[wid][0].is_active(k):
                         objs[wid] = pgobjs_proc[wid].pop(0)
                         force_acq = True
+                        is_new[wid] = True
                     else:
                         assert not pgobjs_proc[wid][0].is_active(k)
 
             nodes[k+offset].objects = objs.copy()
+            nodes[k+offset].new_mask = is_new
             valid[k] = nodes[k+offset].dts() > nodes[k+offset-1].dts_end() if k > 0 else True
+            #see if normal case is possible
+            if not valid[k] and force_acq:
+                if sum(map(lambda o: o is not None, objs)) == 2 and sum(is_new) == 1:
+                    logger.debug("NORMAL CASE DEF")
+                    nodes[k+offset].partial = True
+                    valid[k] = nodes[k+offset].dts() > nodes[k+offset-1].dts_end()
+                flags[k] = 1 if valid[k] else -1
+
             absolutes[k] = force_acq
             #margin is computed on the PTSes but we use it to normalise the DTS delta.
             # so this is not really the right margin, but it is a good enough indicaiton.
             dtl[k] = (nodes[k+offset].dts() - nodes[k+offset-1].dts_end())/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
             prev_dt = dt
-        return valid, absolutes, dtl, durs, nodes
+        return valid, absolutes, dtl, durs, nodes, flags
     ####
 
     def get_durations(self) -> npt.NDArray[np.uint32]:
@@ -881,11 +927,19 @@ class WOBAnalyzer:
         return # StopIteration
 ####
 class DSNode:
-    def __init__(self, objects: list[tuple[int, Box]], windows: dict[int, Box], tc_pts: TC.CLS, is_flush: bool = False) -> None:
+    def __init__(self,
+            objects: list[tuple[int, Box]],
+            windows: dict[int, Box],
+            tc_pts: TC.CLS,
+            new_mask: list[bool] = [],
+            is_flush: bool = False,
+        ) -> None:
         self.windows = windows
         self.objects = objects
         self.tc_pts = tc_pts
         self.is_flush = is_flush
+        self.new_mask = new_mask
+        self.partial = False
 
     def _wipe_duration(self) -> float:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
@@ -911,9 +965,11 @@ class DSNode:
                 continue
             box = self.windows[wid]
             read = box.dy*box.dx*PGDecoder.FREQ
-            dec = np.ceil(read/PGDecoder.RD)
+            if not self.partial or self.partial and not self.new_mask[wid]:
+                dec = np.ceil(read/PGDecoder.RD)
+                t_decoding += dec
+
             cop = np.ceil(read/PGDecoder.RC)
-            t_decoding += dec
             decode_duration = max(decode_duration, t_decoding) + cop
         ####
 
