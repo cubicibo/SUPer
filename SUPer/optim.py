@@ -46,7 +46,9 @@ class Preprocess:
         #use cv2 for high transparency images, pillow has issues
 
         alpha = np.asarray(img.split()[-1], dtype=np.uint16)
-        kmeans_fade = (np.mean(alpha[alpha > 0]) < 38) and kmeans_fade
+        non_tsp_pix = alpha[alpha > 0]
+        if non_tsp_pix.size > 0:
+            kmeans_fade = (np.mean(non_tsp_pix) < 38) and kmeans_fade
 
         if kmeans_quant or kmeans_fade:
             # Use PIL to get approximate number of clusters
@@ -231,7 +233,6 @@ class Optimise:
             sequences.append(clut[img])
 
         sequences = np.stack(sequences, axis=2).astype(np.uint8)
-
         #catalog the sequences
         seq_occ: dict[int, tuple[int, npt.NDArray[np.uint8]]] = {}
         for i in range(sequences.shape[0]):
