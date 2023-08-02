@@ -48,7 +48,7 @@ class Preprocess:
         alpha = np.asarray(img.split()[-1], dtype=np.uint16)
         non_tsp_pix = alpha[alpha > 0]
         if non_tsp_pix.size > 0:
-            kmeans_fade = (np.mean(non_tsp_pix) < 38) and kmeans_fade
+            kmeans_fade = (np.mean(non_tsp_pix) < 38 * (1 + kwargs.get('tsp_thresh', 0))) and kmeans_fade
 
         if kmeans_quant or kmeans_fade:
             # Use PIL to get approximate number of clusters
