@@ -23,6 +23,7 @@ from os import path
 from scenaristream import EsMuiStream
 
 from .utils import Shape, TimeConv as TC, _pinit_fn, get_super_logger
+from .pgraphics import PGDecoder
 from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
 from .filestreams import BDNXML, SUPFile
 
@@ -33,11 +34,7 @@ class BDNRender:
         self.bdn_file = bdnf
         self._epochs = []
         self.skip_errors = kwargs.pop("skip_errors", False)
-        #Leave norm threshold to zero, it can generate unexpected behaviours.
-        #Colors should be 256. Anything above is illegal, anything below results in a
-        # loss of quality.
-        self.kwargs = {'colors': 256}
-        self.kwargs |= kwargs
+        self.kwargs = kwargs
 
     def optimise(self) -> None:
         kwargs = self.kwargs
@@ -54,75 +51,61 @@ class BDNRender:
                 sys.exit(1)
 
         clip_framerate = bdn.fps
-        if self.kwargs.pop('adjust_dropframe', False):
+        if self.kwargs.get('adjust_dropframe', False):
             if isinstance(bdn.fps, float):
                 bdn.fps = round(bdn.fps)
-                logger.info(f"NTSC timing flag: using {bdn.fps} for timestamps rather than BDNXML {clip_framerate:.03f}.")
+                logger.info(f"NTSC timing flag: using {round(bdn.fps)} for timestamps rather than BDNXML {clip_framerate:.03f}.")
             else:
+                self.kwargs['adjust_dropframe'] = False
                 logger.warning("Ignored NDF flag with integer framerate.")
 
         logger.info("Finding epochs...")
 
-        #Empirical max: we need <=6 frames @23.976 to clear the buffers and windows.
-        # This is doing coarse epoch definitions, without any consideration to
-        # what's being displayed on screen.
-        delay_refresh = 0.01+0.25*np.multiply(*bdn.format.value)/(1920*1080)
-        for group in bdn.groups(delay_refresh):
-            offset = len(group)-1
+        #In the worst case, there is a single composition object for the whole screen.
+        screen_area = np.multiply(*bdn.format.value)
+        epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
+        #Round up to tick
+        epochstart_dd_fnr = lambda o_area: round(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
+
+        for group in bdn.groups(epochstart_dd_fn(screen_area)):
             subgroups = []
-            last_split = len(group)
-            largest_shape = Shape(0, 0)
+            offset = len(group)
+            max_area = 0
 
-            #Backward pass for fine epochs definition
-            # We consider the delay between events and the size of the overall
-            # graphic that we want to display.
-            for k, event in enumerate(reversed(group[1:])):
-                offset -= 1
-                if np.multiply(*group[offset].shape) > np.multiply(*largest_shape):
-                    largest_shape = event.shape
-                nf = TC.tc2f(event.tc_in, bdn.fps) - TC.tc2f(group[offset].tc_out, bdn.fps)
+            for k, event in enumerate(reversed(group[1:]), 1):
+                max_area = max(np.multiply(*event.shape), max_area)
 
-                if nf > 0 and nf/bdn.fps > 3*_pinit_fn(largest_shape)/90e3:
-                    subgroups.append(group[offset+1:last_split])
-                    last_split = offset + 1
-            if group[offset+1:last_split] != []:
-                subgroups.append(group[offset+1:last_split])
-            if subgroups:
-                subgroups[-1].insert(0, group[0])
+                delay = TC.tc2s(event.tc_in, bdn.fps) - TC.tc2s(group[len(group)-k-1].tc_out, bdn.fps)
+                if epochstart_dd_fnr(max_area) <= delay:
+                    subgroups.append(group[offset-k:offset])
+                    offset -= len(subgroups[-1])
+                    max_area = 0
+            if len(group[:offset]) > 0:
+                subgroups.append(group[:offset])
             else:
-                subgroups = [[group[0]]]
+                assert offset == 0
+            assert sum(map(len, subgroups)) == len(group)
 
             #Epoch generation (each subgroup will be its own epoch)
             for subgroup in reversed(subgroups):
-                logger.info(f"Generating epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}...")
+                logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}:")
+
                 wob, box = GroupingEngine(n_groups=2, **kwargs).group(subgroup)
+                logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
 
                 wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, **kwargs)
                 epoch = wobz.analyze()
                 self._epochs.append(epoch)
-                logger.info(f" => optimised as {len(epoch)} display sets on {len(wob)} window(s).")
+                logger.info(f" => optimised as {len(epoch)} display sets.")
             gc.collect()
-
-        if clip_framerate != bdn.fps:
-            self.ndf_shift(bdn, clip_framerate)
 
         scaled_fps = False
         if self.kwargs.get('scale_fps', False):
             scaled_fps = self.scale_pcsfps()
 
-        if self.kwargs.get('enforce_dts', False):
-            self.compute_set_dts()
-
         # Final check
-        is_compliant(self._epochs, bdn.fps * int(1+scaled_fps))
+        is_compliant(self._epochs, bdn.fps * int(1+scaled_fps), self.kwargs.get('enforce_dts', True))
     ####
-
-    def ndf_shift(self, bdn: BDNXML, clip_framerate: float) -> None:
-        adjustment_ratio = 1.001
-        for epoch in self._epochs:
-            for ds in epoch:
-                for seg in ds:
-                    seg.pts = seg.pts*adjustment_ratio - 3/90e3
 
     def scale_pcsfps(self) -> bool:
         from SUPer.utils import BDVideo
@@ -135,19 +118,6 @@ class BDNRender:
         else:
             logger.error(f"Expexcted 25 or 30 fps for 2x scaling. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}'.")
         return scaled_fps
-
-    def compute_set_dts(self) -> None:
-        logger.info("Setting DTS values in the stream.")
-        prev_ds_pts = 0
-        for epoch in self._epochs:
-            for ds in epoch:
-                for seg in ds:
-                    # -0.3735 because: (decode 4 MiB + screen flush + screen refresh)
-                    # i.e this is the max shift we would need in the worst case
-                    seg.dts = max(seg.pts - 0.3735, prev_ds_pts)
-                seg.dts = seg.pts #enforce == for END segment
-                # set DTS one tick in the future.
-                prev_ds_pts = seg.pts + 1/90e3
 
     def merge(self, input_sup) -> None:
         epochs = SUPFile(input_sup).epochs()

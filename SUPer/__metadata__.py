@@ -18,7 +18,7 @@
 
 __MAJOR = 0
 __MINOR = 1
-__REVISION = 7
+__REVISION = 8
 
 __name__    = "SUPer"
 __version__ = '.'.join(map(str, [__MAJOR, __MINOR, __REVISION]))

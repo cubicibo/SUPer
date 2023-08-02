@@ -1,8 +1,8 @@
-Pillow==9.2.0
+Pillow
 numpy
 py-flags==1.1.4
 sklearn
-scikit-image==0.19.3
+scikit-image
 guizero
 opencv-python
 pyopencl

@@ -20,7 +20,7 @@ from numpy import typing as npt
 import numpy as np
 from typing import Union, Optional, Type
 from enum import IntEnum
-from itertools import chain, starmap
+from itertools import starmap
 
 from .palette import Palette, PaletteEntry
 from .segments import WDS, ODS, DisplaySet, PDS
@@ -441,9 +441,6 @@ class PGObject:
             mask[eff.t:eff.t+eff.dt] = True
         return len(mask) == sum(mask) + np.sum(np.asarray(self.mask, np.bool_) == 0)
 
-    def evaluate_fades(self) -> None:
-        self._effects['fade'] = FadeEffect.get_fade_chain(self.gfx)
-
     def is_active(self, frame) -> bool:
         return frame in range(self.f, self.f+len(self.mask))
 
@@ -451,61 +448,6 @@ class PGObject:
         if self.is_active(frame):
             return self.mask[frame-self.f]
         return False
-
-    def decode_duration(self) -> float:
-        return self.area/PGDecoder.RD
-
-    def transfer_duration(self) -> float:
-        return self.area/PGDecoder.RC
-
-    def estimate_rle_length(self) -> int:
-        return int(self.area*0.33)
-
-    def estimate_arrival_duration(self) -> float:
-        return self.estimate_rle_length()/PGDecoder.RX
-####
-#%%
-@dataclass
-class FadeEffect:
-    ref_img_idx: int
-    t: int
-    dt: int
-    coeffs: npt.NDArray[np.uint8]
-
-    @classmethod
-    def get_fade_chain(cls, chain: npt.NDArray[np.uint8]) -> float:
-        if len(chain) > 1:
-            I = np.zeros((len(chain)))
-            Imax = np.zeros((len(chain)))
-
-            for k, img in enumerate(chain):
-                I[k:k+1] = np.sum(img[:,:,3])/(img.shape[0]*img.shape[1])
-                Imax[k] = np.max(img[:,:,3])
-            I /= np.max(I)
-            dI = np.diff(I)
-            dImax = np.diff(Imax)
-            if np.all(dI*dImax >= 0):
-                # Get the fade effects (where we don't need to update the image!)
-                return cls.check_mse(chain, I)
-        return None
-
-    @classmethod
-    def check_mse(cls, imgs: npt.NDArray[np.uint8], I: npt.NDArray[float]) -> list['FadeEffect']:
-        fade_start = None
-        effects = []
-        chain32 = imgs.astype(np.int32)
-        for k, rgba_img in enumerate(chain(chain32[1:], [None])):
-            if rgba_img is not None:
-                mse = np.square(np.subtract(chain32[k,:,:,:3], rgba_img[:,:,:3]))
-            if rgba_img is not None and 70 > mse.mean() and mse.max() < 1500:
-                if fade_start is None:
-                    fade_start = k
-            elif fade_start is not None:
-                ref_idx = fade_start + np.argmax(I[fade_start:k+1])
-                effects.append(cls(ref_idx, fade_start, k+1-fade_start, I[fade_start:k+1]/I[ref_idx]))
-                fade_start = None
-        return effects
-
 ####
 #%%
 class PGObjectBuffer:
@@ -659,3 +601,93 @@ class PGObjectBuffer:
             self._slots[new_id] = (height, width)
             return new_id
         return None
+####
+
+#%%
+@dataclass
+class PGPalette(Palette):
+    version: int = 0
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self._pts = -1
+
+    def lock_until(self, pts: float) -> None:
+        self._pts = pts
+        self.version += 1
+
+    def diff(self, other: Palette) -> Palette:
+        return Palette({k: pe for k, pe in other.palette.items() if self.palette.get(k, None) != pe})
+
+    def writable_at(self, dts: float) -> bool:
+        return self._pts < dts
+
+    @property
+    def pts(self) -> float:
+        return self._pts
+
+    def version_as_byte(self) -> int:
+        return (self.version-1) & 0xFF
+
+    def store(self, palette: Union[dict[int, ...], Type['PGPalette'], Palette], pts: float) -> None:
+        self.palette |= palette if isinstance(palette, dict) else palette.palette
+        self.sort()
+        self.version += 1
+        self._pts = pts
+
+class PaletteManager:
+    def __init__(self, n_palettes: int = 8) -> None:
+        self._palettes = [PGPalette() for k in range(n_palettes)]
+
+    def get_palette(self, dts: float) -> int:
+        """
+        Find a palette in the decoder that can be written to at a given dts.
+
+        :param dts: decoding timestamp as a float (seconds)
+        """
+        versions = list(map(lambda palette: (palette.version) >> 8, self._palettes))
+
+        best_k = None
+        for k, p in enumerate(self._palettes):
+            if p.writable_at(dts) and (best_k is None or versions[best_k] > versions[k]):
+                best_k = k
+        assert best_k is not None, f"No palette available at dts {dts} [s]"
+        return best_k
+
+    def get_palette_version(self, palette_id: int) -> int:
+        assert palette_id < len(self._palettes), "Not an internal palette of the decoder!"
+        assert self._palettes[palette_id].version > 0, "Getting version of unused palette."
+        return self._palettes[palette_id].version_as_byte()
+
+    def lock_palette(self, palette_id, pts: float, dts: float, force: bool = False) -> bool:
+        assert palette_id < len(self._palettes), "Not an internal palette of the decoder!"
+        pgpal = self._palettes[palette_id]
+        if pgpal.writable_at(dts) or force:
+            pgpal.lock_until(pts)
+            return True
+        return False
+
+    def assign_palette(self, palette_id: int, palette: Palette, pts: float, dts: float) -> list[PDS]:
+        """
+        Generate the PDSegment to assign a given PGDecoder palette. The palette
+        is then not writable until the PTS has passed.
+
+        :param palette_id: ID of the palette to use (previously obtained via get_palette())
+        :param palette: The (full) palette to be displayed
+        :param pts: Presentation timestamp of the palette
+        :param dts: Decoding timestamp of the palette
+        :param only_diff: True if the palette assignement should only contain the difference.
+        :return: a list with the PDS.
+        """
+        assert palette_id < len(self._palettes), "Not an internal palette of the decoder!"
+        pgpal = self._palettes[palette_id]
+        assert pgpal.writable_at(dts) is True, f"Using locked palette at {dts} [s]."
+        pds_fn = lambda pal: PDS.from_scratch(pal, p_vn=pgpal.version_as_byte(), p_id=palette_id, pts=pts, dts=dts)
+        if len(palette) == 0:
+            assert len(pgpal) > 0, "Attempting to generate an empty PDS"
+            # write the entire palette, not too sure of the effect of [PCS(palette_update_flag), END] on a decoder...
+            pds = pds_fn(pgpal)
+        else:
+            pgpal.store(palette, pts)
+            pds = pds_fn(palette)
+        return [pds]
