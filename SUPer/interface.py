@@ -51,11 +51,12 @@ class BDNRender:
                 sys.exit(1)
 
         clip_framerate = bdn.fps
-        if self.kwargs.pop('adjust_dropframe', False):
+        if self.kwargs.get('adjust_dropframe', False):
             if isinstance(bdn.fps, float):
                 bdn.fps = round(bdn.fps)
-                logger.info(f"NTSC timing flag: using {bdn.fps} for timestamps rather than BDNXML {clip_framerate:.03f}.")
+                logger.info(f"NTSC timing flag: using {round(bdn.fps)} for timestamps rather than BDNXML {clip_framerate:.03f}.")
             else:
+                self.kwargs['adjust_dropframe'] = False
                 logger.warning("Ignored NDF flag with integer framerate.")
 
         logger.info("Finding epochs...")
@@ -87,35 +88,24 @@ class BDNRender:
 
             #Epoch generation (each subgroup will be its own epoch)
             for subgroup in reversed(subgroups):
-                logger.info(f"Generating epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}...")
+                logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}:")
+
                 wob, box = GroupingEngine(n_groups=2, **kwargs).group(subgroup)
+                logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
 
                 wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, **kwargs)
                 epoch = wobz.analyze()
                 self._epochs.append(epoch)
-                logger.info(f" => optimised as {len(epoch)} display sets on {len(wob)} window(s).")
+                logger.info(f" => optimised as {len(epoch)} display sets.")
             gc.collect()
-
-        if clip_framerate != bdn.fps:
-            self.ndf_shift(bdn, clip_framerate)
 
         scaled_fps = False
         if self.kwargs.get('scale_fps', False):
             scaled_fps = self.scale_pcsfps()
 
-        if self.kwargs.get('enforce_dts', False):
-            self.compute_set_dts()
-
         # Final check
-        is_compliant(self._epochs, bdn.fps * int(1+scaled_fps))
+        is_compliant(self._epochs, bdn.fps * int(1+scaled_fps), self.kwargs.get('enforce_dts', True))
     ####
-
-    def ndf_shift(self, bdn: BDNXML, clip_framerate: float) -> None:
-        adjustment_ratio = 1.001
-        for epoch in self._epochs:
-            for ds in epoch:
-                for seg in ds:
-                    seg.pts = seg.pts*adjustment_ratio - 3/PGDecoder.FREQ
 
     def scale_pcsfps(self) -> bool:
         from SUPer.utils import BDVideo
@@ -128,19 +118,6 @@ class BDNRender:
         else:
             logger.error(f"Expexcted 25 or 30 fps for 2x scaling. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}'.")
         return scaled_fps
-
-    def compute_set_dts(self) -> None:
-        logger.info("Setting DTS values in the stream.")
-        prev_ds_pts = 0
-        for epoch in self._epochs:
-            for ds in epoch:
-                for seg in ds:
-                    # -0.3735 because: (decode 4 MiB + screen flush + screen refresh)
-                    # i.e this is the max shift we would need in the worst case
-                    seg.dts = max(seg.pts - 0.3735, prev_ds_pts)
-                seg.dts = seg.pts #enforce == for END segment
-                # set DTS one tick in the future.
-                prev_ds_pts = seg.pts + 1/PGDecoder.FREQ
 
     def merge(self, input_sup) -> None:
         epochs = SUPFile(input_sup).epochs()

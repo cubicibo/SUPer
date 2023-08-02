@@ -35,11 +35,12 @@ from .utils import get_super_logger, Pos, Dim, BDVideo, TimeConv as TC
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise, Preprocess
-from .pgraphics import PGraphics, PGDecoder, PGObject, PGObjectBuffer
+from .pgraphics import PGraphics, PGDecoder, PGObject, PGObjectBuffer, PaletteManager
 from .palette import Palette, PaletteEntry
 
 _Region = TypeVar('Region')
 logger = get_super_logger('SUPer')
+skip_dts = False
 
 #%%
 @dataclass(frozen=True)
@@ -368,6 +369,7 @@ class WOBSAnalyzer:
         self.target_fps = fps
         self.bdn = bdn
         self.kwargs = kwargs
+        self.buffer = PGObjectBuffer()
 
     def mask_event(self, window, event) -> Optional[npt.NDArray[np.uint8]]:
         if event is not None:
@@ -383,7 +385,10 @@ class WOBSAnalyzer:
         return None
 
     def analyze(self):
+        global skip_dts
+        skip_dts = not self.kwargs.get('enforce_dts', True)
         woba = []
+        pm = PaletteManager()
 
         #Init
         gens, windows = [], []
@@ -415,15 +420,145 @@ class WOBSAnalyzer:
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
         for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
-            if (forced or (acq and margin > max(thresh-dthresh*drought, 0))) and flags[k] != 1:
-                if forced and not acq and flags[k] != 1:
-                    logger.debug("Impossible acquisition")
+            if (forced or (acq and margin > max(thresh-dthresh*drought, 0))): #and flags[k] != 1:
                 states[k] = PCS.CompositionState.ACQUISITION
                 drought = 0
             else:
                 #try to not do too many acquisitions, as we want to compress the stream.
                 drought += 1*refresh_rate
+
+        #At this point, we have the stream acquisition shaped nicely
+        # except that some of them may be impossible. We apply a final filtering
+        # step to either discard some truly impossible event or shift some PG operations
+        k = len(states)-1
+        while k > 0 and not skip_dts:
+            if not (absolutes[k] and not acqs[k] and flags[k] == 0):
+                k -= 1
+                continue
+
+            mask = nodes[k].new_mask.copy()
+            dts_start_nc = dts_start = nodes[k].dts()
+            dropped_nc = dropped = 0
+            j_nc = j = k - 1
+            while j > 0 and nodes[j].dts_end() >= dts_start:
+                if absolutes[j] is True:
+                    assert len(nodes[j].new_mask) == len(mask)
+                    for km, mask_v in enumerate(nodes[j].new_mask):
+                        mask[km] |= mask_v
+                    dropped += 1
+                j -= 1
+
+            #Normal case is only possible if we discard past acquisitions that redefined the same object
+            normal_case_possible = sum(nodes[k].new_mask) == sum(mask) == 1 and sum(map(lambda x: x is not None, nodes[k].objects)) == 2
+            if normal_case_possible:
+                nodes[k].partial = True
+                dts_start_nc = nodes[k].dts()
+                while j_nc > 0 and nodes[j_nc].dts_end() >= dts_start:
+                    if absolutes[j_nc] is True and nodes[j_nc].dts_end() >= dts_start_nc:
+                        dropped_nc += 1
+                    j_nc -= 1
+                nodes[k].partial = False
+
+            # we can't delete epoch start -> delete self
+            # TODO: see if we can shift forward the acquisition
+            # or set a new one close by
+            if (normal_case_possible and j_nc == 0 and nodes[j_nc].dts_end() >= dts_start_nc) or\
+                (j == 0 and nodes[j].dts_end() >= dts_start):
+                    #If this event is long enough, we shift it forward in time.
+                    wipe_area = np.multiply(*bdn.format.value)
+                    worst_dur = (np.ceil(wipe_area*PGDecoder.FREQ/PGDecoder.RD) + np.ceil(wipe_area*PGDecoder.FREQ/PGDecoder.RC))/PGDecoder.FREQ
+                    if durs[k][0]*1/self.bdn.fps > worst_dur*2+1/self.bdn.fps:
+                        nodes[k].tc_shift = np.ceil(worst_dur*self.bdn.fps)
+                    else:
+                        logger.warning("Deleting acquisition colliding with epoch start. Is the animation very complex?")
+                        flags[k] == -1
+                    k -= 1
+                    continue
+
+            # Analyze normal case
+            if dts_start_nc > dts_start and j_nc > j:
+                assert normal_case_possible
+                num_pal_nc = 0
+                objs = list(map(lambda x: x is not None, nodes[j_nc].objects))
+                for l in range(j_nc+1, k):
+                    if nodes[l].parent is not None:
+                        if num_pal_nc < 7:
+                            if nodes[l].parent.dts() >= dts_start_nc:
+                                nodes[l].parent.set_dts(dts_start_nc - 1/PGDecoder.FREQ)
+                            num_pal_nc += 1
+                        else:
+                            logger.warning(f"Discarded screen wipe before {self.events[l].tc_in}.")
+                            durs[l] = (durs[l][0], 0) # Drop screen wipe (we can't do it!)
+                    for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
+                        objs[ko] &= (obj is not None) & (not mask)
+                    # We ran out of palette or the objects are too different -> drop
+                    if sum(objs) == 0 or num_pal_nc >= 7:
+                        logger.warning(f"Discarded event at {self.events[l].tc_in}.")
+                        flags[l] = -1
+                    else:
+                        num_pal_nc += 1
+                        nodes[l].objects = []
+                        if nodes[l].dts() >= dts_start_nc:
+                            nodes[l].set_dts(dts_start_nc - 1/PGDecoder.FREQ)
+                        states[l] = PCS.CompositionState.NORMAL
+                states[k] = PCS.CompositionState.NORMAL
+                nodes[k].partial = True
+                flags[k] = 1
+            else:
+                num_pal = 0
+                objs = list(map(lambda x: x is not None, nodes[j].objects))
+                for l in range(j+1, k):
+                    if nodes[l].parent is not None:
+                        if num_pal < 7:
+                            if nodes[l].parent.dts() >= dts_start:
+                                nodes[l].parent.set_dts(dts_start - 1/PGDecoder.FREQ)
+                            num_pal += 1
+                        else:
+                            logger.warning(f"Discarded screen wipe before {self.events[l].tc_in}.")
+                            durs[l] = (durs[l][0], 0) #Drop screen wipe (we can't do it!)
+                    for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
+                        objs[ko] &= (obj is not None) & (not mask)
+                    # We ran out of palette or the objects are too different -> drop
+                    if sum(objs) == 0 or num_pal >= 7:
+                        logger.warning(f"Discarded event at {self.events[l].tc_in}.")
+                        flags[l] = -1
+                    else:
+                        num_pal += 1
+                        nodes[l].objects = []
+                        if nodes[l].dts() >= dts_start:
+                            nodes[l].set_dts(dts_start - 1/PGDecoder.FREQ)
+                        states[l] = PCS.CompositionState.NORMAL
+                states[k] = PCS.CompositionState.ACQUISITION
+            k -= 1
+        ####
+
+        #Allocate palettes, this is essentially doing a sanity check
+        for k, (node, state, flag) in enumerate(zip(nodes, states, flags)):
+            #Deleted event are skipped
+            if flag == -1:
+                continue
+            elif flag == 0 and state == PCS.CompositionState.NORMAL:
+                node.objects = []
+            if node.parent:
+                node.parent.palette_id = pm.get_palette(node.parent.dts())
+                if not pm.lock_palette(node.parent.palette_id, node.parent.pts(), node.parent.dts()):
+                    logger.error(f"Cannot acquire palette (rendering error) at {node.parent.pts():.05f}, discarding.")
+                    assert durs[k][1] > 0
+                    durs[k] = (durs[k][0], 0)
+                else:
+                    node.parent.pal_vn = pm.get_palette_version(node.parent.palette_id)
+                logger.debug(f"{state} {flag} - {node.parent.partial} DTS={node.parent.dts():.05f} PTS={node.parent.pts():.05f} {node.parent.palette_id} {node.parent.pal_vn}")
+
+            node.palette_id = pm.get_palette(node.dts())
+            if not pm.lock_palette(node.palette_id, node.pts(), node.dts()):
+                logger.error(f"Cannot acquire palette (rendering error) at {nodes[k].pts()}, discarding.")
+                flags[k] = -1
+            else:
+                node.pal_vn = pm.get_palette_version(node.palette_id)
+
+            logger.debug(f"{state:02X} {flag} - {node.partial} DTS={node.dts():.05f}->{node.dts_end():.05f} PTS={node.pts():.05f} {node.palette_id} {node.pal_vn}")
         return self._convert(states, pgobjs, windows, durs, flags, nodes)
+
 
     @staticmethod
     def _get_stack_direction(*box) -> tuple[npt.NDArray[np.uint16], tuple[int, int]]:
@@ -461,8 +596,8 @@ class WOBSAnalyzer:
                     coords += offset
                 imgs_chain.append(a_img)
             ####
-            #We have "packed" the object, let's optimise it
-            bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 255, **self.kwargs)
+            #We have the "packed" object, let's optimise it
+            bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 255, tsp_thresh=True, **self.kwargs)
             #rare case: both objects have the same shape and no fully transparent sequence
             # -> reduce the color by one and add a transparent entry manually.
             palette_entry_tsp = np.nonzero(np.all(palettes[:,:,-1] == 0, axis=1))[0]
@@ -471,7 +606,7 @@ class WOBSAnalyzer:
             elif np.max(bitmap) < 254:
                 palette_entry_tsp = np.max(bitmap) + 1
             else:
-                bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 254, **self.kwargs)
+                bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 254, tsp_thresh=True, **self.kwargs)
                 palette_entry_tsp = np.max(bitmap) + 1
 
             pals.append(Optimise.diff_cluts(palettes, matrix=self.kwargs.get('bt_colorspace', 'bt709')))
@@ -567,14 +702,28 @@ class WOBSAnalyzer:
     def _get_undisplay(self, c_pts: float, pcs_id: int, wds_base: WDS, palette_id: int, pcs_fn: Callable[[...], PCS]) -> DisplaySet:
         pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, palette_id, [], c_pts)
         wds = wds_base.copy(pts=c_pts, in_ticks=False)
-        return DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
+        uds = DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
+        apply_pts_dts(uds, set_pts_dts_sc(uds, self.buffer, get_wipe_duration(wds)))
+        return uds
+
+    def _get_undisplay_pds(self, c_pts: float, pcs_id: int, node: 'DSNode', cobjs: list[CObject],
+                           pcs_fn: Callable[[...], PCS], n_colors: int = 255) -> tuple[DisplaySet, int, int]:
+        pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, True, node.palette_id, cobjs, c_pts)
+        tsp_e = PaletteEntry(16, 128, 128, 0)
+        pds = PDS.from_scratch(Palette({k: tsp_e for k in range(n_colors)}), p_vn=node.pal_vn, p_id=node.palette_id, pts=c_pts)
+        uds = DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)])
+        apply_pts_dts(uds, set_pts_dts_sc(uds, self.buffer, node.wipe_duration(), node))
+        return uds, pcs_id+1
 
     def _convert(self, states, pgobjs, windows, durs, flags, nodes):
         wd_base = [WindowDefinition.from_scratch(k, w.x+self.box.x, w.y+self.box.y, w.dx, w.dy) for k, w in enumerate(windows)]
         wds_base = WDS.from_scratch(wd_base, pts=0.0)
         n_actions = len(durs)
+        is_compat_mode = self.kwargs.get('pgs_compatibility', False)
         displaysets = []
+        time_scale = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
 
+        ## Internal helper function
         def get_obj(frame, pgobjs: dict[int, list[PGObject]]) -> dict[int, Optional[PGObject]]:
             objs = {k: None for k, objs in enumerate(pgobjs)}
 
@@ -584,27 +733,19 @@ class WOBSAnalyzer:
                     if obj.is_active(frame):
                         objs[wid] = obj
             return objs
-
-        def get_pts(c_pts: float) -> float:
-            #Set PTS a few ticks before the real timestamp so we swap the graphic plane
-            # on time for the frame it is supposed to be on screen !
-            return max(c_pts - 3/PGDecoder.FREQ, 0)
         ####
 
         i = 0
         double_buffering = [0]*2
         ods_reg = [0]*4
         pcs_id = 0
-        pal_vn = 0
         c_pts = 0
-        pal_id = 0
         last_cobjs = []
+        last_palette_id = -1
 
+        get_pts: Callable[[float], float] = lambda c_pts: max(c_pts - 2/PGDecoder.FREQ, 0) * time_scale
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
-
-        kwargs = self.kwargs.copy()
-        is_compat_mode = kwargs.pop('pgs_compatibility', False)
 
         try:
             use_pbar = False
@@ -616,6 +757,10 @@ class WOBSAnalyzer:
 
         pbar = tqdm(range(n_actions))
         while i < n_actions:
+            if flags[i] == -1:
+                i+=1
+                continue
+            assert states[i] != PCS.CompositionState.NORMAL
             normal_case_refresh = False
             for k in range(i+1, n_actions+1):
                 if k < n_actions:
@@ -626,10 +771,12 @@ class WOBSAnalyzer:
 
             if durs[i][1] != 0:
                 assert i > 0
-                displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, wds_base, pal_id, pcs_fn))
-                pcs_id += 1
+                assert nodes[i].parent is not None
+                uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255)
+                displaysets.append(uds)
 
             c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
+            c_pts += nodes[i].tc_shift
 
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
@@ -645,17 +792,15 @@ class WOBSAnalyzer:
             cobjs, pals, o_ods, pal = r
 
             wds = wds_base.copy(pts=c_pts, in_ticks=False)
-            pds = PDS.from_scratch(pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
-            pcs = pcs_fn(pcs_id, states[i], False, pal_id, cobjs, c_pts)
-            displaysets.append(DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)]))
+            pds = PDS.from_scratch(pal, p_vn=nodes[i].pal_vn, p_id=nodes[i].palette_id, pts=c_pts)
+            pcs = pcs_fn(pcs_id, states[i], False, nodes[i].palette_id, cobjs, c_pts)
 
-            next_pal_full = False
+            nds = DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)])
+            apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, nodes[i].wipe_duration(), nodes[i]))
+            displaysets.append(nds)
+
             pcs_id += 1
-            pal_vn += 1
-            if pal_vn >= 256:
-                pal_id = (pal_id + 1) & 0b111
-                pal_vn = 0
-                next_pal_full = True
+            last_palette_id = nodes[i].palette_id
 
             if len(pals[0]) > 1:
                 # Pad palette chains
@@ -675,19 +820,14 @@ class WOBSAnalyzer:
 
                     #Is there a know screen clear in the chain? then use palette screen clear here
                     if durs[z][1] != 0:
-                        c_pts_und = get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps))
-                        pcs = pcs_fn(pcs_id, states[z], True, pal_id, cobjs, c_pts_und)
-                        pds = PDS.from_scratch(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(0, max(pal.palette)+1)}), p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts_und)
-                        displaysets.append(DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts_und)]))
-                        pcs_id += 1
-                        pal_vn += 1
-                        if pal_vn >= 256:
-                            pal_id = (pal_id + 1) & 0b111
-                            pal_vn = 0
-                        next_pal_full = True
+                        assert nodes[z].parent is not None
+                        uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps)), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1)
+                        displaysets.append(uds)
+                        #We just wipped a palette, whatever the next palette id, rewrite it fully
+                        last_palette_id = None
 
                     if flags[z] == 1:
-                        normal_case_refresh = nodes[pcs_id].new_mask
+                        normal_case_refresh = nodes[z].new_mask
                         r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), windows, double_buffering, has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
                         cobjs, n_pals, o_ods, new_pal = r
                         pal |= new_pal
@@ -695,19 +835,20 @@ class WOBSAnalyzer:
                             pals[0][nz-i] |= new_p1
                             pals[1][nz-i] |= new_p2
                         normal_case_refresh = True
+                    elif flags[z] == -1:
+                        continue
 
-                    pcs = pcs_fn(pcs_id, states[z], flags[z] != 1, pal_id, cobjs, c_pts)
-                    pds = PDS.from_scratch(pals[0][z-i] | pals[1][z-i] if not next_pal_full else pal, p_vn=pal_vn & 0xFF, p_id=pal_id, pts=c_pts)
+                    pcs = pcs_fn(pcs_id, states[z], flags[z] != 1, nodes[z].palette_id, cobjs, c_pts)
+                    pds = PDS.from_scratch(pals[0][z-i] | pals[1][z-i] if last_palette_id == nodes[z].palette_id else pal, p_vn=nodes[z].pal_vn, p_id=nodes[z].palette_id, pts=c_pts)
                     wds_upd = [wds_base.copy(pts=c_pts, in_ticks=False)] if flags[z] == 1 else []
                     ods_upd = o_ods if flags[z] == 1 else []
-                    displaysets.append(DisplaySet([pcs] + wds_upd + [pds] + ods_upd +[ENDS.from_scratch(pts=c_pts)]))
-                    next_pal_full = False
-                    pal_vn += 1
-                    if pal_vn >= 256:
-                        pal_id = (pal_id + 1) & 0b111
-                        pal_vn = 0
-                        next_pal_full = True
+
+                    nds = DisplaySet([pcs] + wds_upd + [pds] + ods_upd +[ENDS.from_scratch(pts=c_pts)])
+                    apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, nodes[z].wipe_duration(), nodes[z]))
+                    displaysets.append(nds)
+
                     pcs_id += 1
+                    last_palette_id = nodes[z].palette_id
                     if z+1 == k:
                         break
                 assert z+1 == k
@@ -720,12 +861,12 @@ class WOBSAnalyzer:
             pbar.close()
         ####while
         #final "undisplay" displayset
-        displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, wds_base, pal_id, pcs_fn))
+        displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, wds_base, last_palette_id, pcs_fn))
         return Epoch(displaysets)
 
-    def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows):
+    def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows: list[Box]):
         #get the frame count between each screen update and find where we can do acqs
-        durs, nodes = self.get_durations()
+        durs, nodes = self.get_durations(windows)
 
         dtl = np.zeros((len(durs)), dtype=float)
         valid = np.zeros((len(durs),), dtype=np.bool_)
@@ -735,12 +876,8 @@ class WOBSAnalyzer:
         objs = [None for objs in pgobjs_proc]
 
         prev_dt = 6
-        offset = 0
         for k, (dt, delay) in enumerate(durs):
             is_new = [False]*len(windows)
-            nodes[k+offset].windows = windows
-            if nodes[k+offset].is_flush:
-                nodes[k+(offset:=offset + 1)].windows = windows
             margin = (delay + prev_dt)/self.bdn.fps
             force_acq = False
             for wid, wd in enumerate(windows):
@@ -755,42 +892,54 @@ class WOBSAnalyzer:
                     else:
                         assert not pgobjs_proc[wid][0].is_active(k)
 
-            nodes[k+offset].objects = objs.copy()
-            nodes[k+offset].new_mask = is_new
-            valid[k] = nodes[k+offset].dts() > nodes[k+offset-1].dts_end() if k > 0 else True
+            nodes[k].objects = objs.copy()
+            nodes[k].new_mask = is_new
+
+            if k == 0:
+                prev_pts = prev_dts = -np.inf
+            elif nodes[k].parent:
+                prev_dts = nodes[k].parent.dts_end()
+                prev_pts = nodes[k].parent.pts()
+            else:
+                prev_dts = nodes[k-1].dts_end()
+                prev_pts = nodes[k-1].pts()
+            valid[k] = nodes[k].dts() > prev_dts
+
             #see if normal case is possible
-            if not valid[k] and force_acq:
-                if sum(map(lambda o: o is not None, objs)) == 2 and sum(is_new) == 1:
-                    logger.debug("NORMAL CASE DEF")
-                    nodes[k+offset].partial = True
-                    valid[k] = nodes[k+offset].dts() > nodes[k+offset-1].dts_end()
-                flags[k] = 1 if valid[k] else -1
+            # if not valid[k] and force_acq:
+            #     if sum(map(lambda o: o is not None, objs)) == 2 and sum(is_new) == 1:
+            #         nodes[k].partial = True
+            #         nodes[k].partial = valid[k] = nodes[k].dts() > prev_dts
+            #         if nodes[k].partial:
+            #             logger.debug(f"Performing normal case definition at {nodes[k].tc_pts}")
 
             absolutes[k] = force_acq
             #margin is computed on the PTSes but we use it to normalise the DTS delta.
             # so this is not really the right margin, but it is a good enough indicaiton.
-            dtl[k] = (nodes[k+offset].dts() - nodes[k+offset-1].dts_end())/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
+            dtl[k] = (nodes[k].dts() - prev_dts)/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
             prev_dt = dt
         return valid, absolutes, dtl, durs, nodes, flags
     ####
 
-    def get_durations(self) -> npt.NDArray[np.uint32]:
+    def get_durations(self, windows: list[Box]) -> npt.NDArray[np.uint32]:
         """
         Returns the duration of each event in frames.
         Additionally, the offset from the previous event is also returned. This value
         is zero unless there are no PG objects shown at some point in the epoch.
         """
+        scale_pts = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
         top = TC.tc2f(self.events[0].tc_in, self.bdn.fps)
         delays = []
         nodes = []
-        for event in self.events:
+        for ne, event in enumerate(self.events):
             tic = TC.tc2f(event.tc_in, self.bdn.fps)
             toc = TC.tc2f(event.tc_out,self.bdn.fps)
             delays.append((toc-tic, tic-top))
-            top = toc
+            parent = None
             if tic-top > 0:
-                nodes.append(DSNode([], {}, tc_pts=TC.CLS(self.bdn.fps, event.tc_out), is_flush=True))
-            nodes.append(DSNode([], {}, tc_pts=TC.CLS(self.bdn.fps, event.tc_in)))
+                parent = DSNode([], windows, TC.tc2s(self.events[ne-1].tc_out, self.bdn.fps), scale_pts=scale_pts)
+            nodes.append(DSNode([], windows, TC.tc2s(event.tc_in, self.bdn.fps), parent=parent, scale_pts=scale_pts))
+            top = toc
         return delays, nodes
 ####
 #%%
@@ -909,7 +1058,7 @@ class WOBAnalyzer:
 
                 rgba_i = Image.fromarray(rgba)
                 score, cross_percentage = self.compare(alpha_compo, rgba_i)
-                if score >= max(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage)):
+                if score >= max(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage)) - 0.008333:
                     bitmaps.append(rgba)
                     alpha_compo.alpha_composite(rgba_i)
                 else:
@@ -928,44 +1077,68 @@ class WOBAnalyzer:
 ####
 class DSNode:
     def __init__(self,
-            objects: list[tuple[int, Box]],
-            windows: dict[int, Box],
-            tc_pts: TC.CLS,
-            new_mask: list[bool] = [],
-            is_flush: bool = False,
+            objects: list[Optional[PGObject]],
+            windows: list[Box],
+            tc_pts: float,
+            parent: Optional['DSNode'] = None,
+            scale_pts: float = 1
         ) -> None:
-        self.windows = windows
         self.objects = objects
-        self.tc_pts = tc_pts
-        self.is_flush = is_flush
-        self.new_mask = new_mask
+        self.windows = windows
+        self.tc_pts = max(tc_pts - 2/PGDecoder.FREQ, 0) * scale_pts
+        self.new_mask = []
+        self.parent = parent
         self.partial = False
+        self.tc_shift = 0
 
-    def _wipe_duration(self) -> float:
+        self._pal_id = None
+        self.pal_vn = 0
+        self._dts = None
+
+    def wipe_duration(self) -> float:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
 
+    def set_dts(self, dts: Optional[float]) -> None:
+        assert dts is None or dts <= self.dts()
+        self._dts = round(dts*PGDecoder.FREQ) if dts is not None else None
+
+    @property
+    def palette_id(self) -> Optional[int]:
+        return self._pal_id
+
+    @palette_id.setter
+    def palette_id(self, palette_id: Optional[int]) -> None:
+        self._pal_id = palette_id
+
     def dts_end(self) -> float:
+        if self._dts is not None:
+            return (self.get_dts_markers()[1] + self._dts)/PGDecoder.FREQ
         return sum(self.get_dts_markers())/PGDecoder.FREQ
 
     def dts(self) -> float:
+        if self._dts is not None:
+            return self._dts/PGDecoder.FREQ
         return self.get_dts_markers()[0]/PGDecoder.FREQ
 
     def delta_dts(self) -> float:
         return self.get_dts_markers()[1]/PGDecoder.FREQ
 
     def pts(self) -> float:
-        return self.tc_pts.float
+        return self.tc_pts
+
+    def is_custom_dts(self) -> bool:
+        return not (self._dts is None)
 
     def get_dts_markers(self) -> float:
         t_decoding = 0
-        decode_duration = self._wipe_duration()
+        decode_duration = self.wipe_duration()
 
         for wid, obj in enumerate(self.objects):
             if obj is None:
                 continue
             box = self.windows[wid]
             read = box.dy*box.dx*PGDecoder.FREQ
-            if not self.partial or self.partial and not self.new_mask[wid]:
+            if not self.partial or (self.partial and self.new_mask[wid]):
                 dec = np.ceil(read/PGDecoder.RD)
                 t_decoding += dec
 
@@ -975,7 +1148,7 @@ class DSNode:
 
         if t_decoding == 0:
             decode_duration += 1
-        return (round(self.tc_pts.float*PGDecoder.FREQ) - decode_duration, t_decoding)
+        return (round(self.tc_pts*PGDecoder.FREQ) - decode_duration, t_decoding)
 
 
 #%%
@@ -983,7 +1156,7 @@ def get_wipe_duration(wds: WDS) -> int:
     return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.height*w.width/PGDecoder.RC, wds.windows)))
 
 #%%
-def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int) -> list[tuple[int, int]]:
+def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int, node: Optional['DSNode'] = None) -> list[tuple[int, int]]:
     """
     This function generates the timestamps (PTS and DTS) associated to a given DisplaySet.
 
@@ -1042,9 +1215,14 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int) -
         # No ODS, no WDS, no palette update -> We're just writing palette data or doing a NOP (PCS, END)
         # In this case, PTS and DTS are equals for all segments.
         ...
+    mask = ((1 << 32) - 1)
+    dts = int(ds.pcs.tpts - decode_duration) & mask
+    if node is not None and node.is_custom_dts():
+        new_dts = round(node.dts()*PGDecoder.FREQ)
+        assert new_dts <= dts
+        dts = new_dts
 
     #PCS always exist
-    dts = np.uint32(ds.pcs.tpts - decode_duration)
     ts_pairs = [(ds.pcs.tpts, dts)]
 
     if ds.wds:
@@ -1053,7 +1231,7 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int) -
         ts_pairs.append((dts, dts))
 
     for ods in ds.ods:
-        ods_pts = np.uint32(dts + ddurs.get(ods.o_id))
+        ods_pts = int(dts + ddurs.get(ods.o_id)) & mask
         ts_pairs.append((ods_pts, dts))
         if ods.flags & ods.ODSFlags.SEQUENCE_LAST:
             dts = ods_pts
@@ -1061,9 +1239,13 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int) -
     return ts_pairs
 
 def apply_pts_dts(ds: DisplaySet, ts: tuple[int, int]) -> None:
+    global skip_dts
+    nullify_dts = lambda x: x*(0 if skip_dts else 1)
+    select_pts = lambda x: ts[0][0] if skip_dts else x
+
     assert len(ds) == len(ts), "Timestamps-DS size mismatch."
     for seg, (pts, dts) in zip(ds, ts):
-        seg.tpts, seg.tdts = pts, dts
+        seg.tpts, seg.tdts = select_pts(pts), nullify_dts(dts)
 
 def test_diplayset(ds: DisplaySet) -> bool:
     """
@@ -1097,7 +1279,7 @@ def test_diplayset(ds: DisplaySet) -> bool:
     return comply & (ds.end is not None) # "No END segment in DS."
 ####
 
-def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> bool:
+def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool:
     prev_pts = -1
     last_cbbw = 0
     last_dbbw = 0
@@ -1134,9 +1316,6 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
 
             for ks, seg in enumerate(ds.segments):
                 areas2gp = {}
-                if seg.pts != current_pts and current_pts != -1 and _cnt_pts:
-                    logger.warning(f"Display set has non-constant pts at {to_tc(seg.pts)} or {to_tc(current_pts)}.")
-                    current_pts = -1
                 if isinstance(seg, PCS):
                     compliant &= (ks == 0) #PCS is not first in DisplaySet
                     if seg.composition_n == prev_pcs_id:
@@ -1207,7 +1386,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 coded_buffer_bandwidth, decoded_buffer_bandwidth = 0, 0
 
             # This is probably the hardest constraint to meet: ts_packet are read at Rx=16Mbps
-            if coded_buffer_bandwidth > (max_rate := PGDecoder.RX):
+            if coded_buffer_bandwidth > (max_rate := PGDecoder.RX) and not has_dts:
                 if coded_buffer_bandwidth/max_rate >= 2:
                     logger.warning(f"High instantaneous coded bandwidth at {to_tc(seg.pts)} (not critical - fair warning)")
                 # This is not an issue unless it happens very frequently, so we don't mark as not compliant
@@ -1218,11 +1397,11 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
                 coded_bw_ra.append(coded_buffer_pts)
                 coded_bw_ra_pts.append(seg.pts)
 
-            if (rate:=sum(coded_bw_ra)/abs(coded_bw_ra_pts[-1]-coded_bw_ra_pts[0])) > PGDecoder.RX:
+            if (rate:=sum(coded_bw_ra)/abs(coded_bw_ra_pts[-1]-coded_bw_ra_pts[0])) > PGDecoder.RX and not has_dts:
                 logger.warning(f"Exceeding coded bandwidth at ~{to_tc(seg.pts)}, {100*rate/PGDecoder.RX:.03f}%.")
                 warnings += 1
 
-            if decoded_buffer_bandwidth > PGDecoder.RD:
+            if decoded_buffer_bandwidth > PGDecoder.RD and not has_dts:
                 logger.warning(f"Exceeding decoded buffer bandwidth at {to_tc(seg.pts)}.")
                 warnings += 1
 
@@ -1236,7 +1415,7 @@ def is_compliant(epochs: list[Epoch], fps: float, *, _cnt_pts: bool = False) -> 
             nf = TC.s2f(seg.pts, fps) - TC.s2f(prev_pts, fps)
             if nf == 0:
                 last_rc += Rc
-            elif (last_rc+Rc)/nf > PGDecoder.RC:
+            elif (last_rc+Rc)/nf > PGDecoder.RC and not has_dts:
                 logger.warning(f"Graphic plane overloaded. Display is not ensured at {to_tc(seg.pts)}.")
                 warnings += 1
 
