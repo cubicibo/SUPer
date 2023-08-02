@@ -1,23 +1,30 @@
 # SUPer
-SUPer is a subtitle rendering and manipulation tool specifically for the PGS (SUP) format. Unlike any other .SUP exporting tools, SUPer re-renders the subtitles graphics internally to make full use of the the BDSup format. Caption files generated with SUPer can feature softsub karaokes, masking and fades and are likely to work nicely on your favorite Blu-Ray player.
+SUPer is a tool to convert BDNXML+PNG assets to Blu-ray SUP subtitles.
+Unlike any other .SUP conversion tools, SUPer analyzes and re-renders the subtitles graphics internally to make full use of the the BD SUP format (Presentation Graphic Stream). Caption files generated with SUPer can feature softsub karaokes, masking, fades and basic moves and are guaranteed to work nicely on your favorite Blu-ray player.
  
 ## Usage
 SUPer is made easy to use with the graphical user interface `supergui.py` - it lets you choose your input BDNXML, the output file name and optionally a SUP file to merge with. A command line client is also available as `supercli.py`. See below for further details.
 
-## Suggested workflow
-- Generate a BDNXML with PNG assets using ass2bdnxml, avs2bdnxml or SubtitleEdit.
-- Use SUPer to convert the BDNXML to a BD SUP; simply load a BDNXML file in the GUI, set an output file and have an espresso while the fan spins.
+The common usage is the following:
+- Generate a BDNXML with PNG assets using [ass2bdnxml](https://github.com/cubicibo/ass2bdnxml) or avs2bdnxml.
+- Use SUPer to convert the BDNXML to a Blu-ray SUP; simply load a BDNXML file in the GUI, set an output file and have an espresso while the fan spins.
 
 ## GUI client
-This is the client executed when you download the stand-alone binary or when you run `python3 supergui.py`. Its interface is very simple but extensive for all types of conversion.
+This is the client executed when you download the stand-alone binary or when you run `python3 supergui.py`. Its interface is very simple but extensive for all types of conversion. The GUI is always running aside a command-line window which gives the conversion progress and logging information.
+
+- Select the input BDN XML file. The file must resides in the same directory as the PNG assets.
+- Select the desired output file and extension using the Windows explorer.
+- "Make it SUPer" starts the conversion process. The actual conversion progress is printed in the command line window.
+
+The GUI supports two output format: SUP and PES+MUI (Scenarist BD).
 
 ## Command line client
 `supercli.py` is essentially the command line equivalent to `supergui.py`.
 
-### Usage
+### CLI Usage
 `python3 supercli.py [PARAMETERS] outputfile`
 
-### Parameters
+### CLI Parameters
 ```
  -i, --input         Input BDNXML file.
  -c, --compression   Time threshold for acquisitions. [int, 0-100, def: 80], 
@@ -33,17 +40,16 @@ This is the client executed when you download the stand-alone binary or when you
 ```
 The output file extension is used to infer the desired output type (SUP or PES).  
 
-## Misc
-Some misc and trivia about SUPer, how it works and manages to generate complex stream with animations that work on hardware decoders:
+## How SUPer works
+SUPer implements a conversion engine that uses the entirety of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities that includes palette updates, object redefinition, object cropping and events buffering.
 
-### Behind the scene
-SUPer tries to re-use existing object in the stream and exploits the PG decoders capabilites like palette updates to encode animations. This saves bandwidth significantly and enables to perform animations that are otherwise impossible due to hardware limitations of the bandwidth limited PG object decoder.
+SUPer analyzes each input images and encodes a sequence of similar images together into a single presentation graphic (bitmap). This PG object has the animation encoded in it and a sequence of palette updates will display the sequence of images. This dramatically reduces the decoding and composition bandwidth and allows for complex animations to be performed while the hardware PG decoder is busy decoding the next PG objects.
 
 ### PGS Limitations to keep in mind
 - There are only two PGS objects on screen at a time. SUPer puts as many subtitles lines as it can to a single PGS object and minimizes the windows areas in which the said objects are displayed. Palette updates are then used to eventually display/undisplay specific lines associated to a given object.
-- A hardware PG decoder has a limited bandwidth and can refresh an object only ever so often. SUPer distributes the object definitions in the stream to ease the work of the decoder. SUPer then uses palette updates to link the missing "steps" between two objects definition. However, SUPer defines the steps depending of a similarity measure with the previous bitmaps. If it changes too much, SUPer is obligated to insert the new object in the stream as visual quality remains the most important aspect.
-
+- A hardware PG decoder has a limited bandwidth and can refresh an object ever so often. SUPer distributes the object definitions in the stream and uses double buffering to ease the work of the decoder. However, the bigger the objects (= windows), the longer they will take to decode. SUPer may be obligated to drop events every now and then if an event can't be decoded and displayed in due time. This will happen frequently if the graphics differ excessively between successive events.
+- Moves, within a reasonable area, are doable at lower framerates like 23.976, 24 or 25. The ability to perform moves lowers if the epoch is complex or if the PG windows within which the object is displayed are large.
 
 ## Special thanks
-- TheScorpius666, NLScavenger, Prince 7, Masstock
+- TheScorpius666, Masstock, NLScavenger, Prince 7
 - FFmpeg libavcodec pgssubdec authors
