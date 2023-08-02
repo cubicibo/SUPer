@@ -54,7 +54,7 @@ if __name__ == '__main__':
 
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Input BDNXML file.", default='', required=True)
-    parser.add_argument('-c', '--compression', help="Time threshold for acquisitions. [int, 0-100]", type=int, default=80, required=False)
+    parser.add_argument('-c', '--compression', help="Time threshold for acquisitions. [int, 0-100]", type=int, default=85, required=False)
     parser.add_argument('-r', '--comprate', help="Decay rate to attain time threshold. [int, 0-100]", type=int, default=100, required=False)
     parser.add_argument('-q', '--qmode', help="Image quantization mode. [0: PIL, 1: PIL+K-Means, 2: K-Means]", type=int, default=0, required=False)
     parser.add_argument('-b', '--bt', help="Target BT matrix [601, 709, 2020]", type=int, default=709, required=False)

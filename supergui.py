@@ -66,6 +66,11 @@ def wrapper_mp() -> None:
     do_super.enabled = False
     logger.info("Starting optimiser process.")
     do_super.text = "Generating (check console)..."
+    while True:
+        try:
+            do_super.queue.get_nowait()
+        except:
+            break
     do_super.proc.start()
     do_super.queue.put(kwargs)
     do_super.queue.put(bdnname.value)
@@ -81,6 +86,11 @@ def monitor_mp() -> None:
         return
     if do_super.proc and do_super.proc.pid:
         if not do_super.proc.is_alive():
+            while True:
+                try:
+                    do_super.queue.get_nowait()
+                except:
+                    break
             try:
                 do_super.proc.join(0.1)
             except RuntimeError:
@@ -120,6 +130,9 @@ def set_outputsup() -> None:
 
     if supout.value.lower().endswith('pes'):
         set_dts.value = True
+        set_dts.enabled = False
+    else:
+        set_dts.enabled = True
 
     if bdnname.value != '':
         do_super.enabled = True
@@ -184,7 +197,7 @@ if __name__ == '__main__':
 
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
 
-    inject_button = PushButton(app, command=get_sup, text="Select SUP to inject (opt.)", grid=[0,pos_v], align='left', width=15)
+    inject_button = PushButton(app, command=get_sup, text="SUP to inject (OPTIONAL)", grid=[0,pos_v], align='left', width=15)
     supname = Text(app, grid=[1,pos_v], align='left', size=10)
     Hovertip(inject_button.tk, "Use to specify an input SUP file to merge with the BDNXML conversion result. No overlapping event supported.\n"\
                                "This is optional and should only be used if you want to inject new events in existing SUP files.")
@@ -208,7 +221,7 @@ if __name__ == '__main__':
     Hovertip(compression_txtstr.tk, "Defined as the minimum percentage of time to have between two events to perform an acquisition (object refresh).\n"\
                               "-> 0: update as often as possible, -> 100 update as few times as possible.")
 
-    compression_txt = TextBox(bcompre, width=4, height=1, grid=[1,0], text="80")
+    compression_txt = TextBox(bcompre, width=4, height=1, grid=[1,0], text="85")
     brate_txtstr = Text(brate, "Acquisition rate [int]%: ", grid=[0,0], align='left', size=11)
     refresh_txt = TextBox(brate, width=4, height=1, grid=[1,0], text="100")
     Hovertip(brate_txtstr.tk, "Affect the decay ratio that determines the compression factor and thus, PG acquisitions (object refreshes).\n"\
@@ -216,6 +229,7 @@ if __name__ == '__main__':
                               "A value of zero results in the strict minimum number of refreshes and may show artifacts.")
 
     kmeans_fade = CheckBox(app, text="Use KMeans quantization on fades", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    kmeans_fade.value = 1
     Hovertip(kmeans_fade.tk, "Use K-Means to quantize highly transparent image. This is a work-around\n"\
                              "to a known bug in Pillow (PIL) with RGBA images.")
 
@@ -236,10 +250,11 @@ if __name__ == '__main__':
                              "This may increase the transfer time of objects on hardware decoders (BD players).\n"\
                              "As those decoders are bandwidth constrained, this should be unticked for commercial BDs.")
 
-    set_dts = CheckBox(app, text="Set rough DTS in stream (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(set_dts.tk, "PG streams can include a decoding timestamp. This is required by very old decoders.\n"\
-                         "This must be ticked for PES+MUI output (Scenarist BD format).\n"\
-                         "WARNING: SUPer does not verify that the DTS are monotonic, which is a hard requirement!")
+    set_dts = CheckBox(app, text="Ensure strict compliancy (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    set_dts.value = 1
+    Hovertip(set_dts.tk, "PG streams include a decoding timestamp. This timestamp is required by old decoders.\n"\
+                         "else the on-screen behaviour is erratic. This must be ticked for PES+MUI output and\n"\
+                         "to ensure strict compliancy with Blu-Ray specifications and compatibility.")
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')
