@@ -45,6 +45,7 @@ def get_kwargs() -> dict[str, int]:
         'bt_colorspace': colorspace.value,
         'pgs_compatibility': compat_mode.value,
         'enforce_dts': set_dts.value,
+        'no_overlap': scenarist_checks.value,
     }
 
 def wrapper_mp() -> None:
@@ -131,6 +132,8 @@ def set_outputsup() -> None:
     if supout.value.lower().endswith('pes'):
         set_dts.value = True
         set_dts.enabled = False
+        scenarist_checks.value = True
+        scenarist_checks.enabled = False
     else:
         set_dts.enabled = True
 
@@ -256,6 +259,10 @@ if __name__ == '__main__':
     Hovertip(set_dts.tk, "PG streams include a decoding timestamp. This timestamp is required by old decoders\n"\
                          "else the on-screen behaviour is erratic. This is forcefully ticked for PES+MUI output.\n"\
                          "It must be ticked to ensure compatibility and strict compliancy to Blu-ray specifications.")
+
+    scenarist_checks = CheckBox(app, text="Apply additional compliancy rules for Scenarist BD", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(scenarist_checks.tk, "Scenarist BD has additional hard rules. This checkbox enforces them\n"\
+                                  "and the generated stream shall pass all Scenarist checks.")
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')
