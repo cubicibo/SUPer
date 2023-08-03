@@ -743,7 +743,7 @@ class WOBSAnalyzer:
         last_cobjs = []
         last_palette_id = -1
 
-        get_pts: Callable[[float], float] = lambda c_pts: max(c_pts - 2/PGDecoder.FREQ, 0) * time_scale
+        get_pts: Callable[[float], float] = lambda c_pts: max(c_pts - (1/3)/PGDecoder.FREQ, 0) * time_scale
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
@@ -775,8 +775,11 @@ class WOBSAnalyzer:
                 uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255)
                 displaysets.append(uds)
 
-            c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
-            c_pts += nodes[i].tc_shift
+            if nodes[i].tc_shift == 0:
+                c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
+            else:
+                c_pts = get_pts(TC.add_frames(self.events[i].tc_in, self.bdn.fps, nodes[i].tc_shift))
+            nodes[i].tc_pts = c_pts
 
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
@@ -1085,7 +1088,7 @@ class DSNode:
         ) -> None:
         self.objects = objects
         self.windows = windows
-        self.tc_pts = max(tc_pts - 2/PGDecoder.FREQ, 0) * scale_pts
+        self.tc_pts = max(tc_pts - (1/3)/PGDecoder.FREQ, 0) * scale_pts
         self.new_mask = []
         self.parent = parent
         self.partial = False
