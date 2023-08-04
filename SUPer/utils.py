@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Copyright (C) 2023 cibo
-# This file is part of SUPer <https://github.com/cubicibo/SUPer>.
-#
-# SUPer is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# SUPer is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
+"""
+Copyright (C) 2023 cibo
+This file is part of SUPer <https://github.com/cubicibo/SUPer>.
+
+SUPer is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+SUPer is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
+"""
 
 from typing import Optional, Callable, TypeVar, Union
 
@@ -222,6 +224,11 @@ class TimeConv:
     @classmethod
     def f2tc(cls, f: int, fps: float, *, add_one: bool = False) -> str:
         return str(Timecode(round(fps, 2), frames=f+1, force_non_drop_frame=cls.FORCE_NDF))
+
+    @classmethod
+    def add_frames(cls, tc: str, fps: float, nf: int) -> float:
+        fps = round(fps, 2)
+        return cls.tc2s(str(Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF) + nf), fps)
 
 def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """
