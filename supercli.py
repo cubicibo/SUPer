@@ -91,6 +91,7 @@ if __name__ == '__main__':
         exit_msg("PES output without DTS or with ahead-of-time decoding is not allowed, aborting.")
     if ext == 'pes' and not args.palette:
         logger.warning("PES output: generating with full palette flag.")
+        args.palette = True
 
     print("\n @@@@@@@   &@@@  @@@@   @@@@@@@\n"\
           "@@@B &@@@  @@@@  @@@@  @@@@  @@@\n"\
