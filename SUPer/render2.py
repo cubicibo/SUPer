@@ -277,13 +277,14 @@ class GroupingEngine:
         """
         Seek for minimum areas from the regions, sort them and return them sorted,
         ascending area size. The caller will then choose the best area.
-        This function performs an expensive 3D search, only suited for len(srs) <= 16
         """
         windows, areas = {}, {}
         n_regions = len(srs)
 
         if n_regions == 1 or self.n_groups == 1:
             return [(WindowOnBuffer(srs, duration=duration),)]
+        elif n_regions > 16:
+            return None
 
         for key, arrangement in enumerate(__class__._get_combinations(n_regions)):
             arr_sr, other_sr = [], []
@@ -316,9 +317,11 @@ class GroupingEngine:
 
             wobs = self.group_and_sort(tbox, len(subgroup))
             if wobs is None:
-                self.no_blur = False
-                self.blur_mul += 0.5
-                self.blur_c += 0.5
+                if self.no_blur:
+                    self.no_blur = False
+                else:
+                    self.blur_mul += 0.33
+                    self.blur_c += 0.33
         if wobs is None:
             logger.warning("Grouping Engine giving up optimising layout. Using a single window.")
             wobs = [(WindowOnBuffer(tbox, duration=len(subgroup)),)]
