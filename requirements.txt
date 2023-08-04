@@ -1,7 +1,7 @@
 Pillow
 numpy
 py-flags==1.1.4
-sklearn
+scikit-learn
 scikit-image
 guizero
 opencv-python
