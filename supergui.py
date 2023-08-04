@@ -125,14 +125,18 @@ def set_outputsup() -> None:
     if len(Path(supout.value).name.split('.')) == 1:
         logger.info("No extension given, assuming SUP.")
         supout.value += '.sup'
-    
+
     if supout.value.lower().endswith('pes'):
         set_dts.value = True
         set_dts.enabled = False
         scenarist_checks.value = True
         scenarist_checks.enabled = False
+        scenarist_fullpal.value = True
+        scenarist_fullpal.enabled = False
     else:
         set_dts.enabled = True
+        scenarist_checks.enabled = True
+        scenarist_fullpal.enabled = True
 
     if bdnname.value != '':
         do_super.enabled = True
