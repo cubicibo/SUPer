@@ -753,8 +753,6 @@ class WOBSAnalyzer:
         c_pts = 0
         last_cobjs = []
         last_palette_id = -1
-        last_pal = Palette()
-        last_ods_binary = []
 
         get_pts: Callable[[float], float] = lambda c_pts: max(c_pts - (1/3)/PGDecoder.FREQ, 0) * time_scale
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
@@ -809,34 +807,18 @@ class WOBSAnalyzer:
 
             r = self._generate_acquisition_ds(i, k, pgobs_items, windows, double_buffering, has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
             cobjs, pals, o_ods, pal = r
-            
-            # Filter out identical acquisitions
-            perform_acq = pal != last_pal
-            last_pal = pal
 
-            identical = 0
-            new_data = []
-            for odsd, lodsd in zip(o_ods, last_ods_binary):
-                identical += odsd.data == lodsd
-                new_data.append(odsd.data)
-            perform_acq |= not (identical == len(o_ods) == len(last_ods_binary))
-            last_ods_binary = new_data
+            wds = wds_base.copy(pts=c_pts, in_ticks=False)
+            p_id, p_vn = get_palette_data(palette_manager, nodes[i])
+            pds = PDS.from_scratch(pal, p_vn=palette_manager.get_palette_version(p_id), p_id=p_id, pts=c_pts)
+            pcs = pcs_fn(pcs_id, states[i], False, p_id, cobjs, c_pts)
 
-            if perform_acq:
-                wds = wds_base.copy(pts=c_pts, in_ticks=False)
-                p_id, p_vn = get_palette_data(palette_manager, nodes[i])
-                pds = PDS.from_scratch(pal, p_vn=palette_manager.get_palette_version(p_id), p_id=p_id, pts=c_pts)
-                pcs = pcs_fn(pcs_id, states[i], False, p_id, cobjs, c_pts)
+            nds = DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)])
+            apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, nodes[i].wipe_duration(), nodes[i]))
+            displaysets.append(nds)
 
-                nds = DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)])
-                apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, nodes[i].wipe_duration(), nodes[i]))
-                displaysets.append(nds)
-
-                pcs_id += 1
-                last_palette_id = p_id
-            else:
-                #Write full palette, because we don't have a solid base
-                last_palette_id = None
+            pcs_id += 1
+            last_palette_id = p_id
 
             if len(pals[0]) > 1:
                 # Pad palette chains
