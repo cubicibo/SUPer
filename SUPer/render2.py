@@ -487,13 +487,13 @@ class WOBSAnalyzer:
                                 nodes[l].parent.set_dts(dts_start_nc - 1/PGDecoder.FREQ)
                             num_pal_nc += 1
                         else:
-                            logger.warning(f"Discarded screen wipe before {self.events[l].tc_in}.")
+                            logger.warning(f"Discarded screen wipe before {self.events[l].tc_in} to perform a mendatory acquisition.")
                             durs[l] = (durs[l][0], 0) # Drop screen wipe (we can't do it!)
                     for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
                         objs[ko] &= (obj is not None) & (not mask)
                     # We ran out of palette or the objects are too different -> drop
                     if sum(objs) == 0 or num_pal_nc >= 7 or not allow_overlaps:
-                        logger.warning(f"Discarded event at {self.events[l].tc_in}.")
+                        logger.warning(f"Discarded event at {self.events[l].tc_in} to perform a mendatory acquisition.")
                         flags[l] = -1
                     else:
                         num_pal_nc += 1
@@ -514,13 +514,13 @@ class WOBSAnalyzer:
                                 nodes[l].parent.set_dts(dts_start - 1/PGDecoder.FREQ)
                             num_pal += 1
                         else:
-                            logger.warning(f"Discarded screen wipe before {self.events[l].tc_in}.")
+                            logger.warning(f"Discarded screen wipe before {self.events[l].tc_in} to perform a mendatory acquisition.")
                             durs[l] = (durs[l][0], 0) #Drop screen wipe (we can't do it!)
                     for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
                         objs[ko] &= (obj is not None) & (not mask)
                     # We ran out of palette or the objects are too different -> drop
                     if sum(objs) == 0 or num_pal >= 7 or not allow_overlaps:
-                        logger.warning(f"Discarded event at {self.events[l].tc_in}.")
+                        logger.warning(f"Discarded event at {self.events[l].tc_in} to perform a mendatory acquisition.")
                         flags[l] = -1
                     else:
                         num_pal += 1
@@ -532,14 +532,14 @@ class WOBSAnalyzer:
             k -= 1
         ####
 
-        #Allocate palettes, this is essentially doing a sanity check
+        #Allocate palettes as a test, this is essentially doing a final sanity check
+        #on the selected display sets. The palette values generated here are not used.
         for k, (node, state, flag) in enumerate(zip(nodes, states, flags)):
-            #Deleted event are skipped
-            if flag == -1:
-                continue
-            elif flag == 0 and state == PCS.CompositionState.NORMAL:
+            if flag == 0 and state == PCS.CompositionState.NORMAL:
                 node.objects = []
-            if node.parent:
+                assert allow_overlaps or not node.is_custom_dts()
+            if node.parent and durs[k][1] > 0:
+                assert allow_overlaps or not node.parent.is_custom_dts()
                 node.parent.palette_id = pm.get_palette(node.parent.dts())
                 if not pm.lock_palette(node.parent.palette_id, node.parent.pts(), node.parent.dts()):
                     logger.error(f"Cannot acquire palette (rendering error) at {node.parent.pts():.05f}, discarding.")
@@ -548,7 +548,9 @@ class WOBSAnalyzer:
                 else:
                     node.parent.pal_vn = pm.get_palette_version(node.parent.palette_id)
                 logger.debug(f"{state} {flag} - {node.parent.partial} DTS={node.parent.dts():.05f} PTS={node.parent.pts():.05f} {node.parent.palette_id} {node.parent.pal_vn}")
-
+            #Deleted event are skipped
+            if flag == -1:
+                continue
             node.palette_id = pm.get_palette(node.dts())
             if not pm.lock_palette(node.palette_id, node.pts(), node.dts()):
                 logger.error(f"Cannot acquire palette (rendering error) at {nodes[k].pts()}, discarding.")
@@ -558,7 +560,6 @@ class WOBSAnalyzer:
 
             logger.debug(f"{state:02X} {flag} - {node.partial} DTS={node.dts():.05f}->{node.dts_end():.05f} PTS={node.pts():.05f} {node.palette_id} {node.pal_vn}")
         return self._convert(states, pgobjs, windows, durs, flags, nodes)
-
 
     @staticmethod
     def _get_stack_direction(*box) -> tuple[npt.NDArray[np.uint16], tuple[int, int]]:
@@ -722,7 +723,7 @@ class WOBSAnalyzer:
         is_compat_mode = self.kwargs.get('pgs_compatibility', False)
         displaysets = []
         time_scale = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
-
+        use_full_pal = self.kwargs.get('full_palette', False)
         palette_manager = PaletteManager()
 
         ## Internal helper function
@@ -781,6 +782,9 @@ class WOBSAnalyzer:
             if durs[i][1] != 0:
                 assert i > 0
                 assert nodes[i].parent is not None
+                p_id, p_vn = get_palette_data(palette_manager, nodes[i].parent)
+                nodes[i].parent.palette_id = p_id
+                nodes[i].parent.pal_vn = p_vn
                 uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255)
                 displaysets.append(uds)
 
@@ -802,22 +806,20 @@ class WOBSAnalyzer:
 
             r = self._generate_acquisition_ds(i, k, pgobs_items, windows, double_buffering, has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
             cobjs, pals, o_ods, pal = r
-            skip_acq = False
-            if pal == last_pal:
-                identical = 0
-                new_data = []
-                for odsd, lodsd in zip(o_ods, last_ods_binary):
-                    identical += odsd.data == lodsd
-                    new_data.append(odsd.data)
-                if identical == len(o_ods) == len(last_ods_binary):
-                    if k==i+1:
-                        continue
-                    else:
-                        skip_acq = True
-                last_ods_binary = new_data
+            
+            # Filter out identical acquisitions
+            perform_acq = pal != last_pal
             last_pal = pal
 
-            if not skip_acq:
+            identical = 0
+            new_data = []
+            for odsd, lodsd in zip(o_ods, last_ods_binary):
+                identical += odsd.data == lodsd
+                new_data.append(odsd.data)
+            perform_acq |= not (identical == len(o_ods) == len(last_ods_binary))
+            last_ods_binary = new_data
+
+            if perform_acq:
                 wds = wds_base.copy(pts=c_pts, in_ticks=False)
                 p_id, p_vn = get_palette_data(palette_manager, nodes[i])
                 pds = PDS.from_scratch(pal, p_vn=palette_manager.get_palette_version(p_id), p_id=p_id, pts=c_pts)
@@ -830,6 +832,7 @@ class WOBSAnalyzer:
                 pcs_id += 1
                 last_palette_id = p_id
             else:
+                #Write full palette, because we don't have a solid base
                 last_palette_id = None
 
             if len(pals[0]) > 1:
@@ -846,9 +849,7 @@ class WOBSAnalyzer:
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
                     c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
                     assert states[z] == PCS.CompositionState.NORMAL
-
-                    ored_pals = pals[0][z-i] | pals[1][z-i]
-                    pal |= ored_pals
+                    pal |= pals[0][z-i] | pals[1][z-i]
 
                     #Is there a know screen clear in the chain? then use palette screen clear here
                     if durs[z][1] != 0:
@@ -870,17 +871,23 @@ class WOBSAnalyzer:
                             pals[0][nz-i] |= new_p1
                             pals[1][nz-i] |= new_p2
                         normal_case_refresh = True
+                        last_palette_id = None
                     elif flags[z] == -1:
                         continue
 
-                    if len(pals[0][z-i] | pals[1][z-i]) == 0:
+                    p_write = (pals[0][z-i] | pals[1][z-i])
+                    #Skip empty palette updates
+                    if len(p_write) == 0:
                         logger.debug("Skipped an empty palette.")
                         continue
 
                     p_id, p_vn = get_palette_data(palette_manager, nodes[z])
+                    #If the palette ID change, we must give the full palette.
+                    if last_palette_id != p_id or use_full_pal:
+                        p_write = pal
 
                     pcs = pcs_fn(pcs_id, states[z], flags[z] != 1, p_id, cobjs, c_pts)
-                    pds = PDS.from_scratch(pals[0][z-i] | pals[1][z-i] if last_palette_id == p_id else pal, p_vn=p_vn, p_id=p_id, pts=c_pts)
+                    pds = PDS.from_scratch(p_write, p_vn=p_vn, p_id=p_id, pts=c_pts)
                     wds_upd = [wds_base.copy(pts=c_pts, in_ticks=False)] if flags[z] == 1 else []
                     ods_upd = o_ods if flags[z] == 1 else []
 
@@ -937,26 +944,15 @@ class WOBSAnalyzer:
             nodes[k].new_mask = is_new
 
             if k == 0:
-                prev_pts = prev_dts = -np.inf
+                prev_dts = -np.inf
             elif nodes[k].parent:
                 prev_dts = nodes[k].parent.dts_end()
-                prev_pts = nodes[k].parent.pts()
+                #prev_pts = nodes[k].parent.pts()
             else:
                 prev_dts = nodes[k-1].dts_end()
-                prev_pts = nodes[k-1].pts()
+                #prev_pts = nodes[k-1].pts()
             valid[k] = nodes[k].dts() > prev_dts
-
-            #see if normal case is possible
-            # if not valid[k] and force_acq:
-            #     if sum(map(lambda o: o is not None, objs)) == 2 and sum(is_new) == 1:
-            #         nodes[k].partial = True
-            #         nodes[k].partial = valid[k] = nodes[k].dts() > prev_dts
-            #         if nodes[k].partial:
-            #             logger.debug(f"Performing normal case definition at {nodes[k].tc_pts}")
-
             absolutes[k] = force_acq
-            #margin is computed on the PTSes but we use it to normalise the DTS delta.
-            # so this is not really the right margin, but it is a good enough indicaiton.
             dtl[k] = (nodes[k].dts() - prev_dts)/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
             prev_dt = dt
         return valid, absolutes, dtl, durs, nodes, flags
@@ -1191,7 +1187,6 @@ class DSNode:
             decode_duration += 1
         return (round(self.tc_pts*PGDecoder.FREQ) - decode_duration, t_decoding)
 
-
 #%%
 def get_wipe_duration(wds: WDS) -> int:
     return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.height*w.width/PGDecoder.RC, wds.windows)))
@@ -1373,8 +1368,8 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool
                     for w in seg.windows:
                         window_area[w.window_id] = w.width*w.height
                 elif isinstance(seg, PDS):
-                    if pds_vn[seg.p_id] == seg.p_vn:
-                        logger.warning(f"Palette version not incremented, will be discarded by decoder. Palette {seg.p_id} at {to_tc(seg.pts)}.")
+                    if (pds_vn[seg.p_id] + 1) & 0xFF != seg.p_vn:
+                        logger.warning(f"Palette version not incremented by one, may be discarded by decoder. Palette {seg.p_id} at DTS {to_tc(seg.pts)}.")
                     pds_vn[seg.p_id] = seg.p_vn
                 elif isinstance(seg, ODS):
                     if int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST):
