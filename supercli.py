@@ -29,28 +29,33 @@ from typing import NoReturn, Union
 
 #%% Main code
 if __name__ == '__main__':
+    print()
     logger = get_super_logger('SUPer')
 
     def exit_msg(msg: str, is_error: bool = True) -> NoReturn:
         if msg != '':
-            print(msg)
+            if is_error:
+                logger.error(msg)
+            else:
+                logger.info(msg)
         sys.exit(is_error)
+    ####exit_msg
 
     def check_output(fp: Union[Path, str], overwrite: bool) -> None:
+        ext = ''
         fp =  Path(fp)
         if fp.exists() and not overwrite:
             exit_msg("Output file already exist, not overwriting.")
         if fp.name.find('.') == -1:
             logger.warning("No extension provided, assuming .SUP.")
             fp = str(fp) + '.sup'
-        elif fp.name.split('.')[-1].lower() not in ['pes', 'sup']:
+            ext = 'sup'
+        elif (ext := fp.name.split('.')[-1].lower()) not in ['pes', 'sup']:
             exit_msg("Not a known PG stream extension, aborting.")
-        return str(os.path.expandvars(os.path.expanduser(fp)))
+        return str(os.path.expandvars(os.path.expanduser(fp))), ext
 
     def check_ext(fp: Union[Path, str]) -> None:
         fp = Path(fp)
-
-    ####exit_msg
 
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Input BDNXML file.", default='', required=True)
@@ -62,6 +67,8 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--subsampled', help="Flag to indicate BDNXML is subsampled", action='store_true', default=False, required=False)
     parser.add_argument('-f', '--softcomp', help="Use compatibility mode for software decoder", action='store_true', default=False, required=False)
     parser.add_argument('-d', '--nodts', help="Don't compute DTS in stream", action='store_true', default=False, required=False)
+    parser.add_argument('-a', '--aheadoftime', help="Allow ahead of time decoding.", action='store_true', default=False, required=False)
+    parser.add_argument('-p', '--palette', help="Always write the full palette.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Overwrite output file", action='store_true', default=False, required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
@@ -70,7 +77,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     #### Sanity checks and conversion
-    args.output = check_output(args.output, args.yes)
+    args.output, ext = check_output(args.output, args.yes)
 
     assert 0 <= args.compression <= 100
     assert 0 <= args.comprate <= 100
@@ -79,6 +86,22 @@ if __name__ == '__main__':
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown BT ITU target, using bt709.")
         args.bt = 709
+
+    if (args.nodts or args.aheadoftime) and ext == 'pes':
+        exit_msg("PES output without DTS or with ahead-of-time decoding is not allowed, aborting.")
+
+    print("\n @@@@@@@   &@@@  @@@@   @@@@@@@\n"\
+          "@@@B &@@@  @@@@  @@@@  @@@@  @@@\n"\
+          "@@@@       @@@@  @@@@  @@@@  @@@\n"\
+          "J&@@@@&G   @@@@  @@@@  @@@@&@@@ \n"\
+          "    &@@@@  @@@@  @@@@  @@@@\n"\
+          "@@@P B@@@  @@@@  @@@&  &@@@\n"\
+          "@@@&!&@@@  B@@@G#&YY5  YJ5#\n"\
+          " G&&@&&B    5#&@B  @@PB@&    @@&@\n"\
+          "                  @@@ ,@@@  @@@&G5\n"\
+          "                  @@@BP€    @@@\n"\
+          "                  @@@       @@@\n"\
+          "                   @@YY@@   @@@\n")
 
     ##
     parameters = {
@@ -91,10 +114,12 @@ if __name__ == '__main__':
         'bt_colorspace': f"bt{args.bt}",
         'pgs_compatibility': args.softcomp,
         'enforce_dts': not args.nodts,
+        'no_overlap': not args.aheadoftime,
+        'full_palette': args.palette,
     }
 
     bdnr = BDNRender(args.input, parameters)
     bdnr.optimise()
     bdnr.write_output(args.output)
-    logger.info("Success.")
+    exit_msg("Success.", False)
 ####

@@ -46,6 +46,7 @@ def get_kwargs() -> dict[str, int]:
         'pgs_compatibility': compat_mode.value,
         'enforce_dts': set_dts.value,
         'no_overlap': scenarist_checks.value,
+        'full_palette': scenarist_fullpal.value,
     }
 
 def wrapper_mp() -> None:
@@ -79,7 +80,6 @@ def wrapper_mp() -> None:
     do_super.queue.put(supname.value)
     do_super.ts = time.time()
 
-
 def monitor_mp() -> None:
     from multiprocessing import Process
     do_reset = False
@@ -107,13 +107,11 @@ def monitor_mp() -> None:
 
 def get_sup() -> None:
     pg_sup_types = ('*.sup', '*.SUP')
-    file_returned = app.select_file(filetypes=[["SUP", pg_sup_types], ["All files", "*"]])
-    supname.value = file_returned
+    supname.value = app.select_file(filetypes=[["SUP", pg_sup_types], ["All files", "*"]])
 
 def get_bdnxml() -> None:
     bdn_xml_types = ("*.xml", "*.XML")
-    file_returned = app.select_file(filetypes=[["BDNXML", bdn_xml_types], ["All files", "*"]])
-    bdnname.value = file_returned
+    bdnname.value = app.select_file(filetypes=[["BDNXML", bdn_xml_types], ["All files", "*"]])
     if supout.value != '':
         do_super.enabled = True
 
@@ -121,14 +119,13 @@ def set_outputsup() -> None:
     pg_sup_types = ('*.sup', '*.SUP')
     pg_pes_types = ('*.pes', '*.PES')
     supout.value = app.select_file(filetypes=[["SUP", pg_sup_types], ['PES', pg_pes_types], ["All files", "*"]], save=True)
-
     if supout.value == '':
         return
 
     if len(Path(supout.value).name.split('.')) == 1:
         logger.info("No extension given, assuming SUP.")
         supout.value += '.sup'
-
+    
     if supout.value.lower().endswith('pes'):
         set_dts.value = True
         set_dts.enabled = False
@@ -244,9 +241,9 @@ if __name__ == '__main__':
 
     scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
-                                   "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
-                                   "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
-                                   "as if it was 59.94. This flag is meaningless with 23.976 or 24p.")
+                           "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
+                           "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
+                           "as if it was 59.94. This flag is meaningless with 23.976 or 24p.")
 
     compat_mode = CheckBox(app, text="Compatibility mode for software players (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     compat_mode.value = 1
@@ -261,8 +258,14 @@ if __name__ == '__main__':
                          "It must be ticked to ensure compatibility and strict compliancy to Blu-ray specifications.")
 
     scenarist_checks = CheckBox(app, text="Apply additional compliancy rules for Scenarist BD", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    scenarist_checks.value = 1
     Hovertip(scenarist_checks.tk, "Scenarist BD has additional hard rules. This checkbox enforces them\n"\
                                   "and the generated stream shall pass all Scenarist checks.")
+
+    scenarist_fullpal = CheckBox(app, text="Always write the full palette", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(scenarist_fullpal.tk, "Scenarist BD mendles with the imported files and may mess up the palette assignments.\n"\
+                                   "Writing the full palette everytime ensures palette data consistency throughout the stream.")
+
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')
