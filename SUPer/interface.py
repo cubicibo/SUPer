@@ -56,7 +56,7 @@ class BDNRender:
         if self.kwargs.get('adjust_dropframe', False):
             if isinstance(bdn.fps, float):
                 bdn.fps = round(bdn.fps)
-                logger.info(f"NTSC timing flag: using {round(bdn.fps)} for timestamps rather than BDNXML {clip_framerate:.03f}.")
+                logger.info(f"NTSC timing flag: scaling all timestamps by 1.001.")
             else:
                 self.kwargs['adjust_dropframe'] = False
                 logger.warning("Ignored NDF flag with integer framerate.")
@@ -118,7 +118,7 @@ class BDNRender:
                     ds.pcs.fps = new_pcs_fps
             scaled_fps = True
         else:
-            logger.error(f"Expexcted 25 or 30 fps for 2x scaling. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}'.")
+            logger.error(f"Expected 25 or 30 fps for 2x scaling. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}'.")
         return scaled_fps
 
     def merge(self, input_sup) -> None:
@@ -137,8 +137,24 @@ class BDNRender:
 
     def write_output(self, fp: str) -> None:
         if self._epochs:
-            if fp.lower().endswith('pes'):
-                writer = EsMuiStream.segment_writer(fp)
+            is_pes = fp.lower().endswith('pes')
+            is_sup = fp.lower().endswith('sup')
+            if not (is_pes or is_sup):
+                logger.warning("Unknown extension, assuming a .SUP file...")
+                is_sup = True
+            if self.kwargs.get('output_all_formats', False):
+                is_pes = is_sup = True
+            if len(filepath := fp.split('.')) > 1:
+                fp_pes = ''.join(filepath[:-1]) + '.pes'
+                fp_sup = ''.join(filepath[:-1]) + '.sup'
+            else:
+                fp_pes = filepath[0] + '.pes'
+                fp_sup = filepath[0] + '.sup'
+
+            if is_pes:
+                logger.info(f"Writing output file {fp_pes}")
+
+                writer = EsMuiStream.segment_writer(fp_pes)
                 next(writer) #init writer
                 for epoch in self._epochs:
                     for ds in epoch:
@@ -147,10 +163,10 @@ class BDNRender:
                 # Close ESMUI writer
                 writer.send(None)
                 writer.close()
-            else:
-                if not fp.lower().endswith('sup'):
-                    logger.warning("Unknown extension, assuming a .SUP file...")
-                with open(fp, 'wb') as f:
+            if is_sup:
+                logger.info(f"Writing output file {fp_sup}")
+
+                with open(fp_sup, 'wb') as f:
                     for epoch in self._epochs:
                         f.write(bytes(epoch))
         else:

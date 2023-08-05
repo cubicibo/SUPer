@@ -20,7 +20,7 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 __MAJOR = 0
 __MINOR = 1
-__REVISION = 8
+__REVISION = 9
 
 __name__    = "SUPer"
 __version__ = '.'.join(map(str, [__MAJOR, __MINOR, __REVISION]))

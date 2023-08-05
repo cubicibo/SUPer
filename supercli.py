@@ -70,6 +70,8 @@ if __name__ == '__main__':
     parser.add_argument('-a', '--aheadoftime', help="Allow ahead of time decoding.", action='store_true', default=False, required=False)
     parser.add_argument('-p', '--palette', help="Always write the full palette.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Overwrite output file", action='store_true', default=False, required=False)
+    parser.add_argument('-w', '--withsup', help="Write SUP aside of PES file", action='store_true', default=False, required=False)
+
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
     parser.add_argument("output", type=str)
@@ -92,6 +94,9 @@ if __name__ == '__main__':
     if ext == 'pes' and not args.palette:
         logger.warning("PES output: generating with full palette flag.")
         args.palette = True
+    if ext != 'pes' and args.withsup:
+        args.withsup = False
+        logger.warning("Ignoring withsup flag, output is not PES.")
 
     print("\n @@@@@@@   &@@@  @@@@   @@@@@@@\n"\
           "@@@B &@@@  @@@@  @@@@  @@@@  @@@\n"\
@@ -119,6 +124,7 @@ if __name__ == '__main__':
         'enforce_dts': not args.nodts,
         'no_overlap': not args.aheadoftime,
         'full_palette': args.palette,
+        'output_all_formats': args.withsup,
     }
 
     bdnr = BDNRender(args.input, parameters)

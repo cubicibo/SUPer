@@ -49,6 +49,7 @@ def get_kwargs() -> dict[str, int]:
         'enforce_dts': set_dts.value,
         'no_overlap': scenarist_checks.value,
         'full_palette': scenarist_fullpal.value,
+        'output_all_formats': all_formats.value,
     }
 
 def wrapper_mp() -> None:
@@ -107,6 +108,13 @@ def monitor_mp() -> None:
         do_super.enabled = True
         do_super.text = SUPER_STRING
 
+def hide_chkbox() -> None:
+    if all_formats.value:
+        set_dts.value = scenarist_checks.value = scenarist_fullpal.value = True
+        set_dts.enabled = scenarist_checks.enabled = scenarist_fullpal.enabled = False
+    elif not supout.value.lower().endswith('pes'):
+        set_dts.enabled = scenarist_checks.enabled = scenarist_fullpal.enabled = True
+
 def get_sup() -> None:
     pg_sup_types = ('*.sup', '*.SUP')
     supname.value = app.select_file(filetypes=[["SUP", pg_sup_types], ["All files", "*"]])
@@ -136,9 +144,10 @@ def set_outputsup() -> None:
         scenarist_fullpal.value = True
         scenarist_fullpal.enabled = False
     else:
-        set_dts.enabled = True
-        scenarist_checks.enabled = True
-        scenarist_fullpal.enabled = True
+        if not all_formats.value:
+            set_dts.enabled = True
+            scenarist_checks.enabled = True
+            scenarist_fullpal.enabled = True
 
     if bdnname.value != '':
         do_super.enabled = True
@@ -179,7 +188,6 @@ def from_bdnxml(queue: ...) -> None:
         logger.info(f"Merging output with {supi}")
         sup_obj.merge(supi)
 
-    logger.info(f"Writing output file {supo}")
     sup_obj.write_output(supo)
 
     logger.info("Finished, exiting...")
@@ -272,6 +280,7 @@ if __name__ == '__main__':
     Hovertip(scenarist_fullpal.tk, "Scenarist BD mendles with the imported files and may mess up the palette assignments.\n"\
                                    "Writing the full palette everytime ensures palette data consistency throughout the stream.")
 
+    all_formats = CheckBox(app, text="Generate both SUP and PES+MUI files.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')
