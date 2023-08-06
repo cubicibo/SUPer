@@ -101,22 +101,23 @@ class BDNRender:
                 logger.info(f" => optimised as {len(epoch)} display sets.")
             gc.collect()
 
-        scaled_fps = False
-        if self.kwargs.get('scale_fps', False):
-            scaled_fps = self.scale_pcsfps()
+        scaled_fps = self.kwargs.get('scale_fps', False) and self.scale_pcsfps()
 
         # Final check
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps), self.kwargs.get('enforce_dts', True))
     ####
 
     def scale_pcsfps(self) -> bool:
+        scaled_fps = False
         from SUPer.utils import BDVideo
         pcs_fps = self._epochs[0].ds[0].pcs.fps.value
-        if (new_pcs_fps := BDVideo.LUT_PCS_FPS.get(2*BDVideo.LUT_FPS_PCSFPS[pcs_fps], None)):
+        real_fps = BDVideo.LUT_FPS_PCSFPS[pcs_fps]
+        if (new_pcs_fps := BDVideo.LUT_PCS_FPS.get(2*real_fps, None)):
             for epoch in self._epochs:
                 for ds in epoch.ds:
                     ds.pcs.fps = new_pcs_fps
             scaled_fps = True
+            logger.info(f"Overwrote origin FPS {real_fps:.3f} to {2*real_fps:.3f} in stream.")
         else:
             logger.error(f"Expected 25 or 30 fps for 2x scaling. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}'.")
         return scaled_fps
@@ -126,6 +127,11 @@ class BDNRender:
         if not self._epochs:
             self._epochs = epochs
         else:
+            in_pcs = epochs[0][0].pcs
+            out_pcs = self._epochs[0][0].pcs
+            if in_pcs.width != out_pcs.width or in_pcs.height != out_pcs.height or in_pcs.fps != out_pcs.fps:
+                logger.error("Video properties mismatch between BDNXML and SUP to inject. Not performing inject.")
+                return
             # Merge input sup with new content
             for k, epoch in enumerate(epochs.copy()):
                 cnt = 0
