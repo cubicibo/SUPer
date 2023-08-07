@@ -27,16 +27,20 @@ The GUI supports two output format: SUP and PES+MUI (Scenarist BD).
 ### CLI Parameters
 ```
  -i, --input         Input BDNXML file.
- -c, --compression   Time threshold for acquisitions. [int, 0-100, def: 80], 
- -r, --comprate      Decay rate to attain time threshold. [int, 0-100, def: 80], 
+ -c, --compression   Time threshold for acquisitions. [int, 0-100, def: 80]
+ -r, --comprate      Decay rate to attain time threshold. [int, 0-100, def: 80]
  -q, --qmode         Image quantization mode. [0: PIL, 1: PIL+K-Means on fades, 2: K-Means, def: PIL]
  -b, --bt            Target BT matrix [601, 709, 2020, def: 709]
- -n, --ntsc          Flag to force a rescaling of all timestamps by a 1.001 factor.
+ -n, --ntsc          Flag to force a rescaling of all timestamps by 1.001 (fix NTSC drift).
  -s, --subsampled    Flag to indicate BDNXML is subsampled (e.g 29.97 BDNXML for 59.94 output).
  -f, --softcomp      Set compatibility mode (software decoders don't implement all PGS features). 
- -d, --nodts         Dont compute DTS in stream.
+ -d, --nodts         Dont compute DTS in stream (not compatible with PES).
+ -p, --palette       Always write the full palette (enforced for PES).
+ -a, --aheadoftime   Allow ahead of time decoding (not compatible with PES).
  -y, --yes           Overwrite output file if it already exists.
  -v, --version       Print the version and exit.
+ -w, --withsup       Write SUP aside of PES+MUI assets
+ -l, --allow-normal  Allow normal case object redefinition.
 ```
 The output file extension is used to infer the desired output type (SUP or PES).  
 

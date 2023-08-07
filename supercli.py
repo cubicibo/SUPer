@@ -71,7 +71,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--palette', help="Always write the full palette.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Overwrite output file", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Write SUP aside of PES file", action='store_true', default=False, required=False)
-    parser.add_argument('-l', '--allow-normal', help="Allow normal case object redefinition", action='store_true', default=False, required=False)
+    parser.add_argument('-l', '--allow-normal', help="Allow normal case object redefinition.", action='store_true', default=False, required=False)
 
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
