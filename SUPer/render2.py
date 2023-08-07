@@ -468,13 +468,18 @@ class WOBSAnalyzer:
             if (normal_case_possible and j_nc == 0 and nodes[j_nc].dts_end() >= dts_start_nc) or\
                 (j == 0 and nodes[j].dts_end() >= dts_start):
                     #If this event is long enough, we shift it forward in time.
-                    wipe_area = np.multiply(*bdn.format.value)
-                    worst_dur = (np.ceil(wipe_area*PGDecoder.FREQ/PGDecoder.RD) + np.ceil(wipe_area*PGDecoder.FREQ/PGDecoder.RC))/PGDecoder.FREQ
-                    if durs[k][0]*1/self.bdn.fps > worst_dur*2+1/self.bdn.fps:
-                        nodes[k].tc_shift = np.ceil(worst_dur*self.bdn.fps)
+                    wipe_area = nodes[j].wipe_duration()
+                    worst_dur = (np.ceil(wipe_area*2) + 3)
+                    if durs[k][0]*1/self.bdn.fps > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
+                        nodes[k].tc_shift = int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps))
+                        logger.warning(f"Shifted event at {self.events[k].tc_in} by +{nodes[k].tc_shift} frames to account for epoch start and compliancy.")
                     else:
                         logger.warning("Deleting acquisition colliding with epoch start. Is the animation very complex?")
-                        flags[k] == -1
+                        flags[k] = -1
+                    #wipe all events in between epoch start and this point
+                    for ze in range(j+1, k):
+                        logger.warning(f"Discarded event at {self.events[ze].tc_in} to perform a mendatory acquisition right after epoch start.")
+                        flags[ze] = -1
                     k -= 1
                     continue
 
