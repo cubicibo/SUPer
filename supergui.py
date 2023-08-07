@@ -50,6 +50,7 @@ def get_kwargs() -> dict[str, int]:
         'no_overlap': scenarist_checks.value,
         'full_palette': scenarist_fullpal.value,
         'output_all_formats': all_formats.value,
+        'normal_case_ok': normal_case_ok.value
     }
 
 def wrapper_mp() -> None:
@@ -281,6 +282,12 @@ if __name__ == '__main__':
                                    "Writing the full palette everytime ensures palette data consistency throughout the stream.")
 
     all_formats = CheckBox(app, text="Generate both SUP and PES+MUI files.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
+
+    normal_case_ok = CheckBox(app, text="Allow normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
+    Hovertip(normal_case_ok.tk, "This option may reduce the number of dropped events on complicated animations.\n"\
+                                "When there are two objects on screen and one must be updated, it may be possible\n"\
+                                "to update the given object in a tighter time window than in an acquisition (both objects refreshed).")
+
 
     bspace = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
     Text(bspace, "Color space: ", grid=[0,0], align='right')

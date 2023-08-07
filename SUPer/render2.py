@@ -390,6 +390,7 @@ class WOBSAnalyzer:
     def analyze(self):
         global skip_dts
         skip_dts = not self.kwargs.get('enforce_dts', True)
+        allow_normal_case = self.kwargs.get('normal_case_ok', False)
         woba = []
         pm = PaletteManager()
 
@@ -423,7 +424,7 @@ class WOBSAnalyzer:
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
         for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
-            if (forced or (acq and margin > max(thresh-dthresh*drought, 0))): #and flags[k] != 1:
+            if (forced or (acq and margin > max(thresh-dthresh*drought, 0))):
                 states[k] = PCS.CompositionState.ACQUISITION
                 drought = 0
             else:
@@ -455,6 +456,7 @@ class WOBSAnalyzer:
 
             #Normal case is only possible if we discard past acquisitions that redefined the same object
             normal_case_possible = sum(nodes[k].new_mask) == sum(mask) == 1 and sum(map(lambda x: x is not None, nodes[k].objects)) == 2
+            normal_case_possible &= allow_normal_case
             if normal_case_possible:
                 nodes[k].partial = True
                 dts_start_nc = nodes[k].dts()
@@ -463,29 +465,27 @@ class WOBSAnalyzer:
                         dropped_nc += 1
                     j_nc -= 1
                 nodes[k].partial = False
-
+            nc_not_ok = normal_case_possible and j_nc == 0 and nodes[j_nc].dts_end() >= dts_start_nc
             # we can't delete or move epoch start -> delete self if we can't shift it forward
-            if (normal_case_possible and j_nc == 0 and nodes[j_nc].dts_end() >= dts_start_nc) or\
-                (j == 0 and nodes[j].dts_end() >= dts_start):
-                    #If this event is long enough, we shift it forward in time.
-                    wipe_area = nodes[j].wipe_duration()
-                    worst_dur = (np.ceil(wipe_area*2) + 3)
-                    if durs[k][0]*1/self.bdn.fps > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
-                        nodes[k].tc_shift = int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps))
-                        logger.warning(f"Shifted event at {self.events[k].tc_in} by +{nodes[k].tc_shift} frames to account for epoch start and compliancy.")
-                    else:
-                        logger.warning("Deleting acquisition colliding with epoch start. Is the animation very complex?")
-                        flags[k] = -1
-                    #wipe all events in between epoch start and this point
-                    for ze in range(j+1, k):
-                        logger.warning(f"Discarded event at {self.events[ze].tc_in} to perform a mendatory acquisition right after epoch start.")
-                        flags[ze] = -1
-                    k -= 1
-                    continue
+            if nc_not_ok or (not normal_case_possible and j == 0 and nodes[j].dts_end() >= dts_start):
+                #If this event is long enough, we shift it forward in time.
+                wipe_area = nodes[j].wipe_duration()
+                worst_dur = (np.ceil(wipe_area*2) + 3)
+                if durs[k][0]*1/self.bdn.fps > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
+                    nodes[k].tc_shift = int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps))
+                    logger.warning(f"Shifted event at {self.events[k].tc_in} by +{nodes[k].tc_shift} frames to account for epoch start and compliancy.")
+                else:
+                    logger.warning("Deleting acquisition colliding with epoch start. Is the animation very complex?")
+                    flags[k] = -1
+                #wipe all events in between epoch start and this point
+                for ze in range(j+1, k):
+                    logger.warning(f"Discarded event at {self.events[ze].tc_in} to perform a mendatory acquisition right after epoch start.")
+                    flags[ze] = -1
+                k -= 1
+                continue
 
-            # Analyze normal case
-            if dts_start_nc > dts_start and j_nc > j:
-                assert normal_case_possible
+            # Analyze normal case only if it is worthwile
+            if dts_start_nc > dts_start and normal_case_possible and nodes[j].dts_end() > dts_start:
                 num_pal_nc = 0
                 objs = list(map(lambda x: x is not None, nodes[j_nc].objects))
                 for l in range(j_nc+1, k):
@@ -512,6 +512,7 @@ class WOBSAnalyzer:
                 states[k] = PCS.CompositionState.NORMAL
                 nodes[k].partial = True
                 flags[k] = 1
+                logger.info(f"Screen refreshed with a NORMAL CASE at {self.events[k].tc_in} (tight timing).")
             else:
                 num_pal = 0
                 objs = list(map(lambda x: x is not None, nodes[j].objects))
