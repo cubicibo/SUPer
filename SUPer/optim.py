@@ -24,18 +24,13 @@ import numpy.typing as npt
 from PIL import Image, ImagePalette
 from typing import Optional, Union
 from collections.abc import Iterable
-from flags import Flags
 from enum import IntEnum, auto
 import cv2
 
 from .palette import Palette, PaletteEntry
-from .utils import ImageEvent, TimeConv as TC, get_super_logger
+from .utils import TimeConv as TC, get_super_logger
 
 logger = get_super_logger('SUPer')
-
-class PalettizeMode(Flags):
-    MERGE_QUANTIZE = ()
-    INDIV_QUANTIZE = ()
 
 class FadeCurve(IntEnum):
     LINEAR = auto()
@@ -92,73 +87,7 @@ class Preprocess:
         return [Image.fromarray(np.asarray(img)[:shape[0],:shape[1],:], 'RGBA') for img in imgs]
 
     @staticmethod
-    def palettize_events(events: list[ImageEvent], flags: PalettizeMode,
-                            colors: Union[int, list[int]] = 256) -> list[ImageEvent]:
-        """
-        Perform basic preprocessing to ease the work of the solver.
-         This functions optimises subtitles by groups. Groups are sublists in events
-         which typically represents an animation that is to be solved to a colormap.
-
-        :param events:  List of XML Event entries with aossiciated images
-        :param flags:   Optimisation(s) to apply, see PalettizeMode enum.
-        :param colors:  Number(s) of colors limit to apply to each or all images.
-        :return:        The events with optimised images.
-        """
-        if 2 <= colors > 256:
-            raise ValueError("Palettization is always performed on 2< colors <=256.")
-
-        if not PalettizeMode(flags):
-            logger.info("No known optimisation selected, skipping.")
-            return events
-
-        n_event: list[ImageEvent] = []
-
-        if PalettizeMode.INDIV_QUANTIZE in PalettizeMode(flags):
-            itcolors = colors if type(colors) is list else [colors] * len(events)
-
-            for event, i_colors in zip(events, itcolors):
-                n_event.append(ImageEvent(event.img.quantize(colors=i_colors,
-                                               method=Image.Quantize.FASTOCTREE,
-                                               palette=None,
-                                               dither=Image.Dither.NONE).convert('RGBA'),
-                                          event.event))
-
-        if PalettizeMode.MERGE_QUANTIZE in PalettizeMode(flags):
-            #Allow to perform group-wise preprocessing
-            itobj = events if type(events[0]) is list else [events]
-            itcolors = colors if type(colors) is list else [colors] * len(itobj)
-
-            for i_events, i_colors in zip(itobj, itcolors):
-                wt, ht = 0, 0
-                for event in i_events:
-                    if event.img.width > wt:
-                        wt = event.img.width
-                    ht += event.img.height
-
-                stack = Image.new('RGBA', (wt,ht), (0, 0, 0, 0))
-                heights = []
-                for k, event in enumerate(i_events):
-                    stack.paste(event.img, (0, sum(heights)))
-                    heights.append(event.img.height)
-
-                qtevts = stack.quantize(colors=i_colors,
-                                        method=Image.Quantize.FASTOCTREE,
-                                        palette=None,
-                                        dither=Image.Dither.NONE)
-
-                qtevts = qtevts.convert('RGBA')
-
-                h_prev = 0
-                for event in i_events:
-                    n_event.append(ImageEvent(Image.fromarray(np.asarray(qtevts)\
-                                              [h_prev:event.img.height+h_prev,:,:])),
-                                              event.event)
-                    h_prev += event.img.height
-
-        return n_event
-
-    @staticmethod
-    def find_most_opaque(events: Union[list[ImageEvent], list[Image.Image]]) -> ImageEvent:
+    def find_most_opaque(events: list[Image.Image]) -> int:
         """
         Find out which image is the most opaque of a set. Useful to recalculate fades
          without merging intermediate images to the final bitmap (=lower quality)
@@ -167,19 +96,17 @@ class Preprocess:
         :return:        Event which has the most opaque image.
         """
         # A single PNG image got flagged, just return it.
-        if not isinstance(events, Iterable) or isinstance(events, ImageEvent):
+        if not isinstance(events, Iterable):
             return events
 
         a_max, idx = 0, -1
 
         for k, event in enumerate(events):
-            if isinstance(events, Image.Image):
-                event = ImageEvent(event, '')
-            tmp = np.linalg.norm(np.asarray(event.img)[:,:,3], ord=1)
+            tmp = np.linalg.norm(np.asarray(event)[:,:,3], ord=1)
             if tmp > a_max:
                 a_max = tmp
                 idx = k
-        return events[idx]
+        return idx
 
     @staticmethod
     def merge_captions(imgs: list[Image.Image], *, _mode: str = 'P') -> Image:

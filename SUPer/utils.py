@@ -23,23 +23,17 @@ from typing import Optional, Callable, TypeVar, Union
 import logging
 import numpy as np
 from numpy import (typing as npt)
-from datetime import datetime, timezone
 from collections import namedtuple
 from enum import Enum, IntEnum
 from PIL import Image
 from timecode import Timecode
 
-#ImageEvent is the common container for the Optimiser module.
-ImageEvent = namedtuple("ImageEvent", "img event")
 Shape = namedtuple("Shape", "width height")
 Dim = namedtuple("Dim", "w h")
 Pos = namedtuple("Pos", "x y")
 _BaseEvent = TypeVar('BaseEvent')
 
-# Elementary plane initialisation time function
-_pinit_fn = lambda shape, *, _coeff=1: np.ceil(90e3*(shape.width*shape.height/(_coeff*32*1e6)))
-
-def min_enclosing_cube(group: list[_BaseEvent], *, _retwh=True) -> npt.NDArray[np.uint8]:
+def min_enclosing_square(group: list[_BaseEvent]) -> npt.NDArray[np.uint8]:
     pxtl, pytl = np.inf, np.inf
     pxbr, pybr = 0, 0
     for event in group:
@@ -201,6 +195,7 @@ class TimeConv:
 
     @classmethod
     def s2tc(cls, s: float, fps: float) -> str:
+        #Add 1e-8 to avoid wrong rounding
         return str(Timecode(round(fps, 2), start_seconds=s+1/fps+1e-8, force_non_drop_frame=cls.FORCE_NDF))
 
     @classmethod
@@ -243,17 +238,9 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
                                      [1.164,  -0.392, -0.813, 0],
                                      [1.164,   2.017,      0, 0],
                                      [    0,       0,      0, 1]]),
-                  'y2r_f': np.array([[1,           0,  1.400, 0],
-                                     [1,      -0.343, -0.711, 0],
-                                     [1,       1.765,      0, 0],
-                                     [0,           0,      0, 1]]),
                   'r2y_l': np.array([[ 0.257,  0.504,  0.098, 0],
                                      [-0.148, -0.291,  0.439, 0],
                                      [ 0.439, -0.368, -0.071, 0],
-                                     [     0,      0,      0, 1]]),
-                  'r2y_f': np.array([[ 0.299,  0.587,  0.114, 0],
-                                     [-0.169, -0.331,  0.500, 0],
-                                     [ 0.500, -0.419, -0.081, 0],
                                      [     0,      0,      0, 1]]),
         },
         'bt709': {'y2r_l': np.array([[1.164,      0,   1.793, 0],

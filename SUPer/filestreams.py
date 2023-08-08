@@ -26,15 +26,14 @@ import numpy as np
 from numpy import typing as npt
 from PIL import Image
 from pathlib import Path
-from io import BytesIO
 
 from abc import ABC, abstractmethod
 from collections.abc import Generator
 from typing import Union, Optional, Type, Any, Callable
 
-from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, DisplaySet, Epoch
+from .segments import PGSegment, PCS, DisplaySet, Epoch
 from .utils import (BDVideo, TimeConv as TC, get_super_logger,
-                    min_enclosing_cube, merge_events, Shape, Pos, Dim)
+                    min_enclosing_square, merge_events, Shape, Pos, Dim)
 
 logging = get_super_logger('SUPer')
 
@@ -511,7 +510,7 @@ class BDNXML(SeqIO):
                 if gevents != []:
                     gevents[0:0] = [event[cnt]]
                     group2merge = [BDNXMLEvent(event.attrib, dict(gevent.attrib, fp=os.path.join(self.folder, gevent.text)), []) for gevent in gevents]
-                    pos, dim = min_enclosing_cube(group2merge)
+                    pos, dim = min_enclosing_square(group2merge)
                     image_info = dict(Width=dim.w, Height=dim.h, X=pos.x, Y=pos.y, fp=None)
                     image = merge_events(group2merge, dim=dim, pos=pos)
                     image_info['fp'] = os.path.join(self.folder, 'temp', event[cnt].text)

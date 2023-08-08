@@ -24,9 +24,8 @@ from os import path
 
 from scenaristream import EsMuiStream
 
-from .utils import Shape, TimeConv as TC, _pinit_fn, get_super_logger
+from .utils import TimeConv as TC, get_super_logger
 from .pgraphics import PGDecoder
-from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
 from .filestreams import BDNXML, SUPFile
 
 logger = get_super_logger('SUPer')
@@ -35,10 +34,11 @@ class BDNRender:
     def __init__(self, bdnf: str, kwargs: dict[str, int]) -> None:
         self.bdn_file = bdnf
         self._epochs = []
-        self.skip_errors = kwargs.pop("skip_errors", False)
         self.kwargs = kwargs
 
     def optimise(self) -> None:
+        from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
+
         kwargs = self.kwargs
         stkw = ''
         stkw += ':'.join([f"{k}={v}" for k, v in kwargs.items()])

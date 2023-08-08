@@ -23,7 +23,7 @@ from .__metadata__ import __name__, __version__
 from .palette import Palette, PaletteEntry
 from .segments import PCS, WDS, ODS, PDS, ENDS, WindowDefinition, CObject, PGSegment, DisplaySet, Epoch
 from .filestreams import SUPFile, BDNXML
-from .optim import Preprocess, Optimise, PalettizeMode, FadeCurve
+from .optim import Preprocess, Optimise
 from .utils import BDVideo, TimeConv, get_super_logger
 from .pgraphics import PGraphics
 from .interface import BDNRender
