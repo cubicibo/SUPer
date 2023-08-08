@@ -31,7 +31,7 @@ import cv2
 from .palette import Palette, PaletteEntry
 from .utils import ImageEvent, TimeConv as TC, get_super_logger
 
-logging = get_super_logger('SUPer')
+logger = get_super_logger('SUPer')
 
 class PalettizeMode(Flags):
     MERGE_QUANTIZE = ()
@@ -43,15 +43,15 @@ class FadeCurve(IntEnum):
     EXPONENTIAL = auto()
 
 class Preprocess:
-    @staticmethod
-    def quantize(img: Image.Image, colors: int = 256, kmeans_quant: bool = False, kmeans_fade: bool = False, **kwargs) -> Image.Image:
+    @classmethod
+    def quantize(cls, img: Image.Image, colors: int = 256, kmeans_quant: bool = False, kmeans_fade: bool = False, **kwargs) -> Image.Image:
         #use cv2 for high transparency images, pillow has issues
-
-        alpha = np.asarray(img.split()[-1], dtype=np.uint16)
-        non_tsp_pix = alpha[alpha > 0]
-        if non_tsp_pix.size > 0:
-            kmeans_fade = (np.mean(non_tsp_pix) < 38 * (1 + kwargs.get('tsp_thresh', 0))) and kmeans_fade
-
+        if not kmeans_quant and kmeans_fade:
+            alpha = np.asarray(img.split()[-1], dtype=np.uint16)
+            non_tsp_pix = alpha[alpha > 0]
+            if non_tsp_pix.size > 0:
+                kmeans_fade = (np.mean(non_tsp_pix) < 38 * (1 + kwargs.get('tsp_thresh', 0))) and kmeans_fade
+        
         if kmeans_quant or kmeans_fade:
             # Use PIL to get approximate number of clusters
             nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
@@ -79,6 +79,12 @@ class Preprocess:
                 img_out = img.convert('P')
             else:
                 img_out = img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+            
+            #Somehow, pillow may sometimes not return all palette entries?? I've seen a case where one ID was consistently missing.
+            if len(img_out.palette.colors) != 1+max(img_out.palette.colors.values()):
+                logger.info("Pillow failed to palettize image, falling back to K-Means.")
+                return cls.quantize(img, colors, kmeans_quant=True, kmeans_fade=False, **kwargs)
+                
             return np.asarray(img_out, dtype=np.uint8), img_out.palette.colors
 
     @staticmethod
@@ -102,7 +108,7 @@ class Preprocess:
             raise ValueError("Palettization is always performed on 2< colors <=256.")
 
         if not PalettizeMode(flags):
-            logging.info("No known optimisation selected, skipping.")
+            logger.info("No known optimisation selected, skipping.")
             return events
 
         n_event: list[ImageEvent] = []
@@ -185,7 +191,7 @@ class Preprocess:
 
         :return:  Image in _mode, palettized by default.
         """
-        logging.info("Merging RGBA images together to find the overall bitmap.")
+        logger.info("Merging RGBA images together to find the overall bitmap.")
         for k, img in enumerate(imgs):
             if k == 0:
                 overall = img
