@@ -67,21 +67,23 @@ class BDNRender:
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
         #Round up to tick
-        epochstart_dd_fnr = lambda o_area: round(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
+        epochstart_dd_fnr = lambda o_area: np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
 
         for group in bdn.groups(epochstart_dd_fn(screen_area)):
             subgroups = []
             offset = len(group)
             max_area = 0
 
-            for k, event in enumerate(reversed(group[1:]), 1):
+            for k, event in enumerate(reversed(group)):
+                if k == 0:
+                    continue
                 max_area = max(np.multiply(*event.shape), max_area)
+                delay = TC.tc2s(group[len(group)-k].tc_in, bdn.fps) - TC.tc2s(event.tc_out, bdn.fps)
 
-                delay = TC.tc2s(event.tc_in, bdn.fps) - TC.tc2s(group[len(group)-k-1].tc_out, bdn.fps)
-                if epochstart_dd_fnr(max_area) <= delay:
-                    subgroups.append(group[offset-k:offset])
-                    offset -= len(subgroups[-1])
+                if delay > epochstart_dd_fnr(max_area):
                     max_area = 0
+                    subgroups.append(group[len(group)-k:offset])
+                    offset -= len(subgroups[-1])
             if len(group[:offset]) > 0:
                 subgroups.append(group[:offset])
             else:
@@ -96,9 +98,8 @@ class BDNRender:
                 logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
 
                 wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, **kwargs)
-                epoch = wobz.analyze()
-                self._epochs.append(epoch)
-                logger.info(f" => optimised as {len(epoch)} display sets.")
+                self._epochs.append(wobz.analyze())
+                logger.info(f" => optimised as {len(self._epochs[-1])} display sets.")
             gc.collect()
 
         scaled_fps = self.kwargs.get('scale_fps', False) and self.scale_pcsfps()
