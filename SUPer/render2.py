@@ -729,7 +729,7 @@ class WOBSAnalyzer:
         wd_base = [WindowDefinition.from_scratch(k, w.x+self.box.x, w.y+self.box.y, w.dx, w.dy) for k, w in enumerate(windows)]
         wds_base = WDS.from_scratch(wd_base, pts=0.0)
         n_actions = len(durs)
-        is_compat_mode = self.kwargs.get('pgs_compatibility', False)
+        is_compat_mode = self.kwargs.get('pgs_compatibility', True)
         displaysets = []
         time_scale = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
         use_full_pal = self.kwargs.get('full_palette', False)

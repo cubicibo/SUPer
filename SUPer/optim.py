@@ -45,8 +45,8 @@ class Preprocess:
             alpha = np.asarray(img.split()[-1], dtype=np.uint16)
             non_tsp_pix = alpha[alpha > 0]
             if non_tsp_pix.size > 0:
-                kmeans_fade = (np.mean(non_tsp_pix) < 38 * (1 + kwargs.get('tsp_thresh', 0))) and kmeans_fade
-        
+                kmeans_fade = (np.mean(non_tsp_pix) < 45 * (1 + kwargs.get('tsp_thresh', 0))) and kmeans_fade
+
         if kmeans_quant or kmeans_fade:
             # Use PIL to get approximate number of clusters
             nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
@@ -74,12 +74,12 @@ class Preprocess:
                 img_out = img.convert('P')
             else:
                 img_out = img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
-            
+
             #Somehow, pillow may sometimes not return all palette entries?? I've seen a case where one ID was consistently missing.
             if len(img_out.palette.colors) != 1+max(img_out.palette.colors.values()):
                 logger.info("Pillow failed to palettize image, falling back to K-Means.")
                 return cls.quantize(img, colors, kmeans_quant=True, kmeans_fade=False, **kwargs)
-                
+
             return np.asarray(img_out, dtype=np.uint8), img_out.palette.colors
 
     @staticmethod
