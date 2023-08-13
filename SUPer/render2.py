@@ -1253,7 +1253,7 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int, n
     ts_pairs = [(ds.pcs.tpts, dts)]
 
     if ds.wds:
-        ts_pairs.append((np.uint32(ds.pcs.tpts - wipe_duration), dts))
+        ts_pairs.append((int(ds.pcs.tpts - decode_duration) & mask, dts))
     for pds in ds.pds:
         ts_pairs.append((dts, dts))
 
@@ -1307,6 +1307,7 @@ def test_diplayset(ds: DisplaySet) -> bool:
 ####
 
 def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool:
+    ts_mask = ((1 << 32) - 1)
     prev_pts = -1
     last_cbbw = 0
     last_dbbw = 0
@@ -1343,6 +1344,9 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool
 
             for ks, seg in enumerate(ds.segments):
                 areas2gp = {}
+                if has_dts and ((seg.tpts - seg.tdts) & ts_mask >= PGDecoder.FREQ):
+                    logger.warning(f"Too large PTS-DTS difference for seg._type at {to_tc(current_pts)}.")
+
                 if isinstance(seg, PCS):
                     compliant &= (ks == 0) #PCS is not first in DisplaySet
                     if seg.composition_n == prev_pcs_id:
