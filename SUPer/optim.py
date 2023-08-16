@@ -22,6 +22,8 @@ import numpy as np
 import numpy.typing as npt
 
 from PIL import Image, ImagePalette
+from SSIM_PIL import compare_ssim
+
 from typing import Optional, Union
 from collections.abc import Iterable
 from importlib.util import find_spec
@@ -67,11 +69,11 @@ class Quantizer:
 
     @classmethod
     def find_options(cls) -> None:
-        cls._opts[cls.Libs.PIL_CV2KM]     = ('PIL+CV2', '(good, fast)')
+        cls._opts[cls.Libs.PIL_CV2KM] = ('PIL+KMeans', '(good, fast)')
         if cls._check_piliq():
             cls._opts[cls.Libs.PILIQ] = ('PNGQuant','(best, avg)')
         cls._opts[cls.Libs.PILLOW]    = ('PIL', '(decent, turbo)')
-        cls._opts[cls.Libs.CV2KM] = ('CV2', '(better, slow)')
+        cls._opts[cls.Libs.CV2KM]     = ('KMeans', '(better, slow)')
 
     @staticmethod
     def _check_piliq() -> bool:
@@ -127,13 +129,20 @@ class Preprocess:
 
         else:
             img_out = img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+            npimg = np.asarray(img_out, dtype=np.uint8)
+            nppal = np.asarray(list(img_out.palette.colors.keys()), dtype=np.uint8)
 
             #Somehow, pillow may sometimes not return all palette entries?? I've seen a case where one ID was consistently missing.
-            if len(img_out.palette.colors) != 1+max(img_out.palette.colors.values()):
+            pil_failed = len(img_out.palette.colors) != 1+max(img_out.palette.colors.values())
+
+            #When PIl fails to quantize alpha channel, there's a clear discrepancy between original and quantized image.
+            pil_failed|= compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.96
+
+            if pil_failed:
                 logger.debug("Pillow failed to palettize image, falling back to K-Means.")
                 return cls.quantize(img, colors, quantize_lib=Quantizer.Libs.CV2KM, **kwargs)
 
-            return np.asarray(img_out, dtype=np.uint8), np.asarray(list(img_out.palette.colors.keys()), dtype=np.uint8)
+            return npimg, nppal
 
     @staticmethod
     def crop_right(imgs: list[Image.Image], shape: tuple[int]) -> list[Image.Image]:
