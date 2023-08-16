@@ -86,6 +86,7 @@ if __name__ == '__main__':
     assert 0 <= args.comprate <= 100
     if args.qmode not in range(0, 3):
         logger.warning("Unknown quantization mode, using PIL (0).")
+        args.qmode = 0
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown BT ITU target, using bt709.")
         args.bt = 709
@@ -118,8 +119,7 @@ if __name__ == '__main__':
         'refresh_rate': int(args.comprate)/100,
         'adjust_dropframe': args.ntsc,
         'scale_fps': args.subsampled,
-        'kmeans_fade': args.qmode == 1,
-        'kmeans_quant': args.qmode == 2,
+        'quantize_lib': args.qmode,
         'bt_colorspace': f"bt{args.bt}",
         'pgs_compatibility': args.softcomp,
         'enforce_dts': not args.nodts,

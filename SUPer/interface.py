@@ -45,6 +45,8 @@ class BDNRender:
         logger.info(f"Parameters: {stkw}")
 
         bdn = BDNXML(path.expanduser(self.bdn_file))
+        fps_str = bdn.fps if float(bdn.fps).is_integer() else round(bdn.fps, 3)
+        logger.info(f"BDN metadata: {'x'.join(map(str, bdn.format.value))}, FPS={fps_str}, DF={bdn.dropframe}, {len(bdn.events)} valid events.")
 
         if self.kwargs.get('scale_fps', False):
             if bdn.fps >= 50:

@@ -30,6 +30,7 @@ from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
 
 from SUPer import BDNRender, get_super_logger
+from SUPer.optim import Quantizer
 from SUPer.__metadata__ import __version__ as SUPVERS
 
 ### CONSTS
@@ -42,8 +43,7 @@ def get_kwargs() -> dict[str, int]:
         'refresh_rate': int(refresh_txt.value)/100,
         'adjust_dropframe': dropframebox.value,
         'scale_fps': scale_fps.value,
-        'kmeans_fade': quantcombo.value.startswith('PIL+KMeans'),
-        'kmeans_quant': quantcombo.value.startswith('KMeans'),
+        'quantize_lib': Quantizer.get_option_id(quantcombo.value),
         'bt_colorspace': colorspace.value,
         'enforce_dts': set_dts.value,
         'no_overlap': scenarist_checks.value,
@@ -197,7 +197,7 @@ if __name__ == '__main__':
     import multiprocessing as mp
     mp.freeze_support()
 
-    opts_quant = ["PIL+KMeans (better)", "PIL (decent, fast)", "KMeans (best, slow)"]
+    opts_quant = Quantizer.get_options()
 
     pos_v = 0
 
@@ -250,7 +250,7 @@ if __name__ == '__main__':
 
     bquant = Box(app, layout="grid", grid=[1, pos_v], align='left')
     Text(bquant, "Quantization: ", grid=[0,0], align='left', size=11)
-    quantcombo = Combo(bquant, options=opts_quant, grid=[1,0], align='left')
+    quantcombo = Combo(bquant, options=list(map(lambda x: ' '.join(x), opts_quant.values())), grid=[1,0], align='left')
 
     dropframebox = CheckBox(app, text="Correct NTSC timings (*1.001)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(dropframebox.tk, "Multiply timestamps by 1.001 to fix NTSC drifts (30/29.97, 24/23.976...).")

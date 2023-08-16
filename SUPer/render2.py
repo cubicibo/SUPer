@@ -479,7 +479,7 @@ class WOBSAnalyzer:
                         logger.warning(f"Discarded event at {self.events[ze].tc_in} to perform a mendatory acquisition right after epoch start.")
                         flags[ze] = -1
                 else:
-                    logger.warning("Discarded event at {self.events[k].tc_in} colliding with epoch start.")
+                    logger.warning(f"Discarded event at {self.events[k].tc_in} colliding with epoch start.")
                     flags[k] = -1
                 k -= 1
                 continue

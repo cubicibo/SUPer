@@ -24,8 +24,15 @@ import numpy.typing as npt
 from PIL import Image, ImagePalette
 from typing import Optional, Union
 from collections.abc import Iterable
+from importlib.util import find_spec
 from enum import IntEnum, auto
 import cv2
+
+try:
+    if find_spec('piliq', None):
+        import piliq
+except:
+    ...
 
 from .palette import Palette, PaletteEntry
 from .utils import TimeConv as TC, get_super_logger
@@ -37,17 +44,62 @@ class FadeCurve(IntEnum):
     QUADRATIC = auto()
     EXPONENTIAL = auto()
 
+class Quantizer:
+    class Libs(IntEnum):
+        PILLOW = 0
+        PIL_CV2KM = 1
+        CV2KM  = 2
+        PILIQ  = 3
+
+    _opts = {}
+    @classmethod
+    def get_options(cls) -> dict[int, (str, str)]:
+        return cls._opts
+
+    @classmethod
+    def get_option_id(cls, option_str: str) -> 'Quantizer.Libs':
+        algo = option_str.strip().split(' ')[0]
+        for opt_id, opt in cls._opts.items():
+            if opt[0] == algo:
+                return opt_id
+        logger.error("Unknown quantizer library requested, returning default.")
+        return 0
+
+    @classmethod
+    def find_options(cls) -> None:
+        cls._opts[cls.Libs.PIL_CV2KM]     = ('PIL+CV2', '(good, fast)')
+        if cls._check_piliq():
+            cls._opts[cls.Libs.PILIQ] = ('PNGQuant','(best, avg)')
+        cls._opts[cls.Libs.PILLOW]    = ('PIL', '(decent, turbo)')
+        cls._opts[cls.Libs.CV2KM] = ('CV2', '(better, slow)')
+
+    @staticmethod
+    def _check_piliq() -> bool:
+        from importlib.util import find_spec
+
+        try:
+            found = find_spec('piliq') is not None
+            found = found and piliq.PILIQ.is_ready()
+        except:
+            found = False
+        return found
+####
+
+Quantizer.find_options()
+
 class Preprocess:
     @classmethod
-    def quantize(cls, img: Image.Image, colors: int = 256, kmeans_quant: bool = False, kmeans_fade: bool = False, **kwargs) -> Image.Image:
+    def quantize(cls, img: Image.Image, colors: int = 256, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+        quant_method = Quantizer.Libs(kwargs.pop('quantize_lib', Quantizer.Libs.PILLOW))
+        kmeans_fade = False
         #use cv2 for high transparency images, pillow has issues
-        if not kmeans_quant and kmeans_fade:
+        if quant_method == Quantizer.Libs.PIL_CV2KM:
             alpha = np.asarray(img.split()[-1], dtype=np.uint16)
             non_tsp_pix = alpha[alpha > 0]
             if non_tsp_pix.size > 0:
-                kmeans_fade = (np.mean(non_tsp_pix) < 45 * (1 + kwargs.get('tsp_thresh', 0))) and kmeans_fade
+                kmeans_fade = (np.mean(non_tsp_pix) < 45 * (1 + kwargs.get('tsp_thresh', 0)))
 
-        if kmeans_quant or kmeans_fade:
+        if quant_method == Quantizer.Libs.CV2KM or kmeans_fade:
             # Use PIL to get approximate number of clusters
             nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
             ocv_img = np.asarray(img)
@@ -65,22 +117,23 @@ class Preprocess:
                 offset += 1
 
             label -= 1024
-            center = center[occs]
+            return np.reshape(label.flatten(), ocv_img.shape[:-1]).astype(np.uint8), center[occs]
 
-            pil_pal = ImagePalette.ImagePalette(mode='RGBA', palette=bytes(np.uint8(center)))
-            return np.reshape(label.flatten(), ocv_img.shape[:-1]).astype(np.uint8), pil_pal.colors
+        elif Quantizer.Libs.PILIQ == quant_method:
+            lib_piq = piliq.PILIQ()
+            pal, qtz_img = lib_piq.quantize(img, colors)
+            lib_piq.destroy()
+            return qtz_img, pal
+
         else:
-            if colors == 256:
-                img_out = img.convert('P')
-            else:
-                img_out = img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+            img_out = img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
 
             #Somehow, pillow may sometimes not return all palette entries?? I've seen a case where one ID was consistently missing.
             if len(img_out.palette.colors) != 1+max(img_out.palette.colors.values()):
-                logger.info("Pillow failed to palettize image, falling back to K-Means.")
-                return cls.quantize(img, colors, kmeans_quant=True, kmeans_fade=False, **kwargs)
+                logger.debug("Pillow failed to palettize image, falling back to K-Means.")
+                return cls.quantize(img, colors, quantize_lib=Quantizer.Libs.CV2KM, **kwargs)
 
-            return np.asarray(img_out, dtype=np.uint8), img_out.palette.colors
+            return np.asarray(img_out, dtype=np.uint8), np.asarray(list(img_out.palette.colors.keys()), dtype=np.uint8)
 
     @staticmethod
     def crop_right(imgs: list[Image.Image], shape: tuple[int]) -> list[Image.Image]:
@@ -163,8 +216,7 @@ class Optimise:
 
         sequences = []
         for event in events:
-            img, img_pal = Preprocess.quantize(event, colors, **kwargs)
-            clut = np.asarray(list(img_pal.keys()), dtype=np.uint8)
+            img, clut = Preprocess.quantize(event, colors, **kwargs)
             sequences.append(clut[img])
 
         sequences = np.stack(sequences, axis=2).astype(np.uint8)
