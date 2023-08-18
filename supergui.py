@@ -202,18 +202,16 @@ def init_extra_libs():
             return None
     ####
 
-    if os.name == 'nt':
-        try:
-            import configparser
-            config = configparser.ConfigParser()
-            config.read('./config.ini')
-            exepath = get_value_key(config, 'quantizer')
-        except:
-            exepath = None
-    else:
+    try:
+        import configparser
+        config = configparser.ConfigParser()
+        CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
+        config.read(CWD.joinpath('config.ini'))
+        exepath = get_value_key(config['PILIQ'], 'quantizer')
+    except:
         exepath = None
     if Quantizer.init_piliq(exepath):
-        logger.info("Advanced image quantizer armed.")
+        logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
         return {'quant': exepath}
     return {}
 

@@ -68,16 +68,16 @@ class Quantizer:
     @classmethod
     def find_options(cls) -> None:
         if cls._piliq is not None:
-            cls._opts[cls.Libs.PILIQ] = ('pngquant','(best, avg)')
-        cls._opts[cls.Libs.PIL_CV2KM] = ('PIL+KMeans', '(good, fast)')
+            cls._opts[cls.Libs.PILIQ] = (cls.get_piliq().lib_name,'(best, avg)')
+        cls._opts[cls.Libs.PIL_CV2KM] = ('PIL+KMeans', '(good, avg)')
         cls._opts[cls.Libs.CV2KM]     = ('KMeans', '(best, slow)')
-        cls._opts[cls.Libs.PILLOW]    = ('PIL', '(average, turbo)')
+        #cls._opts[cls.Libs.PILLOW]    = ('PIL', '(average, fast)')
 
     @classmethod
     def init_piliq(cls, fpath: Optional[Union[str, 'Path']] = None) -> bool:
         try:
             piliq = PILIQ(fpath)
-        except AssertionError:
+        except (FileNotFoundError, AssertionError):
             piliq = None
         if piliq is None and fpath is not None:
             #Perform auto-look up, likely to fail but can still find libs
@@ -99,15 +99,15 @@ class Preprocess:
     @classmethod
     def quantize(cls, img: Image.Image, colors: int = 256, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
         quant_method = Quantizer.Libs(kwargs.pop('quantize_lib', Quantizer.Libs.PILLOW))
-        kmeans_fade = False
-        #use cv2 for high transparency images, pillow has issues
-        if quant_method == Quantizer.Libs.PIL_CV2KM:
-            alpha = np.asarray(img.split()[-1], dtype=np.uint16)
-            non_tsp_pix = alpha[alpha > 0]
-            if non_tsp_pix.size > 0:
-                kmeans_fade = (np.mean(non_tsp_pix) < 45 * (1 + kwargs.get('tsp_thresh', 0)))
+        # kmeans_fade = False
+        # #use cv2 for high transparency images, pillow has issues
+        # if quant_method == Quantizer.Libs.PIL_CV2KM:
+        #    alpha = np.asarray(img.split()[-1], dtype=np.uint16)
+        #    non_tsp_pix = alpha[alpha > 0]
+        #    if non_tsp_pix.size > 0:
+        #        kmeans_fade = (np.mean(non_tsp_pix) < 45 * (1 + kwargs.get('tsp_thresh', 0)))
 
-        if quant_method == Quantizer.Libs.CV2KM or kmeans_fade:
+        if quant_method == Quantizer.Libs.CV2KM:
             # Use PIL to get approximate number of clusters
             nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
             ocv_img = np.asarray(img)
@@ -142,7 +142,7 @@ class Preprocess:
             pil_failed = len(img_out.palette.colors) != 1+max(img_out.palette.colors.values())
 
             #When PIl fails to quantize alpha channel, there's a clear discrepancy between original and quantized image.
-            pil_failed|= compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.9765
+            pil_failed|= compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.95
 
             if pil_failed:
                 logger.debug("Pillow failed to palettize image, falling back to K-Means.")
