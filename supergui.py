@@ -82,7 +82,6 @@ def wrapper_mp() -> None:
     do_super.queue.put(kwargs)
     do_super.queue.put(bdnname.value)
     do_super.queue.put(supout.value)
-    do_super.queue.put(supname.value)
     do_super.ts = time.time()
 
 def monitor_mp() -> None:
@@ -116,10 +115,6 @@ def hide_chkbox() -> None:
         set_dts.enabled = scenarist_checks.enabled = scenarist_fullpal.enabled = False
     elif not supout.value.lower().endswith('pes'):
         set_dts.enabled = scenarist_checks.enabled = scenarist_fullpal.enabled = True
-
-def get_sup() -> None:
-    pg_sup_types = ('*.sup', '*.SUP')
-    supname.value = app.select_file(filetypes=[["SUP", pg_sup_types], ["All files", "*"]])
 
 def get_bdnxml() -> None:
     bdn_xml_types = ("*.xml", "*.XML")
@@ -171,27 +166,16 @@ def terminate(frame = None, sig = None):
             proc.join(0.1)
 
 def from_bdnxml(queue: ...) -> None:
+    #### This function runs in MP context, not main.
     logger = get_super_logger('SUPer')
     kwargs = queue.get()
     bdnf = queue.get()
     supo = queue.get()
-    try:
-        supi = queue.get(timeout = 1)
-    except:
-        supi = ''
 
-    #### This function is run in MP context, not main.
     logger.info(f"Loading input BDN: {bdnf}")
     sup_obj = BDNRender(bdnf, kwargs)
-
     sup_obj.optimise()
-
-    if supi != '':
-        logger.info(f"Merging output with {supi}")
-        sup_obj.merge(supi)
-
     sup_obj.write_output(supo)
-
     logger.info("Finished, exiting...")
 
 def init_extra_libs():
@@ -235,11 +219,6 @@ if __name__ == '__main__':
         signal.signal(signal.SIGBREAK, terminate)
 
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
-
-    inject_button = PushButton(app, command=get_sup, text="OPTIONAL SUP to inject", grid=[0,pos_v], align='left', width=15)
-    supname = Text(app, grid=[1,pos_v], align='left', size=10)
-    Hovertip(inject_button.tk, "OPTIONAL: specify an input SUP file to merge with the BDNXML conversion output.\n"\
-                               "No overlapping event supported!! Can output garbage if you don't know what you are doing.")
 
     PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,pos_v:=pos_v+1],align='left', width=15)
     bdnname = Text(app, grid=[1,pos_v], align='left', size=10)
