@@ -192,6 +192,8 @@ def init_extra_libs():
         CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
         config.read(CWD.joinpath('config.ini'))
         exepath = get_value_key(config['PILIQ'], 'quantizer')
+        if not os.path.isabs(exepath):
+            exepath = str(CWD.joinpath(exepath))
     except:
         exepath = None
     if Quantizer.init_piliq(exepath):

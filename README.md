@@ -18,6 +18,11 @@ This is the client executed when you download the stand-alone binary or when you
 
 The GUI supports two output format: SUP and PES+MUI (Scenarist BD).
 
+### GUI config.ini
+The config.ini file can be used to specify the relative or absolute path to a quantizer binary (either pngquant[.exe] or libimagequant[.dll, .so]). If the program is in PATH, the name is sufficient. An external quantizer will offer higher quality than the common Python ones (Pillow or a K-Means clustering) and be, in general, faster.
+
+On UNIX systems, pngquant is fairly easily to get in your PATH via brew, apt-get and so on.
+
 ## Command line client
 `supercli.py` is essentially the command line equivalent to `supergui.py`.
 
