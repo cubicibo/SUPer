@@ -32,8 +32,7 @@ from collections.abc import Generator
 from typing import Union, Optional, Type, Any, Callable
 
 from .segments import PGSegment, PCS, DisplaySet, Epoch
-from .utils import (BDVideo, TimeConv as TC, get_super_logger,
-                    min_enclosing_square, merge_events, Shape, Pos, Dim)
+from .utils import (BDVideo, TimeConv as TC, get_super_logger, Shape, Pos, Dim)
 
 logging = get_super_logger('SUPer')
 
@@ -264,7 +263,29 @@ class BaseEvent:
     @property
     def tc_out(self) -> str:
         return self._outtc
+####
 
+def min_enclosing_square(group: list[BaseEvent]) -> npt.NDArray[np.uint8]:
+    pxtl, pytl = np.inf, np.inf
+    pxbr, pybr = 0, 0
+    for event in group:
+        if event.x < pxtl:
+            pxtl = event.x
+        if event.y < pytl:
+            pytl = event.y
+        if pxbr < event.x + event.width:
+            pxbr = event.x + event.width
+        if pybr < event.y + event.height:
+            pybr = event.y + event.height
+    return Pos(pxtl, pytl), Dim(pxbr-pxtl, pybr-pytl)
+
+def merge_events(group: list[BaseEvent], pos: Pos, dim: Dim) -> Image.Image:
+    img_plane = np.zeros((dim.h, dim.w, 4), dtype=np.uint8)
+    for k, event in enumerate(group):
+        slice_x = slice(event.x-pos.x, event.x-pos.x+event.width)
+        slice_y = slice(event.y-pos.y, event.y-pos.y+event.height)
+        img_plane[slice_y, slice_x, :] = np.asarray(event.img).astype(np.uint8)
+    return Image.fromarray(img_plane)
 
 class BDNXMLEvent(BaseEvent):
     """
@@ -309,23 +330,6 @@ class BDNXMLEvent(BaseEvent):
                     raise ValueError(f"Unknown fade type {e.attrib['FadeType']}")
             # Do you notice how the implementers of BDNXML thought that people would
             #  consider to anchor fade-in at the end????
-
-    @classmethod
-    def copy_custom(cls, other: Type['BDNXMLEvent'], image: Optional[Image.Image] = None,
-                    props: Optional[tuple[Pos, Dim]] = None) -> Type['BDNXMLEvent']:
-        """
-        Create an event alike "other" but with new image (& spatial properties)
-        """
-        new = cls(other.__te, other.__ie, other.__others)
-        new.gfxfile = None
-        if image:
-            if props is None and other.img._size != image._size:
-                raise ValueError("New image does not have the same size and no new dims or pos given.")
-            new.set_custom_image(image)
-            if props:
-                new.x, new.y = props[0]
-                new._width, new._height = props[1]
-        return new
 ####BDNXMLEvent
 
 class SeqIO(ABC):
@@ -485,10 +489,10 @@ class BDNXML(SeqIO):
         SUPer assumes the worst case and always assumes there's a single bitmap
         per BDNXMLEvent. (2+ images are merged to have one image).
         """
-        # Parse global effects here then LTU wwhile cycling the events
+        # TODO: Parse global effects here then LTU while cycling the events
         #  https://forum.doom9.org/showthread.php?t=146493&page=9
 
-        #BDNXML have n>=1 graphical object in each event but we don't want to
+        #BDNXML have 2>=n>=1 graphical object in each event but we don't want to
         # have subgroup for a given timestamp to not break the SeqIO class
         # so, we merge sub-evnets on the same plane.
         prev_f_out = -1

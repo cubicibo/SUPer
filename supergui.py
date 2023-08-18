@@ -21,6 +21,7 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 if __name__ == '__main__':
     print("Loading...")
 
+import os
 import sys
 import time
 import signal
@@ -49,7 +50,8 @@ def get_kwargs() -> dict[str, int]:
         'no_overlap': scenarist_checks.value,
         'full_palette': scenarist_fullpal.value,
         'output_all_formats': all_formats.value,
-        'normal_case_ok': normal_case_ok.value
+        'normal_case_ok': normal_case_ok.value,
+        'libs_path': lib_paths,
     }
 
 def wrapper_mp() -> None:
@@ -192,17 +194,40 @@ def from_bdnxml(queue: ...) -> None:
 
     logger.info("Finished, exiting...")
 
+def init_extra_libs():
+    def get_value_key(config, key: str):
+        try:
+            return config[key]
+        except KeyError:
+            return None
+    ####
+
+    if os.name == 'nt':
+        try:
+            import configparser
+            config = configparser.ConfigParser()
+            config.read('./config.ini')
+            exepath = get_value_key(config, 'quantizer')
+        except:
+            exepath = None
+    else:
+        exepath = None
+    if Quantizer.init_piliq(exepath):
+        logger.info("Advanced image quantizer armed.")
+        return {'quant': exepath}
+    return {}
 
 if __name__ == '__main__':
     import multiprocessing as mp
     mp.freeze_support()
 
+    logger = get_super_logger('SUPui')
+    logger.info(f"SUPer v{SUPVERS}")
+
+    lib_paths = init_extra_libs()
     opts_quant = Quantizer.get_options()
 
     pos_v = 0
-
-    logger = get_super_logger('SUPui')
-    logger.info(f"SUPer v{SUPVERS}")
 
     signal.signal(signal.SIGINT, terminate)
     signal.signal(signal.SIGTERM, terminate)

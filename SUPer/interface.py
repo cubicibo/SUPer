@@ -27,6 +27,7 @@ from scenaristream import EsMuiStream
 from .utils import TimeConv as TC, get_super_logger
 from .pgraphics import PGDecoder
 from .filestreams import BDNXML, SUPFile
+from .optim import Quantizer
 
 logger = get_super_logger('SUPer')
 
@@ -35,6 +36,7 @@ class BDNRender:
         self.bdn_file = bdnf
         self._epochs = []
         self.kwargs = kwargs
+        Quantizer.init_piliq(kwargs.get('libs_path', {}).pop('quant', None))
 
     def optimise(self) -> None:
         from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant

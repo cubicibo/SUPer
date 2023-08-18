@@ -28,13 +28,8 @@ from typing import Optional, Union
 from collections.abc import Iterable
 from importlib.util import find_spec
 from enum import IntEnum, auto
+from piliq import PILIQ
 import cv2
-
-try:
-    if find_spec('piliq', None):
-        import piliq
-except:
-    ...
 
 from .palette import Palette, PaletteEntry
 from .utils import TimeConv as TC, get_super_logger
@@ -54,8 +49,11 @@ class Quantizer:
         PILIQ  = 3
 
     _opts = {}
+    _piliq = None
     @classmethod
     def get_options(cls) -> dict[int, (str, str)]:
+        if cls._opts == {}:
+            cls.find_options()
         return cls._opts
 
     @classmethod
@@ -69,25 +67,33 @@ class Quantizer:
 
     @classmethod
     def find_options(cls) -> None:
+        if cls._piliq is not None:
+            cls._opts[cls.Libs.PILIQ] = ('pngquant','(best, avg)')
         cls._opts[cls.Libs.PIL_CV2KM] = ('PIL+KMeans', '(good, fast)')
-        if cls._check_piliq():
-            cls._opts[cls.Libs.PILIQ] = ('PNGQuant','(best, avg)')
-        cls._opts[cls.Libs.PILLOW]    = ('PIL', '(decent, turbo)')
-        cls._opts[cls.Libs.CV2KM]     = ('KMeans', '(better, slow)')
+        cls._opts[cls.Libs.CV2KM]     = ('KMeans', '(best, slow)')
+        cls._opts[cls.Libs.PILLOW]    = ('PIL', '(average, turbo)')
 
-    @staticmethod
-    def _check_piliq() -> bool:
-        from importlib.util import find_spec
-
+    @classmethod
+    def init_piliq(cls, fpath: Optional[Union[str, 'Path']] = None) -> bool:
         try:
-            found = find_spec('piliq') is not None
-            found = found and piliq.PILIQ.is_ready()
-        except:
-            found = False
-        return found
-####
+            piliq = PILIQ(fpath)
+        except AssertionError:
+            piliq = None
+        if piliq is None and fpath is not None:
+            #Perform auto-look up, likely to fail but can still find libs
+            try:
+                piliq = PILIQ()
+            except:
+                piliq = None
+        cls._piliq = piliq
+        if cls._piliq is not None:
+            cls._piliq.return_pil = False
+        return cls._piliq is not None and cls._piliq.is_ready()
 
-Quantizer.find_options()
+    @classmethod
+    def get_piliq(cls) -> Optional[PILIQ]:
+        return cls._piliq
+####
 
 class Preprocess:
     @classmethod
@@ -122,9 +128,9 @@ class Preprocess:
             return np.reshape(label.flatten(), ocv_img.shape[:-1]).astype(np.uint8), center[occs]
 
         elif Quantizer.Libs.PILIQ == quant_method:
-            lib_piq = piliq.PILIQ()
+            lib_piq = Quantizer.get_piliq()
+            assert lib_piq is not None
             pal, qtz_img = lib_piq.quantize(img, colors)
-            lib_piq.destroy()
             return qtz_img, pal
 
         else:
@@ -136,17 +142,13 @@ class Preprocess:
             pil_failed = len(img_out.palette.colors) != 1+max(img_out.palette.colors.values())
 
             #When PIl fails to quantize alpha channel, there's a clear discrepancy between original and quantized image.
-            pil_failed|= compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.96
+            pil_failed|= compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.9765
 
             if pil_failed:
                 logger.debug("Pillow failed to palettize image, falling back to K-Means.")
                 return cls.quantize(img, colors, quantize_lib=Quantizer.Libs.CV2KM, **kwargs)
 
             return npimg, nppal
-
-    @staticmethod
-    def crop_right(imgs: list[Image.Image], shape: tuple[int]) -> list[Image.Image]:
-        return [Image.fromarray(np.asarray(img)[:shape[0],:shape[1],:], 'RGBA') for img in imgs]
 
     @staticmethod
     def find_most_opaque(events: list[Image.Image]) -> int:
@@ -169,28 +171,6 @@ class Preprocess:
                 a_max = tmp
                 idx = k
         return idx
-
-    @staticmethod
-    def merge_captions(imgs: list[Image.Image], *, _mode: str = 'P') -> Image:
-        """
-        Merge together N subtitles using alpha compositing
-
-        :param imgs:  Image to merge together, they must have the same dimensions.
-        :param _mode:  Mode of the return image.
-
-        :return:  Image in _mode, palettized by default.
-        """
-        logger.info("Merging RGBA images together to find the overall bitmap.")
-        for k, img in enumerate(imgs):
-            if k == 0:
-                overall = img
-            else:
-                if img.width != overall.width and img.height != overall.height:
-                    raise Exception("Set of images have varying dimensions."
-                                    "Pad them all to the same shape.")
-
-                overall = Image.alpha_composite(overall, img)
-        return overall.convert(_mode)
 
     @staticmethod
     def palettize_img(img: Image, pal: npt.NDArray[np.uint8], *,

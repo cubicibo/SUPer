@@ -31,30 +31,6 @@ from timecode import Timecode
 Shape = namedtuple("Shape", "width height")
 Dim = namedtuple("Dim", "w h")
 Pos = namedtuple("Pos", "x y")
-_BaseEvent = TypeVar('BaseEvent')
-
-def min_enclosing_square(group: list[_BaseEvent]) -> npt.NDArray[np.uint8]:
-    pxtl, pytl = np.inf, np.inf
-    pxbr, pybr = 0, 0
-    for event in group:
-        if event.x < pxtl:
-            pxtl = event.x
-        if event.y < pytl:
-            pytl = event.y
-        if pxbr < event.x + event.width:
-            pxbr = event.x + event.width
-        if pybr < event.y + event.height:
-            pybr = event.y + event.height
-    return Pos(pxtl, pytl), Dim(pxbr-pxtl, pybr-pytl)
-
-def merge_events(group: list[_BaseEvent], pos: Pos, dim: Dim) -> Image.Image:
-    img_plane = np.zeros((dim.h, dim.w, 4), dtype=np.uint8)
-    for k, event in enumerate(group):
-        slice_x = slice(event.x-pos.x, event.x-pos.x+event.width)
-        slice_y = slice(event.y-pos.y, event.y-pos.y+event.height)
-        img_plane[slice_y, slice_x, :] = np.asarray(event.img).astype(np.uint8)
-    return Image.fromarray(img_plane).convert('RGBA')
-
 
 class BDVideo:
     class FPS(Enum):

@@ -11,4 +11,4 @@ timecode
 numba
 tqdm
 scenaristream @ git+https://github.com/cubicibo/ScenariStream
-piliq @ git+https://github.com/cubicibo/piliq.git ; sys_platform == 'win32'
+piliq @ git+https://github.com/cubicibo/piliq.git
