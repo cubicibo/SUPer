@@ -142,7 +142,7 @@ class Preprocess:
             pil_failed = len(img_out.palette.colors) != 1+max(img_out.palette.colors.values())
 
             #When PIl fails to quantize alpha channel, there's a clear discrepancy between original and quantized image.
-            pil_failed|= compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.95
+            pil_failed = pil_failed or compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.95
 
             if pil_failed:
                 logger.debug("Pillow failed to palettize image, falling back to K-Means.")
