@@ -19,7 +19,6 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from enum import Enum, IntEnum
-from flags import Flags
 from struct import unpack, pack
 from typing import Union, Optional, Any, Type
 from dataclasses import dataclass, field
@@ -715,9 +714,11 @@ class ODS(PGSegment):
         OBJ_DATA_FIRST = slice(11,None)
         OBJ_DATA_OTHERS= slice(4, None)
 
-    class ODSFlags(Flags):
+    class ODSFlags(IntEnum):
         SEQUENCE_FIRST = 0x80
         SEQUENCE_LAST  = 0x40
+        SEQUENCE_SINGLE = SEQUENCE_FIRST | SEQUENCE_LAST
+        SEQUENCE_MIDDLE = 0
 
     class RLEMaxLength(IntEnum):
         FIRST  = 0xFFE4
@@ -726,7 +727,7 @@ class ODS(PGSegment):
     def __init__(self, data: bytes) -> None:
         super().__init__(data)
 
-        if self.flags == __class__.ODSFlags.SEQUENCE_FIRST | __class__.ODSFlags.SEQUENCE_LAST:
+        if self.flags == __class__.ODSFlags.SEQUENCE_SINGLE:
             #4 more bytes because width and length are part of the RLE data
             assert self.rle_len == len(self.data) + 4, "ODS length does not match payload."
 
@@ -747,11 +748,11 @@ class ODS(PGSegment):
         self.payload = (__class__.ODSOff.OBJ_VN.value, no_vn & 0xFF)
 
     @property
-    def flags(self) -> Flags:
+    def flags(self) -> int:
         return __class__.ODSFlags(self.payload[__class__.ODSOff.SEQ_FLAG.value])
 
     @flags.setter
-    def flags(self, n_flags: Flags) -> None:
+    def flags(self, n_flags: int) -> None:
         for flag in __class__.ODSFlags:
             self.payload = (__class__.ODSOff.SEQ_FLAG.value,
                             self.payload[__class__.ODSOff.SEQ_FLAG.value] & (~int(flag)))
@@ -760,54 +761,54 @@ class ODS(PGSegment):
 
     @property
     def rle_len(self) -> int:
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
             return unpack(">I", bytearray([0]) + self.payload[__class__.ODSOff.DATA_LEN.value])[0]
         raise AttributeError("ODS is not first in sequence.")
 
     @rle_len.setter
     def rle_len(self, n_len: int) -> None:
         n_len += 4 #Width and Height (2x2 bytes) are part of the RLE length
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
             self.payload = (__class__.ODSOff.DATA_LEN.value, pack(">I", n_len)[1:])
         else:
             raise AttributeError("ODS is not first in sequence.")
 
     @property
     def width(self) -> int:
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
             return unpack(">H", self.payload[__class__.ODSOff.WIDTH.value])[0]
         raise AttributeError("ODS is not first in sequence.")
 
     @width.setter
     def width(self, n_width: int) -> None:
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
             self.payload = (__class__.ODSOff.WIDTH.value, pack(">H", n_width))
         else:
             raise AttributeError("ODS is not first in sequence.")
 
     @property
     def height(self) -> int:
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
             return unpack(">H", self.payload[__class__.ODSOff.HEIGHT.value])[0]
         raise AttributeError("ODS is not first in sequence.")
 
     @height.setter
     def height(self, n_height: int) -> None:
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
             self.payload = (__class__.ODSOff.HEIGHT.value, pack(">H", n_height))
         else:
             raise AttributeError("ODS is not first in sequence.")
 
     @property
     def data(self) -> bytes:
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
             return self.payload[__class__.ODSOff.OBJ_DATA_FIRST.value]
         return self.payload[__class__.ODSOff.OBJ_DATA_OTHERS.value]
 
     @data.setter
     def data(self, n_data: bytes) -> None:
         assert len(n_data) > 0, "Got zero length RLE data for ODS."
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
             assert len(n_data) <= __class__.RLEMaxLength.FIRST
             self.payload = (__class__.ODSOff.OBJ_DATA_FIRST.value, n_data)
         else:
@@ -827,8 +828,8 @@ class ODS(PGSegment):
         if the bitmap is split across numerous ODS, provide the total RLE length
         +4 will be added internally by the code to account for the width and height.
         """
-        if __class__.ODSFlags.SEQUENCE_FIRST in self.flags:
-            if __class__.ODSFlags.SEQUENCE_LAST in self.flags:
+        if __class__.ODSFlags.SEQUENCE_FIRST & self.flags:
+            if __class__.ODSFlags.SEQUENCE_LAST & self.flags:
                 self.rle_len = len(self.data)
             elif total_rle_len is not None:
                 self.rle_len = total_rle_len
@@ -843,15 +844,15 @@ class ODS(PGSegment):
 
         seg = cls(cls.add_header(bytearray([0, 0, o_vn & 0xFF] + [0]*8), cls._NAME, pts, dts))
         seg.o_id = o_id & 0xFFFF
-        seg.flags = __class__.ODSFlags.SEQUENCE_FIRST
+        seg.flags = cls.ODSFlags.SEQUENCE_FIRST
         seg.width, seg.height = width, height
         seg.rle_len = len(data)
 
         lseg = [seg]
-        MAXLEN_FIRST, MAXLEN_OTHERS = __class__.RLEMaxLength.FIRST, __class__.RLEMaxLength.OTHERS
+        MAXLEN_FIRST, MAXLEN_OTHERS = cls.RLEMaxLength.FIRST, cls.RLEMaxLength.OTHERS
 
         if len(data) <= MAXLEN_FIRST:
-            seg.flags |= __class__.ODSFlags.SEQUENCE_LAST
+            seg.flags |= cls.ODSFlags.SEQUENCE_LAST
             seg.data = data
         else:
             seg.data = data[:MAXLEN_FIRST]
@@ -861,7 +862,7 @@ class ODS(PGSegment):
                 iseg.o_id = o_id & 0xFFFF
                 iseg.data = data[MAXLEN_FIRST+k:MAXLEN_FIRST+(k+MAXLEN_OTHERS)]
                 lseg.append(iseg)
-            iseg.flags = __class__.ODSFlags.SEQUENCE_LAST
+            iseg.flags = cls.ODSFlags.SEQUENCE_LAST
         return lseg
 
 

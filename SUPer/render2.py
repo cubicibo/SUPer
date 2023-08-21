@@ -1300,8 +1300,8 @@ def test_diplayset(ds: DisplaySet) -> bool:
     if ds.ods:
         start_cnt = close_cnt = 0
         for ods in ds.ods:
-            start_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST))
-            close_cnt += bool(int(ods.flags) & int(ODS.ODSFlags.SEQUENCE_LAST))
+            start_cnt += bool(ods.flags & ODS.ODSFlags.SEQUENCE_FIRST)
+            close_cnt += bool(ods.flags & ODS.ODSFlags.SEQUENCE_LAST)
         comply &= start_cnt == close_cnt # "ODS segments flags mismatch."
     return comply & (ds.end is not None) # "No END segment in DS."
 ####
@@ -1367,7 +1367,7 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool
                         logger.warning(f"Palette version not incremented by one, may be discarded by decoder. Palette {seg.p_id} at DTS {to_tc(seg.pts)}.")
                     pds_vn[seg.p_id] = seg.p_vn
                 elif isinstance(seg, ODS):
-                    if int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_FIRST):
+                    if seg.flags & ODS.ODSFlags.SEQUENCE_FIRST:
                         if (slot := buffer.get(seg.o_id)) is None:
                             if not buffer.allocate_id(seg.o_id, seg.height, seg.width):
                                 logger.error("Object buffer overflow (not enough memory for all object slots).")
@@ -1388,7 +1388,7 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool
 
                     cumulated_ods_size = len(bytes(seg)[2:])
 
-                    if int(seg.flags) & int(ODS.ODSFlags.SEQUENCE_LAST):
+                    if seg.flags & ODS.ODSFlags.SEQUENCE_LAST:
                         if cumulated_ods_size > PGDecoder.CODED_BUF_SIZE:
                             logger.warning(f"Object size >1 MiB at {to_tc(seg.pts)} is unsupported by some decoders. Reduce object horizontal complexity.")
                             warnings += 1
