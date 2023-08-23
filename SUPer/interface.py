@@ -36,7 +36,7 @@ class BDNRender:
         self.bdn_file = bdnf
         self._epochs = []
         self.kwargs = kwargs
-        Quantizer.init_piliq(kwargs.get('libs_path', {}).pop('quant', None))
+        Quantizer.init_piliq(kwargs.get('libs_path', {}).get('quant', None))
 
     def optimise(self) -> None:
         from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
