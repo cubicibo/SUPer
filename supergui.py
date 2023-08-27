@@ -42,7 +42,6 @@ def get_kwargs() -> dict[str, int]:
     return {
         'quality_factor': int(compression_txt.value)/100,
         'refresh_rate': int(refresh_txt.value)/100,
-        'adjust_dropframe': dropframebox.value,
         'scale_fps': scale_fps.value,
         'quantize_lib': Quantizer.get_option_id(quantcombo.value),
         'bt_colorspace': colorspace.value,
@@ -255,9 +254,6 @@ if __name__ == '__main__':
     bquant = Box(app, layout="grid", grid=[1, pos_v], align='left')
     Text(bquant, "Quantization: ", grid=[0,0], align='left', size=11)
     quantcombo = Combo(bquant, options=list(map(lambda x: ' '.join(x), opts_quant.values())), grid=[1,0], align='left')
-
-    dropframebox = CheckBox(app, text="Correct NTSC timings (*1.001)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(dropframebox.tk, "Multiply timestamps by 1.001 to fix NTSC drifts (30/29.97, 24/23.976...).")
 
     scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\

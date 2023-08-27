@@ -61,9 +61,8 @@ if __name__ == '__main__':
     parser.add_argument("-i", "--input", type=str, help="Input BDNXML file.", default='', required=True)
     parser.add_argument('-c', '--compression', help="Time threshold for acquisitions. [int, 0-100]", type=int, default=85, required=False)
     parser.add_argument('-r', '--comprate', help="Decay rate to attain time threshold. [int, 0-100]", type=int, default=100, required=False)
-    parser.add_argument('-q', '--qmode', help="Image quantization mode. [0: PIL, 1: PIL+K-Means, 2: K-Means]", type=int, default=0, required=False)
+    parser.add_argument('-q', '--qmode', help="Image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PILIQ]", type=int, default=1, required=False)
     parser.add_argument('-b', '--bt', help="Target BT matrix [601, 709, 2020]", type=int, default=709, required=False)
-    parser.add_argument('-n', '--ntsc', help="Scale all timestamps by a 1.001.", action='store_true', default=False, required=False)
     parser.add_argument('-s', '--subsampled', help="Flag to indicate BDNXML is subsampled", action='store_true', default=False, required=False)
     parser.add_argument('-f', '--softcomp', help="Use compatibility mode for software decoder", action='store_true', default=False, required=False)
     parser.add_argument('-d', '--nodts', help="Don't compute DTS in stream", action='store_true', default=False, required=False)
@@ -84,9 +83,9 @@ if __name__ == '__main__':
 
     assert 0 <= args.compression <= 100
     assert 0 <= args.comprate <= 100
-    if args.qmode not in range(0, 3):
-        logger.warning("Unknown quantization mode, using PIL (0).")
-        args.qmode = 0
+    if args.qmode not in range(1, 4):
+        logger.warning("Unknown quantization mode, using PIL+K-Means (1).")
+        args.qmode = 1
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown BT ITU target, using bt709.")
         args.bt = 709
@@ -117,7 +116,6 @@ if __name__ == '__main__':
     parameters = {
         'quality_factor': int(args.compression)/100,
         'refresh_rate': int(args.comprate)/100,
-        'adjust_dropframe': args.ntsc,
         'scale_fps': args.subsampled,
         'quantize_lib': args.qmode,
         'bt_colorspace': f"bt{args.bt}",

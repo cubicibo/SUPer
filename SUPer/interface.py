@@ -57,13 +57,10 @@ class BDNRender:
                 sys.exit(1)
 
         clip_framerate = bdn.fps
-        if self.kwargs.get('adjust_dropframe', False):
-            if isinstance(bdn.fps, float):
-                bdn.fps = round(bdn.fps)
-                logger.info(f"NTSC timing flag: scaling all timestamps by 1.001.")
-            else:
-                self.kwargs['adjust_dropframe'] = False
-                logger.warning("Ignored NDF flag with integer framerate.")
+        if isinstance(bdn.fps, float) and not bdn.dropframe:
+            bdn.fps = round(bdn.fps)
+            self.kwargs['adjust_dropframe'] = True
+            logger.info(f"NDF NTSC detected: scaling all timestamps by 1.001.")
 
         logger.info("Finding epochs...")
 
