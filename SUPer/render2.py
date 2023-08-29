@@ -435,7 +435,7 @@ class WOBSAnalyzer:
 
         #At this point, we have the stream acquisition shaped nicely
         # except that some of them may be impossible. We apply a final filtering
-        # step to either discard some truly impossible event or shift some PG operations
+        # step to either discard the impossible events or shift some PG operations
         k = len(states)-1
         while k > 0 and not skip_dts:
             if not (absolutes[k] and not acqs[k] and flags[k] == 0):
@@ -468,6 +468,10 @@ class WOBSAnalyzer:
             nc_not_ok = normal_case_possible and j_nc == 0 and nodes[j_nc].dts_end() >= dts_start_nc
             # we can't delete or move epoch start -> delete self if we can't shift it forward
             if nc_not_ok or (not normal_case_possible and j == 0 and nodes[j].dts_end() >= dts_start):
+                if durs[k][1] > 0:
+                    logger.info(f"Discarded screen wipe before {self.events[k].tc_in} as it collides with epoch start.")
+                    durs[k] = (durs[k][0], 0) # Drop screen wipe (we can't do it!)
+
                 #If this event is long enough, we shift it forward in time.
                 wipe_area = nodes[j].wipe_duration()
                 worst_dur = (np.ceil(wipe_area*2) + 3)
@@ -479,8 +483,23 @@ class WOBSAnalyzer:
                         logger.warning(f"Discarded event at {self.events[ze].tc_in} to perform a mendatory acquisition right after epoch start.")
                         flags[ze] = -1
                 else:
+                    # event is short, we can't shift it so we just discard it.
                     logger.warning(f"Discarded event at {self.events[k].tc_in} colliding with epoch start.")
                     flags[k] = -1
+                ze = k
+                #We may have discarded an acquisition followed by NCs, we must find the new acquisition point.
+                while (ze := ze+1) < len(states) and states[ze] != PCS.CompositionState.ACQUISITION:
+                    if flags[ze] != -1 and nodes[ze].dts() > dts_start:
+                        logger.info(f"Epoch start collision: promoted normal case to acquisition at {self.events[ze].tc_in}.")
+                        states[ze] = PCS.CompositionState.ACQUISITION
+                        for zek in range(k+1, ze):
+                            if nodes[zek].parent is not None and nodes[zek].parent.dts_end() >= nodes[ze].dts():
+                                durs[zek] = (durs[zek][0], 0) # Drop screen wipe (we can't do it!)
+                                logger.info(f"Dropped screen wipe before {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
+                            if nodes[zek].dts_end() >= nodes[ze].dts():
+                                flags[zek] = -1
+                                logger.info(f"Dropped event at {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
+                        break
                 k -= 1
                 continue
 
