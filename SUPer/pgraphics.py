@@ -33,6 +33,7 @@ from dataclasses import dataclass
 try:
     #If numba is available, provide compiled functions for the encoder/decoder 10x gain
     from numba import njit
+    from numba.typed import List
 
     @njit(fastmath=True)
     def njit_encode_rle(bitmap: npt.NDArray[np.uint8]) -> list[np.uint8]:
@@ -41,97 +42,102 @@ try:
         :param bitmap:    Palette mapped image to encode (2d array)
         :return:          Encoded data (vector)
         """
+        i, j = 0, 0
         rle_data = [np.uint8(x) for x in range(0)]
 
-        width = bitmap.shape[1]
-        _fp = np.ravel(bitmap)
-        i = 0
-        insert_line_end = False
+        height, width = bitmap.shape
+        assert width <= 16383, "Bitmap too large."
 
-        while i < _fp.size:
-            for k in range(1, 16384):
-                if (i % width) + k >= width:
-                    insert_line_end = True
-                    break
+        while i < height:
+            color = bitmap[i, j]
+            prev_j = j
+            while (j := j+1) < width and bitmap[i, j] == color: pass
 
-                if _fp[i+k] != _fp[i]:
-                    break
-
-            if _fp[i] != 0: #color
-                if k < 3:
-                    rle_data += [_fp[i]]*k
-                elif k <= 63:
-                    rle_data += [0, 0x80 | k, _fp[i]]
+            dist = j - prev_j
+            if color == 0:
+                if dist > 63:
+                    rle_data += [0x00, 0x40 | ((dist >> 8) & 0x3F), dist & 0xFF]
                 else:
-                    rle_data += [0, 0xC0 | (k >> 8), k&0xFF, _fp[i]]
-            else: #transparent
-                if k <= 63:
-                    rle_data += [0, k]
+                    rle_data += [0x00, dist & 0x3F]
+            else:
+                if dist > 63:
+                    rle_data += [0x00, 0xC0 | ((dist >> 8) & 0x3F), dist & 0xFF, color]
+                elif dist > 2:
+                    rle_data += [0x00, 0x80 | (dist & 0x3F), color]
                 else:
-                    rle_data += [0, 0x40 | (k >> 8), k&0xFF]
-
-            if insert_line_end:
-                rle_data += [0, 0]
-                insert_line_end = False
-            i += k
+                    rle_data += [color] * dist
+            if j == width:
+                j = 0
+                i += 1
+                rle_data += [0x00, 0x00]
         return rle_data
 
     @njit(fastmath=True)
-    def njit_decode_rle(data: npt.NDArray[np.uint8], width: np.uint16, height: np.uint16) -> npt.NDArray[np.uint8]:
-        NEED_MORE, NEW_CODE, SMALL_TSP, LARGE_TSP, SMALL_CCO, LARGE_CCO = np.arange(-2, 4, dtype=np.int8)
+    def njit_get_rle_lines(rle_data: Union[list[np.uint8], npt.NDArray[np.uint8], bytes], width: int) -> list[list[np.uint8]]:
+        """
+        Get the RLE lines within the raw RLE data.
+        :param rle_data:  The RLE bitmap
+        :param width:     The bitmap width when decoded
+        :return:          list of RLE lines, N(lines) == bitmap height
+        """
+        k, j = -2, 0
+        prev_k = 0
+        rle_lines = List()
+        len_rle = len(rle_data) - 2
 
-        plane2d = np.zeros((height, width), np.uint8)
-        decoder_state = NEW_CODE
-        tmp = np.int32(0)
-        y, x = np.uint16(0), np.uint16(0)
-
-        for byte in data:
-            if decoder_state == NEW_CODE:
-                if byte > 0:
-                    plane2d[y,x] = byte
-                    x += 1
+        while k < len_rle:
+            if j % width == 0:
+                if k > 0:
+                    rle_lines.append(rle_data[prev_k:k])
+                j = 0
+                k += 2
+                prev_k = k
+            if rle_data[k] == 0:
+                byte = rle_data[k:=k+1]
+                if byte & 0x40:
+                    j += ((byte & 0x3F) << 8) | rle_data[k:=k+1]
                 else:
-                    decoder_state = NEED_MORE
+                    j += byte & 0x3F
+                if byte & 0x80:
+                    k += 1
+            else:
+                j += 1
+            k += 1
+        rle_lines.append(rle_data[prev_k:-2])
+        return rle_lines
 
-            elif decoder_state == NEED_MORE:
-                if byte == 0:
-                    y += 1
-                    x = 0
-                    decoder_state = NEW_CODE
+    @njit(fastmath=True)
+    def njit_decode_rle(rle_data: Union[list[np.uint8], npt.NDArray[np.uint8], bytes], width: int, height: int) -> npt.NDArray[np.uint8]:
+        i, j, k = 0, -1, -2
+        # RLE is terminated by new line command ([0x00, 0x00]), we can ignore it.
+        len_rle = len(rle_data) - 2
+        bitmap = np.zeros((height, width), np.uint8)
+
+        while k < len_rle:
+            if i % width == 0:
+                i = 0
+                j += 1
+                k += 2
+            byte = rle_data[k]
+            if byte == 0:
+                byte = rle_data[k:=k+1]
+                if byte & 0x40:
+                    length = ((byte & 0x3F) << 8) | rle_data[k:=k+1]
                 else:
-                    decoder_state = byte >> 6
-                    tmp = byte & 0x3F
-
-                    if decoder_state == SMALL_TSP:
-                        plane2d[y, x:x+tmp] = 0
-                        x += tmp
-                        decoder_state = NEW_CODE
-
-            elif decoder_state == LARGE_TSP:
-                tmp = (tmp << 8) + byte
-                plane2d[y, x:x+tmp] = 0
-                x += tmp
-                decoder_state = NEW_CODE
-
-            elif decoder_state == SMALL_CCO:
-                plane2d[y, x:x+tmp] = byte
-                x += tmp
-                decoder_state = NEW_CODE
-
-            elif decoder_state == LARGE_CCO:
-                #first pass (some RLE encoders use long code for small distances
-                # hence we must check for equal zero...)
-                if tmp >= 0:
-                    tmp = ((tmp << 8) + byte)*-1
-                else: #second pass
-                    plane2d[y, x:x+(-1*tmp)] = byte
-                    x += (-1*tmp)
-                    decoder_state = NEW_CODE
-        return plane2d
+                    length = byte & 0x3F
+                if byte & 0x80:
+                    bitmap[j, i:(i:=i+length)] = rle_data[k:=k+1]
+                else:
+                    bitmap[j, i:(i:=i+length)] = 0
+            else:
+                bitmap[j, i:(i:=i+1)] = byte
+            k+=1
+        return bitmap
 
 except ModuleNotFoundError:
     njit_decode_rle = None
     njit_encode_rle = None
+    njit_get_rle_lines = None
 ####
 #%%
 class PGraphics:
@@ -152,41 +158,36 @@ class PGraphics:
         :return:          Encoded data (vector)
         """
         if njit_encode_rle is not None:
-            return bytes(njit_encode_rle(bitmap))
+            return njit_encode_rle(bitmap)
 
-        rle_data = bytearray()
+        rle_data = []
+        i, j = 0, 0
 
-        _bitmap = np.squeeze(bitmap)
-        _fp = np.ravel(_bitmap)
-        i = 0
-        insert_line_end = False
+        height, width = bitmap.shape
+        assert width <= 16383, "Bitmap too large."
 
-        while i < _fp.size:
-            for k in range(1, 16384):
-                if (i % _bitmap.shape[1]) + k >= _bitmap.shape[1]:
-                    insert_line_end = True
-                    break
+        while i < height:
+            color = bitmap[i, j]
+            prev_j = j
+            while (j := j+1) < width and bitmap[i, j] == color: pass
 
-                if _fp[i+k] != _fp[i]:
-                    break
-
-            if _fp[i] != 0: #color
-                if k < 3:
-                    rle_data += bytearray([_fp[i]]*k)
-                elif k <= 63:
-                    rle_data += bytearray([0, 0x80 | k, _fp[i]])
+            dist = j - prev_j
+            if color == 0:
+                if dist > 63:
+                    rle_data += [0x00, 0x40 | ((dist >> 8) & 0x3F), dist & 0xFF]
                 else:
-                    rle_data += bytearray([0, 0xC0 | (k >> 8), k&0xFF, _fp[i]])
-            else: #transparent
-                if k <= 63:
-                    rle_data += bytearray([0, k])
+                    rle_data += [0x00, dist & 0x3F]
+            else:
+                if dist > 63:
+                    rle_data += [0x00, 0xC0 | ((dist >> 8) & 0x3F), dist & 0xFF, color]
+                elif dist > 2:
+                    rle_data += [0x00, 0x80 | (dist & 0x3F), color]
                 else:
-                    rle_data += bytearray([0, 0x40 | (k >> 8), k&0xFF])
-
-            if insert_line_end:
-                rle_data += bytearray([0, 0])
-                insert_line_end = False
-            i += k
+                    rle_data += [color] * dist
+            if j == width:
+                j = 0
+                i += 1
+                rle_data += [0x00, 0x00]
         return bytes(rle_data)
 
     @staticmethod
@@ -203,73 +204,83 @@ class PGraphics:
         :param height:Expected height
         :return:      2D map to associate with the proper palette
         """
-
-        class RLEDecoderState(IntEnum):
-            NEED_MORE = -2
-            NEW_CODE  = -1
-            SMALL_TSP = 0
-            LARGE_TSP = 1
-            SMALL_CCO = 2
-            LARGE_CCO = 3
-
         if isinstance(data, ODS):
             data = [data]
 
         if isinstance(data, list):
-            if o_id is not None:
-                data = b''.join(map(lambda x: x.data, filter(lambda x: o_id == x.o_id, data)))
+            if isinstance(data[0], ODS):
+                if o_id is not None:
+                    data = b''.join(map(lambda x: x.data, filter(lambda x: o_id == x.o_id, data)))
+                else:
+                    data = b''.join(map(lambda x: x.data, data))
             else:
-                data = b''.join(map(lambda x: x.data, data))
+                data = bytearray(data)
 
         if njit_decode_rle and width and height:
             return njit_decode_rle(np.asarray(data, dtype=np.uint8), width, height)
 
-        plane2d, line_l = [], []
-        decoder_state = RLEDecoderState.NEW_CODE
-        tmp = 0
+        k = 0
+        len_data = len(data)
+        bitmap = []
+        line = []
 
-        # Always use a state machine, even in place where you totally don't need it.
-        for byte in data:
-            if decoder_state == RLEDecoderState.NEW_CODE:
-                if byte > 0:
-                    line_l.append(byte)
-                else:
-                    decoder_state = RLEDecoderState.NEED_MORE
-
-            elif decoder_state == RLEDecoderState.NEED_MORE:
+        while k < len_data:
+            byte = data[k]
+            if byte == 0:
+                byte = data[k:=k+1]
                 if byte == 0:
-                    plane2d.append(line_l)
-                    assert width is None or len(line_l) == width
-                    line_l = []
-                    decoder_state = RLEDecoderState.NEW_CODE
+                    bitmap.append(line)
+                    line = []
+                    k += 1
+                    continue
+                if byte & 0x40:
+                    length = ((byte & 0x3F) << 8) | data[k:=k+1]
                 else:
-                    decoder_state = RLEDecoderState(byte >> 6)
-                    tmp = byte & 0x3F
+                    length = byte & 0x3F
+                if byte & 0x80:
+                    line += [data[k:=k+1]]*length
+                else:
+                    line += [0]*length
+            else:
+                line.append(byte)
+            k+=1
+        return np.asarray(bitmap, np.uint8)
 
-                    if decoder_state == RLEDecoderState.SMALL_TSP:
-                        line_l.extend([0] * tmp)
-                        decoder_state = RLEDecoderState.NEW_CODE
+    @staticmethod
+    def get_rle_lines(rle_data: Union[list[np.uint8], bytes], width: int) -> list[bytes]:
+        """
+        From raw RLE data, find the RLE code encoding each line separately.
+        :param rle_data:  RLE bitmap
+        :param width:     bitmap width when decoded
+        :return:          list of RLE encoded lines, N(lines) == bitmap height
+        """
+        if njit_get_rle_lines is not None:
+            return [line.tobytes() for line in njit_get_rle_lines(np.frombuffer(rle_data, np.uint8), width)]
+        k, j = -2, 0
+        prev_k = 0
+        rle_lines = []
+        len_rle = len(rle_data) - 2
 
-            elif decoder_state == RLEDecoderState.LARGE_TSP:
-                tmp = (tmp << 8) + byte
-                line_l.extend([0]*tmp)
-                decoder_state = RLEDecoderState.NEW_CODE
-
-            elif decoder_state == RLEDecoderState.SMALL_CCO:
-                line_l.extend([byte]*tmp)
-                decoder_state = RLEDecoderState.NEW_CODE
-
-            elif decoder_state == RLEDecoderState.LARGE_CCO:
-                #first pass (some RLE encoders use long code for small distances
-                # hence we must check for equal zero...)
-                if tmp >= 0:
-                    tmp = ((tmp << 8) + byte)*-1
-                else: #second pass
-                    line_l.extend([byte]*(-1*tmp))
-                    decoder_state = RLEDecoderState.NEW_CODE
-
-        assert height is None or height == len(plane2d)
-        return np.asarray(plane2d, dtype=np.uint8)
+        while k < len_rle:
+            if j % width == 0:
+                if k > 0:
+                    rle_lines.append(rle_data[prev_k:k])
+                j = 0
+                k += 2
+                prev_k = k
+            if rle_data[k] == 0:
+                byte = rle_data[k:=k+1]
+                if byte & 0x40:
+                    j += ((byte & 0x3F) << 8) | rle_data[k:=k+1]
+                else:
+                    j += byte & 0x3F
+                if byte & 0x80:
+                    k += 1
+            else:
+                j += 1
+            k += 1
+        rle_lines.append(rle_data[prev_k:-2])
+        return rle_lines
 
     @staticmethod
     def show(l_ods: Union[ODS, list[ODS]],

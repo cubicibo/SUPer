@@ -67,9 +67,9 @@ class Quantizer:
 
     @classmethod
     def find_options(cls) -> None:
-        cls._opts[cls.Libs.PIL_CV2KM] = ('PIL+KMeans', '(good, fast)')
         if cls._piliq is not None:
             cls._opts[cls.Libs.PILIQ] = (cls.get_piliq().lib_name,'(best, avg)')
+        cls._opts[cls.Libs.PIL_CV2KM] = ('PIL+KMeans', '(good, fast)')
         cls._opts[cls.Libs.CV2KM]     = ('KMeans', '(best, slow)')
         #cls._opts[cls.Libs.PILLOW]    = ('PIL', '(average, fast)')
 
