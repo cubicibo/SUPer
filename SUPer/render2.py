@@ -626,23 +626,14 @@ class WOBSAnalyzer:
                 imgs_chain.append(a_img)
             ####
             #We have the "packed" object, let's optimise it
-            bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 255, tsp_thresh=True, **self.kwargs)
-            #rare case: both objects have the same shape and no fully transparent sequence
-            # -> reduce the color by one and add a transparent entry manually.
-            palette_entry_tsp = np.nonzero(np.all(palettes[:,:,-1] == 0, axis=1))[0]
-            if len(palette_entry_tsp) > 0:
-                palette_entry_tsp = int(palette_entry_tsp[0])
-            elif np.max(bitmap) < 254:
-                palette_entry_tsp = np.max(bitmap) + 1
-            else:
-                bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 254, tsp_thresh=True, **self.kwargs)
-                palette_entry_tsp = np.max(bitmap) + 1
-
+            # 254 colors because 0x00 encoding is annoying and 0xFF is reserved for Scenarist
+            bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 254, **self.kwargs)
             pals.append(Optimise.diff_cluts(palettes, matrix=self.kwargs.get('bt_colorspace', 'bt709')))
 
-            #Add the transparent entry if this color is not in the bitmap
-            if palette_entry_tsp == np.max(bitmap) + 1:
-                pals[0][0][palette_entry_tsp] = PaletteEntry(16, 128, 128, 0)
+            #Discard palette entry 0
+            for pal in pals[-1]:
+                pal.offset(1)
+            bitmap += 1
 
             coords = np.zeros((2,), np.int32)
 
@@ -651,7 +642,7 @@ class WOBSAnalyzer:
                     oid = wid + double_buffering[wid]
                     double_buffering[wid] = abs(2 - double_buffering[wid])
                     #get bitmap
-                    window_bitmap = palette_entry_tsp*np.ones((windows[wid].dy, windows[wid].dx), np.uint8)
+                    window_bitmap = np.zeros((windows[wid].dy, windows[wid].dx), np.uint8)
                     nx, ny = coords
                     window_bitmap[pgo.box.slice] = bitmap[ny:ny+pgo.box.dy, nx:nx+pgo.box.dx]
 
@@ -674,7 +665,7 @@ class WOBSAnalyzer:
             for wid, pgo in pgobs_items:
                 if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
                     continue
-                n_colors = (128 if wid == 0 else 127) if has_two_objs else 255
+                n_colors = 127 if has_two_objs else 254
 
                 if isinstance(normal_case_refresh, list) and not normal_case_refresh[wid]:
                     assert sum(normal_case_refresh) == 1
@@ -695,24 +686,29 @@ class WOBSAnalyzer:
                 cparams = box_to_crop(pgo.box)
                 cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
                                                           cropped=True, **cparams))
-                #Do not use 256 colors because some authoring software reserve palette entry 0xFF.
-                # if two objects, window_1 has only 127 colours.
-                wd_bitmap = Optimise.solve_sequence_fast(imgs_chain, n_colors, **self.kwargs)
-                pals.append(Optimise.diff_cluts(wd_bitmap[1], matrix=self.kwargs.get('bt_colorspace', 'bt709')))
-                ods_data = PGraphics.encode_rle(wd_bitmap[0] + 128*(wid == 1 and has_two_objs))
 
-                #On normal case, we generate one chain of palette update and
-                #add in a screen wipe if necessary. This is not used if the object is changed.
-                if normal_case_refresh and len(pals[-1]) < k-i:
-                    mibm, mabm = np.min(wd_bitmap[0]), np.max(wd_bitmap[0])
-                    pals[-1].append(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(mibm, mabm+1)}))
-                    pals[-1].extend([Palette()] * ((k-i)-len(pals[-1])))
+                wd_bitmap, wd_pal = Optimise.solve_sequence_fast(imgs_chain, n_colors, **self.kwargs)
+                wd_bitmap += 1 + (127*(wid == 1 and has_two_objs))
+
+                pals.append(Optimise.diff_cluts(wd_pal, matrix=self.kwargs.get('bt_colorspace', 'bt709')))
+                ods_data = PGraphics.encode_rle(wd_bitmap)
+
                 if wid == 1 and has_two_objs:
                     assert len(pals) == 2
                     for p in pals[-1]:
                         p.offset(128)
+                elif wid == 0 or not has_two_objs:
+                    for p in pals[-1]:
+                        p.offset(1)
 
-                o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, wd_bitmap[0].shape[1], wd_bitmap[0].shape[0], ods_data, pts=c_pts)
+                #On normal case, we generate one chain of palette update and
+                #add in a screen wipe if necessary. This is not used if the object is changed.
+                if normal_case_refresh and len(pals[-1]) < k-i:
+                    mibm, mabm = np.min(wd_bitmap), np.max(wd_bitmap)
+                    pals[-1].append(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(mibm, mabm+1)}))
+                    pals[-1].extend([Palette()] * ((k-i)-len(pals[-1])))
+
+                o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, wd_bitmap.shape[1], wd_bitmap.shape[0], ods_data, pts=c_pts)
                 ods_reg[oid] += 1
             if id_skipped is not None:
                 assert isinstance(normal_case_refresh, list)
@@ -720,6 +716,8 @@ class WOBSAnalyzer:
                 cobjs_cropped = sorted(cobjs_cropped, key=lambda cobj: cobj.o_id != id_skipped)
                 cobjs = sorted(cobjs, key=lambda cobj: cobj.o_id != id_skipped)
 
+        #Set the 0x00 entry once. It should never change during the epoch anyway.
+        pals[0][0][0] = PaletteEntry(16, 128, 128, 0)
         pal = pals[0][0]
         if has_two_objs:
             pal |= pals[1][0]
@@ -736,7 +734,7 @@ class WOBSAnalyzer:
         return uds
 
     def _get_undisplay_pds(self, c_pts: float, pcs_id: int, node: 'DSNode', cobjs: list[CObject],
-                           pcs_fn: Callable[[...], PCS], n_colors: int = 255) -> tuple[DisplaySet, int, int]:
+                           pcs_fn: Callable[[...], PCS], n_colors: int = 254) -> tuple[DisplaySet, int, int]:
         pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, True, node.palette_id, cobjs, c_pts)
         tsp_e = PaletteEntry(16, 128, 128, 0)
         pds = PDS.from_scratch(Palette({k: tsp_e for k in range(n_colors)}), p_vn=node.pal_vn, p_id=node.palette_id, pts=c_pts)
@@ -811,7 +809,7 @@ class WOBSAnalyzer:
                 p_id, p_vn = get_palette_data(palette_manager, nodes[i].parent)
                 nodes[i].parent.palette_id = p_id
                 nodes[i].parent.pal_vn = p_vn
-                uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255)
+                uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 254)
                 displaysets.append(uds)
 
             if nodes[i].tc_shift == 0:
@@ -1387,6 +1385,8 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool
                     pds_vn[seg.p_id] = seg.p_vn
                 elif isinstance(seg, ODS):
                     if seg.flags & ODS.ODSFlags.SEQUENCE_FIRST:
+                        ods_data = bytearray()
+                        ods_width = seg.width
                         if (slot := buffer.get(seg.o_id)) is None:
                             if not buffer.allocate_id(seg.o_id, seg.height, seg.width):
                                 logger.error("Object buffer overflow (not enough memory for all object slots).")
@@ -1405,11 +1405,19 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool
                         coded_this_ds += seg.rle_len
                         objects_sizes[seg.o_id] = seg.width * seg.height
 
-                    cumulated_ods_size = len(bytes(seg)[2:])
+                    cumulated_ods_size += len(bytes(seg)[2:])
+                    ods_data += seg.data
 
                     if seg.flags & ODS.ODSFlags.SEQUENCE_LAST:
                         if cumulated_ods_size > PGDecoder.CODED_BUF_SIZE:
                             logger.warning(f"Object size >1 MiB at {to_tc(seg.pts)} is unsupported by some decoders. Reduce object horizontal complexity.")
+                            warnings += 1
+                        try:
+                            next(filter(lambda x: len(x) >= ods_width + 16, PGraphics.get_rle_lines(ods_data, ods_width)))
+                        except StopIteration:
+                            ...
+                        else:
+                            logger.warning("ODS at {to_tc(seg.pts)} has too long RLE line(s). Reduce object complexity (old decoders may have issues).")
                             warnings += 1
                         cumulated_ods_size = 0
                 elif isinstance(seg, ENDS):
