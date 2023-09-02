@@ -59,7 +59,7 @@ if __name__ == '__main__':
 
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Input BDNXML file.", default='', required=True)
-    parser.add_argument('-c', '--compression', help="Time threshold for acquisitions. [int, 0-100]", type=int, default=85, required=False)
+    parser.add_argument('-c', '--compression', help="Time threshold for acquisitions, affect compression [int, 0-100]. -1: force acquisitions everywhere", type=int, default=70, required=False)
     parser.add_argument('-r', '--comprate', help="Decay rate to attain time threshold. [int, 0-100]", type=int, default=100, required=False)
     parser.add_argument('-q', '--qmode', help="Image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PILIQ]", type=int, default=1, required=False)
     parser.add_argument('-b', '--bt', help="Target BT matrix [601, 709, 2020]", type=int, default=709, required=False)
@@ -81,7 +81,7 @@ if __name__ == '__main__':
     #### Sanity checks and conversion
     args.output, ext = check_output(args.output, args.yes)
 
-    assert 0 <= args.compression <= 100
+    assert 0 <= args.compression <= 100 or args.compression == -1
     assert 0 <= args.comprate <= 100
     if args.qmode not in range(1, 4):
         logger.warning("Unknown quantization mode, using PIL+K-Means (1).")

@@ -424,6 +424,10 @@ class WOBSAnalyzer:
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
         for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
+            if thresh < 0:
+                states[k] = PCS.CompositionState.ACQUISITION
+                absolutes[k] = True
+                continue
             if (forced or (acq and margin > max(thresh-dthresh*drought, 0))):
                 states[k] = PCS.CompositionState.ACQUISITION
                 drought = 0
@@ -955,10 +959,8 @@ class WOBSAnalyzer:
                 prev_dts = -np.inf
             elif nodes[k].parent:
                 prev_dts = nodes[k].parent.dts_end()
-                #prev_pts = nodes[k].parent.pts()
             else:
                 prev_dts = nodes[k-1].dts_end()
-                #prev_pts = nodes[k-1].pts()
             valid[k] = nodes[k].dts() > prev_dts
             absolutes[k] = force_acq
             dtl[k] = (nodes[k].dts() - prev_dts)/margin if valid[k] and k > 0 else (-1 + 2*(k==0))

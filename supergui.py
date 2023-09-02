@@ -63,7 +63,7 @@ def wrapper_mp() -> None:
         return
     else:
         invalid = False
-        invalid |= not (0 <= kwargs['quality_factor'] <= 1)
+        invalid |= not (0 <= kwargs['quality_factor'] <= 1 or kwargs['quality_factor'] == -0.01)
         invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
         if invalid:
             logger.error("Invalid parameter found, aborting.")
