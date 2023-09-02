@@ -93,9 +93,9 @@ try:
                 k += 2
                 prev_k = k
             if rle_data[k] == 0:
-                byte = rle_data[k:=k+1]
+                byte = rle_data[(k:=k+1)]
                 if byte & 0x40:
-                    j += ((byte & 0x3F) << 8) | rle_data[k:=k+1]
+                    j += ((byte & 0x3F) << 8) | rle_data[(k:=k+1)]
                 else:
                     j += byte & 0x3F
                 if byte & 0x80:
@@ -120,13 +120,13 @@ try:
                 k += 2
             byte = rle_data[k]
             if byte == 0:
-                byte = rle_data[k:=k+1]
+                byte = rle_data[(k:=k+1)]
                 if byte & 0x40:
-                    length = ((byte & 0x3F) << 8) | rle_data[k:=k+1]
+                    length = ((byte & 0x3F) << 8) | rle_data[(k:=k+1)]
                 else:
                     length = byte & 0x3F
                 if byte & 0x80:
-                    bitmap[j, i:(i:=i+length)] = rle_data[k:=k+1]
+                    bitmap[j, i:(i:=i+length)] = rle_data[(k:=k+1)]
                 else:
                     bitmap[j, i:(i:=i+length)] = 0
             else:
@@ -227,18 +227,18 @@ class PGraphics:
         while k < len_data:
             byte = data[k]
             if byte == 0:
-                byte = data[k:=k+1]
+                byte = data[(k:=k+1)]
                 if byte == 0:
                     bitmap.append(line)
                     line = []
                     k += 1
                     continue
                 if byte & 0x40:
-                    length = ((byte & 0x3F) << 8) | data[k:=k+1]
+                    length = ((byte & 0x3F) << 8) | data[(k:=k+1)]
                 else:
                     length = byte & 0x3F
                 if byte & 0x80:
-                    line += [data[k:=k+1]]*length
+                    line += [data[(k:=k+1)]]*length
                 else:
                     line += [0]*length
             else:
@@ -269,9 +269,9 @@ class PGraphics:
                 k += 2
                 prev_k = k
             if rle_data[k] == 0:
-                byte = rle_data[k:=k+1]
+                byte = rle_data[(k:=k+1)]
                 if byte & 0x40:
-                    j += ((byte & 0x3F) << 8) | rle_data[k:=k+1]
+                    j += ((byte & 0x3F) << 8) | rle_data[(k:=k+1)]
                 else:
                     j += byte & 0x3F
                 if byte & 0x80:
