@@ -64,7 +64,6 @@ if __name__ == '__main__':
     parser.add_argument('-q', '--qmode', help="Image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PILIQ]", type=int, default=1, required=False)
     parser.add_argument('-b', '--bt', help="Target BT matrix [601, 709, 2020]", type=int, default=709, required=False)
     parser.add_argument('-s', '--subsampled', help="Flag to indicate BDNXML is subsampled", action='store_true', default=False, required=False)
-    parser.add_argument('-f', '--softcomp', help="Use compatibility mode for software decoder", action='store_true', default=False, required=False)
     parser.add_argument('-d', '--nodts', help="Don't compute DTS in stream", action='store_true', default=False, required=False)
     parser.add_argument('-a', '--aheadoftime', help="Allow ahead of time decoding.", action='store_true', default=False, required=False)
     parser.add_argument('-p', '--palette', help="Always write the full palette.", action='store_true', default=False, required=False)
@@ -119,7 +118,6 @@ if __name__ == '__main__':
         'scale_fps': args.subsampled,
         'quantize_lib': args.qmode,
         'bt_colorspace': f"bt{args.bt}",
-        'pgs_compatibility': args.softcomp,
         'enforce_dts': not args.nodts,
         'no_overlap': not args.aheadoftime,
         'full_palette': args.palette,
