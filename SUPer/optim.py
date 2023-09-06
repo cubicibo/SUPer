@@ -79,12 +79,14 @@ class Quantizer:
             piliq = PILIQ(fpath)
         except (FileNotFoundError, AssertionError):
             piliq = None
+            logger.debug(f"Failed to load advanced quantizer at '{fpath}'.")
         if piliq is None and fpath is not None:
             #Perform auto-look up, likely to fail but can still find libs
             try:
                 piliq = PILIQ()
             except:
                 piliq = None
+                logger.debug("Failed to load advanced quantizer with auto look-up.")
         cls._piliq = piliq
         if cls._piliq is not None:
             cls._piliq.return_pil = False
@@ -121,9 +123,11 @@ class Preprocess:
             return np.reshape(label.flatten(), ocv_img.shape[:-1]).astype(np.uint8), center[occs]
 
         elif Quantizer.Libs.PILIQ == quant_method:
+            nc = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
+
             lib_piq = Quantizer.get_piliq()
             assert lib_piq is not None
-            pal, qtz_img = lib_piq.quantize(img, colors)
+            pal, qtz_img = lib_piq.quantize(img, min(colors, int(np.ceil(15+239/254*nc))))
             return qtz_img, pal
 
         else:

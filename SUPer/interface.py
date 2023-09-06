@@ -36,7 +36,10 @@ class BDNRender:
         self.bdn_file = bdnf
         self._epochs = []
         self.kwargs = kwargs
-        Quantizer.init_piliq(kwargs.get('libs_path', {}).get('quant', None))
+        if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) == Quantizer.Libs.PILIQ:
+            if not Quantizer.init_piliq(kwargs.get('libs_path', {}).get('quant', None)):
+                logger.info("Failed to initialise advanced image quantizer. Falling back to PIL+K-Means.")
+                self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
 
     def optimise(self) -> None:
         from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
