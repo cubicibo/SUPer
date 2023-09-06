@@ -664,7 +664,7 @@ class WOBSAnalyzer:
             ####for wid, pgo
         else:
             # If in the chain there's a NORMAL CASE redefinition, we
-            # must work with separate palette for each object (window0: 128, window1:127)
+            # must work with separate palette for each object (127 colors per window)
             id_skipped = None
             for wid, pgo in pgobs_items:
                 if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
@@ -734,16 +734,16 @@ class WOBSAnalyzer:
         pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, palette_id, [], c_pts)
         wds = wds_base.copy(pts=c_pts, in_ticks=False)
         uds = DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
-        apply_pts_dts(uds, set_pts_dts_sc(uds, self.buffer, get_wipe_duration(wds)))
+        apply_pts_dts(uds, set_pts_dts_sc(uds, self.buffer, wds))
         return uds
 
     def _get_undisplay_pds(self, c_pts: float, pcs_id: int, node: 'DSNode', cobjs: list[CObject],
-                           pcs_fn: Callable[[...], PCS], n_colors: int = 254) -> tuple[DisplaySet, int, int]:
+                           pcs_fn: Callable[[...], PCS], n_colors: int, wds_base: WDS) -> tuple[DisplaySet, int, int]:
         pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, True, node.palette_id, cobjs, c_pts)
         tsp_e = PaletteEntry(16, 128, 128, 0)
         pds = PDS.from_scratch(Palette({k: tsp_e for k in range(n_colors)}), p_vn=node.pal_vn, p_id=node.palette_id, pts=c_pts)
         uds = DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)])
-        apply_pts_dts(uds, set_pts_dts_sc(uds, self.buffer, node.wipe_duration(), node))
+        apply_pts_dts(uds, set_pts_dts_sc(uds, self.buffer, wds_base, node))
         return uds, pcs_id+1
 
     def _convert(self, states, pgobjs, windows, durs, flags, nodes):
@@ -813,7 +813,7 @@ class WOBSAnalyzer:
                 p_id, p_vn = get_palette_data(palette_manager, nodes[i].parent)
                 nodes[i].parent.palette_id = p_id
                 nodes[i].parent.pal_vn = p_vn
-                uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 254)
+                uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255, wds_base)
                 displaysets.append(uds)
 
             if nodes[i].tc_shift == 0:
@@ -841,7 +841,7 @@ class WOBSAnalyzer:
             pcs = pcs_fn(pcs_id, states[i], False, p_id, cobjs, c_pts)
 
             nds = DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)])
-            apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, nodes[i].wipe_duration(), nodes[i]))
+            apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, wds, nodes[i]))
             displaysets.append(nds)
 
             pcs_id += 1
@@ -869,7 +869,7 @@ class WOBSAnalyzer:
                         p_id, p_vn = get_palette_data(palette_manager, nodes[z].parent)
                         nodes[z].parent.palette_id = p_id
                         nodes[z].parent.pal_vn = p_vn
-                        uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps)), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1)
+                        uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps)), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1, wds_base)
                         displaysets.append(uds)
                         #We just wipped a palette, whatever the next palette id, rewrite it fully
                         last_palette_id = None
@@ -904,7 +904,7 @@ class WOBSAnalyzer:
                     ods_upd = o_ods if flags[z] == 1 else []
 
                     nds = DisplaySet([pcs] + wds_upd + [pds] + ods_upd +[ENDS.from_scratch(pts=c_pts)])
-                    apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, nodes[z].wipe_duration(), nodes[z]))
+                    apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, wds_base, nodes[z]))
                     displaysets.append(nds)
 
                     pcs_id += 1
@@ -1022,7 +1022,7 @@ class WOBAnalyzer:
         #if the images have the exact same alpha channel, this measure is equal to 1
         overlap = (inters_area > 0) * (inters_area + np.sum(inters_inv))/inters.size
 
-        if overlap < self.overlap_threshold and overlap > 0:
+        if overlap > 0: #and overlap < self.overlap_threshold:
             #score = compare_ssim(bitmap.convert('L'), current.convert('L'))
             #Broadcast transparency mask of current on all channels of ref
             mask = 255*(np.logical_and((a_bitmap[:, :, 3] > 0), (a_current[:, :, 3] > 0)).astype(np.uint8))
@@ -1142,8 +1142,11 @@ class DSNode:
         self.pal_vn = 0
         self._dts = None
 
-    def wipe_duration(self) -> float:
+    def wipe_duration(self) -> int:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
+
+    def write_duration(self) -> int:
+        return sum(map(lambda w: np.ceil(PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC), self.windows))
 
     def set_dts(self, dts: Optional[float]) -> None:
         assert dts is None or dts <= self.dts()
@@ -1194,7 +1197,7 @@ class DSNode:
         ####
 
         if t_decoding == 0:
-            decode_duration += 1
+            decode_duration = self.write_duration() + 1
         return (round(self.tc_pts*PGDecoder.FREQ) - decode_duration, t_decoding)
 
 #%%
@@ -1202,13 +1205,13 @@ def get_wipe_duration(wds: WDS) -> int:
     return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.height*w.width/PGDecoder.RC, wds.windows)))
 
 #%%
-def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int, node: Optional['DSNode'] = None) -> list[tuple[int, int]]:
+def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optional['DSNode'] = None) -> list[tuple[int, int]]:
     """
     This function generates the timestamps (PTS and DTS) associated to a given DisplaySet.
 
     :param ds: DisplaySet, PTS of PCS must be set to the right value.
     :param buffer: Object buffer that supports allocation and returning a size of allocated slots.
-    :param wipe_duration: Time it takes in ticks to wipe out the graphic plane.
+    :param lwd: list of windows used in the epoch.
     :return: Pairs of timestamps in ticks for each segment in the displayset.
     """
     ddurs = {}
@@ -1224,6 +1227,7 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int, n
 
     t_decoding = 0
     decode_duration = 0
+    wipe_duration = get_wipe_duration(wds)
 
     if ds.ods:
         if ds.wds:
@@ -1254,13 +1258,11 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int, n
         #pal flag with ODS, not desirable.
         else:
             raise AssertionError("Illegal DS (palette update with ODS!)")
-    elif ds.wds or ds.pcs.pal_flag:
-        assert ds.pcs.composition_state == ds.pcs.CompositionState.NORMAL, "DS refreshes the screen but no valid object exists."
-        decode_duration = wipe_duration + 1
     else:
-        # No ODS, no WDS, no palette update -> We're just writing palette data or doing a NOP (PCS, END)
-        # In this case, PTS and DTS are equals for all segments.
-        ...
+        #No decoding required, just set the apart PTS and DTS according to the graphic plane access time.
+        assert ds.pcs.composition_state == ds.pcs.CompositionState.NORMAL, "DS refreshes the screen but no valid object exists."
+        decode_duration = sum(map(lambda w: np.ceil(PGDecoder.FREQ*w.height*w.width/PGDecoder.RC), wds.windows)) + 1
+
     mask = ((1 << 32) - 1)
     dts = int(ds.pcs.tpts - decode_duration) & mask
     if node is not None and node.is_custom_dts():
@@ -1272,7 +1274,7 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wipe_duration: int, n
     ts_pairs = [(ds.pcs.tpts, dts)]
 
     if ds.wds:
-        ts_pairs.append((int(ds.pcs.tpts - decode_duration) & mask, dts))
+        ts_pairs.append((int(ds.pcs.tpts - wipe_duration) & mask, dts))
     for pds in ds.pds:
         ts_pairs.append((dts, dts))
 
