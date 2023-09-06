@@ -785,6 +785,9 @@ class WOBSAnalyzer:
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
+        final_node = DSNode([None, None], windows, TC.tc2s(self.events[-1].tc_out, self.bdn.fps), None, scale_pts=time_scale)
+        # last_legal_pts = final_node.pts() - final_node.write_duration()
+
         try:
             use_pbar = False
             from tqdm import tqdm
@@ -921,7 +924,12 @@ class WOBSAnalyzer:
             pbar.close()
         ####while
         #final "undisplay" displayset
-        displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, wds_base, last_palette_id, pcs_fn))
+        p_id, p_vn = get_palette_data(palette_manager, final_node)
+        final_node.palette_id = p_id
+        final_node.pal_vn = p_vn
+        uds, _ = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
+        displaysets.append(uds)
+        #displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, wds_base, last_palette_id, pcs_fn))
         return Epoch(displaysets)
 
     def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows: list[Box]):
