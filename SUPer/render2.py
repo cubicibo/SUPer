@@ -948,6 +948,8 @@ class WOBSAnalyzer:
 
         objs = [None for objs in pgobjs_proc]
 
+        write_duration = nodes[0].write_duration()
+
         prev_dt = 6
         for k, (dt, delay) in enumerate(durs):
             is_new = [False]*len(windows)
@@ -970,11 +972,14 @@ class WOBSAnalyzer:
 
             if k == 0:
                 prev_dts = -np.inf
+                prev_pts = - np.inf
             elif nodes[k].parent:
                 prev_dts = nodes[k].parent.dts_end()
+                prev_pts = nodes[k].parent.pts()
             else:
                 prev_dts = nodes[k-1].dts_end()
-            valid[k] = nodes[k].dts() > prev_dts
+                prev_pts = nodes[k-1].pts()
+            valid[k] = (nodes[k].dts() > prev_dts and nodes[k].pts() - prev_pts > write_duration)
             absolutes[k] = force_acq
             dtl[k] = (nodes[k].dts() - prev_dts)/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
             prev_dt = dt
