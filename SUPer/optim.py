@@ -127,7 +127,7 @@ class Preprocess:
 
             lib_piq = Quantizer.get_piliq()
             assert lib_piq is not None
-            pal, qtz_img = lib_piq.quantize(img, min(colors, int(np.ceil(15+239/254*nc))))
+            pal, qtz_img = lib_piq.quantize(img, min(colors, int(np.ceil(22+232/254*nc))))
             return qtz_img, pal
 
         else:
