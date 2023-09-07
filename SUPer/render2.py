@@ -434,12 +434,15 @@ class WOBSAnalyzer:
             else:
                 #try to not do too many acquisitions, as we want to compress the stream.
                 drought += 1*refresh_rate
+            if states[k] == PCS.CompositionState.NORMAL:
+                nodes[k].nc_refresh = True
 
         allow_overlaps = not self.kwargs.get('no_overlap', False)
 
         #At this point, we have the stream acquisition shaped nicely
         # except that some of them may be impossible. We apply a final filtering
         # step to either discard the impossible events or shift some PG operations
+        pts_delta = nodes[0].write_duration()/PGDecoder.FREQ
         k = len(states)-1
         while k > 0 and not skip_dts:
             if not (absolutes[k] and not acqs[k] and flags[k] == 0):
@@ -450,7 +453,7 @@ class WOBSAnalyzer:
             dts_start_nc = dts_start = nodes[k].dts()
             dropped_nc = dropped = 0
             j_nc = j = k - 1
-            while j > 0 and nodes[j].dts_end() >= dts_start:
+            while j > 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts()):
                 if absolutes[j] is True:
                     assert len(nodes[j].new_mask) == len(mask)
                     for km, mask_v in enumerate(nodes[j].new_mask):
@@ -464,20 +467,22 @@ class WOBSAnalyzer:
             if normal_case_possible:
                 nodes[k].partial = True
                 dts_start_nc = nodes[k].dts()
-                while j_nc > 0 and nodes[j_nc].dts_end() >= dts_start:
-                    if absolutes[j_nc] is True and nodes[j_nc].dts_end() >= dts_start_nc:
+                while j_nc > 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts()):#nodes[j_nc].dts_end() >= dts_start:
+                    if absolutes[j_nc] is True: #and nodes[j_nc].dts_end() >= dts_start_nc:
                         dropped_nc += 1
                     j_nc -= 1
                 nodes[k].partial = False
-            nc_not_ok = normal_case_possible and j_nc == 0 and nodes[j_nc].dts_end() >= dts_start_nc
+
+            #Normal case is impossible if we hit epoch start and dts or pts still not valid
+            nc_not_ok = normal_case_possible and j_nc == 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts())
             # we can't delete or move epoch start -> delete self if we can't shift it forward
-            if nc_not_ok or (not normal_case_possible and j == 0 and nodes[j].dts_end() >= dts_start):
+            if nc_not_ok or (not normal_case_possible and j == 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts())):
                 if durs[k][1] > 0:
                     logger.info(f"Discarded screen wipe before {self.events[k].tc_in} as it collides with epoch start.")
                     durs[k] = (durs[k][0], 0) # Drop screen wipe (we can't do it!)
 
                 #If this event is long enough, we shift it forward in time.
-                wipe_area = nodes[j].wipe_duration()
+                wipe_area = nodes[0].wipe_duration()
                 worst_dur = (np.ceil(wipe_area*2) + 3)
                 if durs[k][0]*1/self.bdn.fps > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
                     nodes[k].tc_shift = int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps))
@@ -493,22 +498,23 @@ class WOBSAnalyzer:
                 ze = k
                 #We may have discarded an acquisition followed by NCs, we must find the new acquisition point.
                 while (ze := ze+1) < len(states) and states[ze] != PCS.CompositionState.ACQUISITION:
-                    if flags[ze] != -1 and nodes[ze].dts() > dts_start:
+                    nodes[ze].nc_refresh = False
+                    if flags[ze] != -1 and (nodes[ze].dts() > dts_start and nodes[ze].pts() + pts_delta >= nodes[0].pts()):
                         logger.info(f"Epoch start collision: promoted normal case to acquisition at {self.events[ze].tc_in}.")
                         states[ze] = PCS.CompositionState.ACQUISITION
                         for zek in range(k+1, ze):
-                            if nodes[zek].parent is not None and nodes[zek].parent.dts_end() >= nodes[ze].dts():
+                            if nodes[zek].parent is not None and (nodes[zek].parent.dts_end() >= nodes[ze].dts() or nodes[zek].parent.pts() + pts_delta >= nodes[k].pts()):
                                 durs[zek] = (durs[zek][0], 0) # Drop screen wipe (we can't do it!)
                                 logger.info(f"Dropped screen wipe before {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
-                            if nodes[zek].dts_end() >= nodes[ze].dts():
+                            if nodes[zek].dts_end() >= nodes[ze].dts() or nodes[zek].pts() + pts_delta >= nodes[k].pts():
                                 flags[zek] = -1
                                 logger.info(f"Dropped event at {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
                         break
                 k -= 1
                 continue
 
-            # Analyze normal case only if it is worthwile
-            if dts_start_nc > dts_start and normal_case_possible and nodes[j].dts_end() > dts_start:
+            # Analyze normal case only if it is worthwile, with DSj dropped otherwise
+            if dts_start_nc > dts_start and normal_case_possible and nodes[j].dts_end() >= dts_start_nc:#dts_start:
                 num_pal_nc = 0
                 objs = list(map(lambda x: x is not None, nodes[j_nc].objects))
                 for l in range(j_nc+1, k):
@@ -785,8 +791,7 @@ class WOBSAnalyzer:
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
-        final_node = DSNode([None, None], windows, TC.tc2s(self.events[-1].tc_out, self.bdn.fps), None, scale_pts=time_scale)
-        # last_legal_pts = final_node.pts() - final_node.write_duration()
+        final_node = DSNode([None, None], windows, TC.tc2s(self.events[-1].tc_out, self.bdn.fps), None, scale_pts=time_scale, nc_refresh=True)
 
         try:
             use_pbar = False
@@ -992,7 +997,7 @@ class WOBSAnalyzer:
             delays.append((toc-tic, tic-top))
             parent = None
             if tic-top > 0:
-                parent = DSNode([], windows, TC.tc2s(self.events[ne-1].tc_out, self.bdn.fps), scale_pts=scale_pts)
+                parent = DSNode([], windows, TC.tc2s(self.events[ne-1].tc_out, self.bdn.fps), scale_pts=scale_pts, nc_refresh=True)
             nodes.append(DSNode([], windows, TC.tc2s(event.tc_in, self.bdn.fps), parent=parent, scale_pts=scale_pts))
             top = toc
         return delays, nodes
@@ -1136,7 +1141,8 @@ class DSNode:
             windows: list[Box],
             tc_pts: float,
             parent: Optional['DSNode'] = None,
-            scale_pts: float = 1
+            scale_pts: float = 1,
+            nc_refresh: bool = False
         ) -> None:
         self.objects = objects
         self.windows = windows
@@ -1149,6 +1155,7 @@ class DSNode:
         self._pal_id = None
         self.pal_vn = 0
         self._dts = None
+        self.nc_refresh = nc_refresh
 
     def wipe_duration(self) -> int:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
@@ -1189,22 +1196,21 @@ class DSNode:
 
     def get_dts_markers(self) -> float:
         t_decoding = 0
-        decode_duration = self.wipe_duration()
 
-        for wid, obj in enumerate(self.objects):
-            if obj is None:
-                continue
-            box = self.windows[wid]
-            read = box.dy*box.dx*PGDecoder.FREQ
-            if not self.partial or (self.partial and self.new_mask[wid]):
-                dec = np.ceil(read/PGDecoder.RD)
-                t_decoding += dec
+        if not self.nc_refresh:
+            assigned_wd = list(map(lambda x: x[0] is not None and (not self.partial or self.partial and x[1]), zip_longest(self.objects, self.new_mask)))
+            decode_duration = sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*PGDecoder.FREQ/PGDecoder.RC) for wid, flag in enumerate(assigned_wd) if not flag])
 
-            cop = np.ceil(read/PGDecoder.RC)
-            decode_duration = max(decode_duration, t_decoding) + cop
-        ####
+            for wid, obj in enumerate(self.objects):
+                if obj is None:
+                    continue
+                box = self.windows[wid]
+                read = box.dy*box.dx*PGDecoder.FREQ
+                if not self.partial or (self.partial and self.new_mask[wid]):
+                    t_decoding += np.ceil(read/PGDecoder.RD)
 
-        if t_decoding == 0:
+                decode_duration = max(decode_duration, t_decoding) + np.ceil(read/PGDecoder.RC)
+        else:
             decode_duration = self.write_duration() + 1
         return (round(self.tc_pts*PGDecoder.FREQ) - decode_duration, t_decoding)
 
@@ -1237,42 +1243,34 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optio
     decode_duration = 0
     wipe_duration = get_wipe_duration(wds)
 
-    if ds.ods:
-        if ds.wds:
-            windows = {wd.window_id: (wd.height, wd.width) for wd in ds.wds.windows}
+    windows = {wd.window_id: (wd.height, wd.width) for wd in wds.windows}
 
-            if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
-                decode_duration = np.ceil(ds.pcs.width*ds.pcs.height*PGDecoder.FREQ/PGDecoder.RC)
-            else:
-                assigned_windows = list(map(lambda x: x.window_id, ds.pcs.cobjects))
-                unassigned_windows = [wd for wd in windows if wd not in assigned_windows]
-                decode_duration = sum([np.ceil(windows[wid][0]*windows[wid][1]*PGDecoder.FREQ/PGDecoder.RC) for wid in unassigned_windows])
-
-            object_decode_duration = ddurs.copy()
-
-            #For every composition object, compute the transfer time
-            for k, cobj in enumerate(ds.pcs.cobjects):
-                shape = buffer.get(cobj.o_id)
-                assert shape is not None, "Object does not exist in buffer."
-                w, h = windows[cobj.window_id][0], windows[cobj.window_id][1]
-
-                t_decoding += object_decode_duration.pop(cobj.o_id, 0)
-
-                # Same window -> patent claims a window is written only once after the two cobj are processed.
-                if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
-                    continue
-                copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
-                decode_duration = max(decode_duration, t_decoding) + copy_dur
-        #This DS defines new objects without displaying them
-        elif not ds.pcs.pal_flag:
-            decode_duration = sum(ddurs.values())
-        #pal flag with ODS, not desirable.
-        else:
-            raise AssertionError("Illegal DS (palette update with ODS!)")
+    if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
+        decode_duration = np.ceil(ds.pcs.width*ds.pcs.height*PGDecoder.FREQ/PGDecoder.RC)
     else:
-        #No decoding required, just set the apart PTS and DTS according to the graphic plane access time.
-        assert ds.pcs.composition_state == ds.pcs.CompositionState.NORMAL, "DS refreshes the screen but no valid object exists."
-        decode_duration = sum(map(lambda w: np.ceil(PGDecoder.FREQ*w.height*w.width/PGDecoder.RC), wds.windows)) + 1
+        assigned_windows = list(map(lambda x: x.window_id, ds.pcs.cobjects))
+        unassigned_windows = [wd for wd in windows if wd not in assigned_windows]
+        decode_duration = sum([np.ceil(windows[wid][0]*windows[wid][1]*PGDecoder.FREQ/PGDecoder.RC) for wid in unassigned_windows])
+
+    object_decode_duration = ddurs.copy()
+
+    #For every composition object, compute the transfer time
+    for k, cobj in enumerate(ds.pcs.cobjects):
+        shape = buffer.get(cobj.o_id)
+        assert shape is not None, "Object does not exist in buffer."
+        w, h = windows[cobj.window_id][0], windows[cobj.window_id][1]
+
+        t_decoding += object_decode_duration.pop(cobj.o_id, 0)
+
+        # Same window -> patent claims a window is written only once after the two cobj are processed.
+        if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
+            continue
+        copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
+        decode_duration = max(decode_duration, t_decoding) + copy_dur
+
+    #Prevent PTS(WDS) = PTS(PCS)
+    if decode_duration == sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values())):
+        decode_duration += 1
 
     mask = ((1 << 32) - 1)
     dts = int(ds.pcs.tpts - decode_duration) & mask
