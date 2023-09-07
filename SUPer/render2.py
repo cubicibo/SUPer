@@ -1219,7 +1219,7 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optio
 
     :param ds: DisplaySet, PTS of PCS must be set to the right value.
     :param buffer: Object buffer that supports allocation and returning a size of allocated slots.
-    :param lwd: list of windows used in the epoch.
+    :param wds: WDS of the epoch.
     :return: Pairs of timestamps in ticks for each segment in the displayset.
     """
     ddurs = {}
@@ -1239,13 +1239,16 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optio
 
     if ds.ods:
         if ds.wds:
+            windows = {wd.window_id: (wd.height, wd.width) for wd in ds.wds.windows}
+
             if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
                 decode_duration = np.ceil(ds.pcs.width*ds.pcs.height*PGDecoder.FREQ/PGDecoder.RC)
             else:
-                decode_duration = wipe_duration
-            object_decode_duration = ddurs.copy()
+                assigned_windows = list(map(lambda x: x.window_id, ds.pcs.cobjects))
+                unassigned_windows = [wd for wd in windows if wd not in assigned_windows]
+                decode_duration = sum([np.ceil(windows[wid][0]*windows[wid][1]*PGDecoder.FREQ/PGDecoder.RC) for wid in unassigned_windows])
 
-            windows = {wd.window_id: (wd.height, wd.width) for wd in ds.wds.windows}
+            object_decode_duration = ddurs.copy()
 
             #For every composition object, compute the transfer time
             for k, cobj in enumerate(ds.pcs.cobjects):
@@ -1255,8 +1258,8 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optio
 
                 t_decoding += object_decode_duration.pop(cobj.o_id, 0)
 
-                # Same window -> patent claims the plane is written only once after the two cobj are processed.
-                if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1] == cobj.window_id:
+                # Same window -> patent claims a window is written only once after the two cobj are processed.
+                if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
                     continue
                 copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
                 decode_duration = max(decode_duration, t_decoding) + copy_dur
