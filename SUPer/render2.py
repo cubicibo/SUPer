@@ -514,7 +514,7 @@ class WOBSAnalyzer:
                 continue
 
             # Analyze normal case only if it is worthwile, with DSj dropped otherwise
-            if dts_start_nc > dts_start and normal_case_possible and nodes[j].dts_end() >= dts_start_nc:#dts_start:
+            if dts_start_nc > dts_start and normal_case_possible and j_nc > j:
                 num_pal_nc = 0
                 objs = list(map(lambda x: x is not None, nodes[j_nc].objects))
                 for l in range(j_nc+1, k):
@@ -541,7 +541,7 @@ class WOBSAnalyzer:
                 states[k] = PCS.CompositionState.NORMAL
                 nodes[k].partial = True
                 flags[k] = 1
-                logger.info(f"Screen refreshed with a NORMAL CASE at {self.events[k].tc_in} (tight timing).")
+                logger.info(f"Object refreshed with a NORMAL CASE at {self.events[k].tc_in} (tight timing).")
             else:
                 num_pal = 0
                 objs = list(map(lambda x: x is not None, nodes[j].objects))
@@ -674,6 +674,9 @@ class WOBSAnalyzer:
             id_skipped = None
             for wid, pgo in pgobs_items:
                 if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
+                    if normal_case_refresh:
+                        assert isinstance(normal_case_refresh, bool)
+                        pals.append([Palette()] * (k-i))
                     continue
                 n_colors = 127 if has_two_objs else 254
 
