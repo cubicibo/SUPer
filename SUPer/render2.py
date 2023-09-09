@@ -674,10 +674,16 @@ class WOBSAnalyzer:
             id_skipped = None
             for wid, pgo in pgobs_items:
                 if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
+                    optional_skip = True
                     if normal_case_refresh:
-                        assert isinstance(normal_case_refresh, bool)
-                        pals.append([Palette()] * (k-i))
-                    continue
+                        optional_skip = pgo is None
+                        if optional_skip:
+                            assert isinstance(normal_case_refresh, bool)
+                            pals.append([Palette()] * (k-i))
+                        else:
+                            assert isinstance(normal_case_refresh, list)
+                    if optional_skip:
+                        continue
                 n_colors = 127 if has_two_objs else 254
 
                 if isinstance(normal_case_refresh, list) and not normal_case_refresh[wid]:
@@ -935,10 +941,13 @@ class WOBSAnalyzer:
         p_id, p_vn = get_palette_data(palette_manager, final_node)
         final_node.palette_id = p_id
         final_node.pal_vn = p_vn
-        uds, _ = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
+        uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
         displaysets.append(uds)
-        #displaysets.append(self._get_undisplay(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, wds_base, last_palette_id, pcs_fn))
-        return Epoch(displaysets)
+
+        #We wipe the screen for the very last epoch. add 4 frames so we don't have to care about decoding constraints
+        final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, 4)
+        final_ds = self._get_undisplay(get_pts(final_pts), pcs_id, wds_base, last_palette_id, pcs_fn)
+        return Epoch(displaysets), final_ds
 
     def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows: list[Box]):
         #get the frame count between each screen update and find where we can do acqs
@@ -951,7 +960,7 @@ class WOBSAnalyzer:
 
         objs = [None for objs in pgobjs_proc]
 
-        write_duration = nodes[0].write_duration()
+        write_duration = nodes[0].write_duration()/PGDecoder.FREQ
 
         prev_dt = 6
         for k, (dt, delay) in enumerate(durs):

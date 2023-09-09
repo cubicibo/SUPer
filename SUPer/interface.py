@@ -73,6 +73,7 @@ class BDNRender:
         #Round up to tick
         epochstart_dd_fnr = lambda o_area: np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
 
+        final_ds = None
         for group in bdn.groups(epochstart_dd_fn(screen_area)):
             subgroups = []
             offset = len(group)
@@ -102,13 +103,19 @@ class BDNRender:
                 logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
 
                 wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, **kwargs)
-                self._epochs.append(wobz.analyze())
+                new_epoch, final_ds = wobz.analyze()
+                self._epochs.append(new_epoch)
                 logger.info(f" => optimised as {len(self._epochs[-1])} display sets.")
             gc.collect()
+
+        if final_ds is not None:
+            logger.debug("Adding final displayset to the last epoch.")
+            self._epochs[-1].ds.append(final_ds)
 
         scaled_fps = self.kwargs.get('scale_fps', False) and self.scale_pcsfps()
 
         # Final check
+        logger.info("Checking stream consistency and compliancy...")
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps), self.kwargs.get('enforce_dts', True))
     ####
 
