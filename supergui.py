@@ -84,7 +84,6 @@ def wrapper_mp() -> None:
     do_super.ts = time.time()
 
 def monitor_mp() -> None:
-    from multiprocessing import Process
     do_reset = False
     if time.time()-do_super.ts < 2:
         return
@@ -100,6 +99,7 @@ def monitor_mp() -> None:
             except RuntimeError:
                 ...
             else:
+                from multiprocessing import Process
                 logger.info("Closed gracefully SUPer process.")
                 do_super.proc = Process(target=from_bdnxml, args=(do_super.queue,), daemon=True, name="SUPinternal")
                 do_super.ts = time.time()
@@ -118,7 +118,7 @@ def hide_chkbox() -> None:
 def get_bdnxml() -> None:
     bdn_xml_types = ("*.xml", "*.XML")
     bdnname.value = app.select_file(filetypes=[["BDNXML", bdn_xml_types], ["All files", "*"]])
-    if supout.value != '':
+    if supout.value != '' and do_super.text == SUPER_STRING:
         do_super.enabled = True
 
 def set_outputsup() -> None:
@@ -145,7 +145,7 @@ def set_outputsup() -> None:
             scenarist_checks.enabled = True
             scenarist_fullpal.enabled = True
 
-    if bdnname.value != '':
+    if bdnname.value != '' and do_super.text == SUPER_STRING:
         do_super.enabled = True
 
 ####

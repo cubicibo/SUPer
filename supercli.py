@@ -59,9 +59,9 @@ if __name__ == '__main__':
 
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Input BDNXML file.", default='', required=True)
-    parser.add_argument('-c', '--compression', help="Time threshold for acquisitions, affect compression [int, 0-100]. -1: force acquisitions everywhere", type=int, default=70, required=False)
-    parser.add_argument('-r', '--comprate', help="Decay rate to attain time threshold. [int, 0-100]", type=int, default=100, required=False)
-    parser.add_argument('-q', '--qmode', help="Image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PILIQ]", type=int, default=1, required=False)
+    parser.add_argument('-c', '--compression', help="Compression rate [int, 0-100]", type=int, default=70, required=False)
+    parser.add_argument('-r', '--acqrate', help="Acquisition rate [int, 0-100]", type=int, default=100, required=False)
+    parser.add_argument('-q', '--qmode', help="Image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PNGQ/LIQ]", type=int, default=1, required=False)
     parser.add_argument('-b', '--bt', help="Target BT matrix [601, 709, 2020]", type=int, default=709, required=False)
     parser.add_argument('-s', '--subsampled', help="Flag to indicate BDNXML is subsampled", action='store_true', default=False, required=False)
     parser.add_argument('-d', '--nodts', help="Don't compute DTS in stream", action='store_true', default=False, required=False)
@@ -70,7 +70,6 @@ if __name__ == '__main__':
     parser.add_argument('-y', '--yes', help="Overwrite output file", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Write SUP aside of PES file", action='store_true', default=False, required=False)
     parser.add_argument('-l', '--allow-normal', help="Allow normal case object redefinition.", action='store_true', default=False, required=False)
-
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
     parser.add_argument("output", type=str)
@@ -100,11 +99,11 @@ if __name__ == '__main__':
 
     print("\n @@@@@@@   &@@@  @@@@   @@@@@@@\n"\
           "@@@B &@@@  @@@@  @@@@  @@@@  @@@\n"\
-          "@@@@       @@@@  @@@@  @@@@  @@@\n"\
-          "J&@@@@&G   @@@@  @@@@  @@@@&@@@ \n"\
-          "    &@@@@  @@@@  @@@@  @@@@\n"\
-          "@@@P B@@@  @@@@  @@@&  &@@@\n"\
-          "@@@&!&@@@  B@@@G#&YY5  YJ5#\n"\
+          "@@@@       @@@@  @@@@  @@@@  @@@      Special Thanks to:\n"\
+          "J&@@@@&G   @@@@  @@@@  @@@@&@@@               Masstock\n"\
+          "    &@@@@  @@@@  @@@@  @@@@                   NLScavenger\n"\
+          "@@@P B@@@  @@@@  @@@&  &@@@                   Prince 7\n"\
+          "@@@&!&@@@  B@@@G#&YY5  YJ5#                   Emulgator\n"\
           " G&&@&&B    5#&@B  @@PB@&    @@&@\n"\
           "                  @@@ ,@@@  @@@&G5\n"\
           "                  @@@BP€    @@@\n"\

@@ -337,13 +337,13 @@ class SeqIO(ABC):
     Base class to describe a sequence of events and the common properties
     """
     def __init__(self, file: Union[str, Path], folder: Optional[Union[str, Path]] = None) -> None:
-        self._file = file
         self.events = []
 
+        self._file = Path(file)
         if folder is None:
-            self.folder = self.file[:self.file.rfind('/')]
+            self.folder = self.file.parent
         else:
-            self.folder = folder
+            self.folder = Path(folder)
 
     @abstractmethod
     def parse(self) -> None:
