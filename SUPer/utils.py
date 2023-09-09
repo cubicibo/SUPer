@@ -18,20 +18,203 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import Optional, Callable, TypeVar, Union
-
 import logging
 import numpy as np
-from numpy import (typing as npt)
+
+from typing import Optional, Callable, TypeVar, Union
 from collections import namedtuple
 from enum import Enum, IntEnum
+from numpy import (typing as npt)
 from PIL import Image
 from timecode import Timecode
+from dataclasses import dataclass
+
+RegionType = TypeVar('Region')
+_BaseEvent = TypeVar('BaseEvent')
 
 Shape = namedtuple("Shape", "width height")
 Dim = namedtuple("Dim", "w h")
 Pos = namedtuple("Pos", "x y")
 
+#%%
+@dataclass(frozen=True)
+class Box:
+    y : int
+    dy: int
+    x : int
+    dx: int
+
+    @property
+    def x2(self) -> int:
+        return self.x + self.dx
+
+    @property
+    def y2(self) -> int:
+        return self.y + self.dy
+
+    @property
+    def area(self) -> int:
+        return self.dx * self.dy
+
+    @property
+    def coords(self) -> tuple[int, int, int, int]:
+        return (self.x, self.y, self.x2, self.y2)
+
+    @property
+    def dims(self) -> Dim:
+        return Dim(self.dx, self.dy)
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self.dy, self.dx)
+
+    @property
+    def posdim(self) -> tuple[Pos, Dim]:
+        return Pos(self.x, self.y), Dim(self.dx, self.dy)
+
+    @property
+    def slice(self) -> tuple[slice]:
+        return (slice(self.y, self.y+self.dy),
+                slice(self.x, self.x+self.dx))
+
+    @property
+    def slice_x(self) -> slice:
+        return slice(self.x, self.x+self.dx)
+
+    @property
+    def slice_y(self) -> slice:
+        return slice(self.y, self.y+self.dy)
+
+    def overlap_with(self, other) -> float:
+        intersect = __class__.intersect(self, other)
+        return intersect.area/min(self.area, other.area)
+
+    @classmethod
+    def intersect(cls, *box) -> 'Box':
+        x2 = min(map(lambda b: b.x2, box))
+        y2 = min(map(lambda b: b.y2, box))
+        x1 = max(map(lambda b: b.x, box))
+        y1 = max(map(lambda b: b.y, box))
+        dx, dy = (x2-x1), (y2-y1)
+        return cls(y1, dy * bool(dy > 0), x1, dx * bool(dx > 0))
+
+    @classmethod
+    def from_region(cls, region: RegionType) -> 'Box':
+        return cls.from_slices(region.slice)
+
+    @classmethod
+    def from_slices(cls, slices: tuple[slice]) -> 'Box':
+        if len(slices) == 3:
+            slyx = slices[1:]
+        else:
+            slyx = slices
+        f_ZWz = lambda slz : (int(slz.start), int(slz.stop-slz.start))
+        return cls(*f_ZWz(slyx[0]), *f_ZWz(slyx[1]))
+
+    @classmethod
+    def from_hulls(cls, *hulls: list[...]) -> 'Box':
+        final_hull = cls(*([None]*4))
+        for hull in hulls:
+            final_hull
+            raise NotImplementedError
+        return final_hull
+
+    @classmethod
+    def union(cls, *box) -> 'Box':
+        x2 = max(map(lambda b: b.x2, box))
+        y2 = max(map(lambda b: b.y2, box))
+        x1 = min(map(lambda b: b.x, box))
+        y1 = min(map(lambda b: b.y, box))
+        return cls(y1, y2-y1, x1, x2-x1)
+
+    @classmethod
+    def from_events(cls, events: list[_BaseEvent]) -> 'Box':
+        """
+        From a chain of event, find the "working box" to minimise
+        memory usage of the buffers while optimising.
+        """
+        if len(events) == 0:
+            raise ValueError("No events given.")
+
+        pxtl, pytl = np.inf, np.inf
+        pxbr, pybr = 0, 0
+        for event in events:
+            pxtl = min(pxtl, event.x)
+            pxbr = max(pxbr, event.x + event.width)
+            pytl = min(pytl, event.y)
+            pybr = max(pybr, event.y + event.height)
+        return cls(int(pytl), int(pybr-pytl), int(pxtl), int(pxbr-pxtl))
+
+    @classmethod
+    def from_coords(cls, x1: int, y1: int, x2 : int, y2: int) -> 'Box':
+        return cls(min(y1, y2), abs(y2-y1), min(x1, x2), abs(x2-x1))
+####
+
+#%%
+@dataclass(frozen=True)
+class ScreenRegion(Box):
+    t:  int
+    dt: int
+    region: RegionType
+
+    @classmethod
+    def from_slices(cls, slices: tuple[slice], region: Optional[RegionType] = None) -> 'ScreenRegion':
+        f_ZWz = lambda slz : (int(slz.start), int(slz.stop-slz.start))
+        X, Y, T = f_ZWz(slices[2]), f_ZWz(slices[1]), f_ZWz(slices[0])
+
+        if len(slices) != 3:
+            raise ValueError("Expected 3 slices (t, y, x).")
+        return cls(*Y, *X, *T, region)
+
+    @property
+    def spatial_slice(self) -> tuple[slice]:
+        return (slice(self.y, self.y2),
+                slice(self.x, self.x2))
+
+    @property
+    def slice(self) -> tuple[slice]:
+        return (slice(self.t, self.t2),
+                slice(self.y, self.y2),
+                slice(self.x, self.x2))
+
+    @property
+    def range(self) -> tuple[range]:
+        return (range(self.t, self.t2),
+                range(self.y, self.y2),
+                range(self.x, self.x2))
+
+    @property
+    def t2(self) -> int:
+        return self.t + self.dt
+
+    @classmethod
+    def from_region(cls, region: RegionType) -> 'ScreenRegion':
+        return cls.from_slices(region.slice, region)
+
+    @classmethod
+    def from_coords(cls, x1: int, y1: int, t1: int, x2: int, y2: int, t2: int, region: RegionType) -> 'ScreenRegion':
+        return cls(min(y1, y2), abs(y2-y1), min(x1, x2), abs(x2-x1), min(t1, t2), abs(t2-t1), region=region)
+####
+
+class WindowOnBuffer:
+    def __init__(self, screen_regions: list[ScreenRegion], duration: int) -> None:
+        self.srs = screen_regions
+        self.duration = duration
+
+    def get_window(self) -> Box:
+        mxy = np.asarray([np.inf, np.inf])
+        Mxy = np.asarray([-1, -1])
+        for sr in self.srs:
+            mxy[:] = np.min([np.asarray((sr.y,  sr.x)),  mxy], axis=0)
+            Mxy[:] = np.max([np.asarray((sr.y2, sr.x2)), Mxy], axis=0)
+        mxy, Mxy = np.int32((mxy, Mxy))
+        return Box(mxy[0], max(Mxy[0]-mxy[0], 8), mxy[1], max(Mxy[1]-mxy[1], 8))
+
+    def area(self) -> int:
+        return self.get_window().area
+####
+
+#%%
 class BDVideo:
     class FPS(Enum):
         NTSCi_NDF = 60 #Illegal, just for NDF timing

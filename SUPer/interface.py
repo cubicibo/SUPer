@@ -74,7 +74,13 @@ class BDNRender:
         epochstart_dd_fnr = lambda o_area: np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
 
         final_ds = None
+        last_pts_out = None
         for group in bdn.groups(epochstart_dd_fn(screen_area)):
+            if last_pts_out is not None and TC.tc2s(group[0].tc_in, bdn.fps) - last_pts_out > 1.5:
+                logger.debug("Adding screen wipe since there was enough time between two epochs.")
+                assert final_ds is not None
+                self._epochs[-1].ds.append(final_ds)
+
             subgroups = []
             offset = len(group)
             max_area = 0
@@ -107,6 +113,8 @@ class BDNRender:
                 self._epochs.append(new_epoch)
                 logger.info(f" => optimised as {len(self._epochs[-1])} display sets.")
             gc.collect()
+            last_pts_out = TC.tc2s(subgroups[0][-1].tc_out, bdn.fps)
+        ####
 
         if final_ds is not None:
             logger.debug("Adding final displayset to the last epoch.")

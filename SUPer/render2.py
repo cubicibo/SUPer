@@ -31,193 +31,15 @@ from skimage.filters import gaussian
 from skimage.measure import regionprops, label
 
 #%%
-from .utils import get_super_logger, Pos, Dim, BDVideo, TimeConv as TC
+from .utils import get_super_logger, Pos, Dim, BDVideo, TimeConv as TC, Box, ScreenRegion, RegionType, WindowOnBuffer
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise
 from .pgraphics import PGraphics, PGDecoder, PGObject, PGObjectBuffer, PaletteManager
 from .palette import Palette, PaletteEntry
 
-_Region = TypeVar('Region')
 logger = get_super_logger('SUPer')
-skip_dts = False
-
-#%%
-@dataclass(frozen=True)
-class Box:
-    y : int
-    dy: int
-    x : int
-    dx: int
-
-    @property
-    def x2(self) -> int:
-        return self.x + self.dx
-
-    @property
-    def y2(self) -> int:
-        return self.y + self.dy
-
-    @property
-    def area(self) -> int:
-        return self.dx * self.dy
-
-    @property
-    def coords(self) -> tuple[int, int, int, int]:
-        return (self.x, self.y, self.x2, self.y2)
-
-    @property
-    def dims(self) -> Dim:
-        return Dim(self.dx, self.dy)
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return (self.dy, self.dx)
-
-    @property
-    def posdim(self) -> tuple[Pos, Dim]:
-        return Pos(self.x, self.y), Dim(self.dx, self.dy)
-
-    @property
-    def slice(self) -> tuple[slice]:
-        return (slice(self.y, self.y+self.dy),
-                slice(self.x, self.x+self.dx))
-
-    @property
-    def slice_x(self) -> slice:
-        return slice(self.x, self.x+self.dx)
-
-    @property
-    def slice_y(self) -> slice:
-        return slice(self.y, self.y+self.dy)
-
-    def overlap_with(self, other) -> float:
-        intersect = __class__.intersect(self, other)
-        return intersect.area/min(self.area, other.area)
-
-    @classmethod
-    def intersect(cls, *box) -> 'Box':
-        x2 = min(map(lambda b: b.x2, box))
-        y2 = min(map(lambda b: b.y2, box))
-        x1 = max(map(lambda b: b.x, box))
-        y1 = max(map(lambda b: b.y, box))
-        dx, dy = (x2-x1), (y2-y1)
-        return cls(y1, dy * bool(dy > 0), x1, dx * bool(dx > 0))
-
-    @classmethod
-    def from_region(cls, region: _Region) -> 'Box':
-        return cls.from_slices(region.slice)
-
-    @classmethod
-    def from_slices(cls, slices: tuple[slice]) -> 'Box':
-        if len(slices) == 3:
-            slyx = slices[1:]
-        else:
-            slyx = slices
-        f_ZWz = lambda slz : (int(slz.start), int(slz.stop-slz.start))
-        return cls(*f_ZWz(slyx[0]), *f_ZWz(slyx[1]))
-
-    @classmethod
-    def from_hulls(cls, *hulls: list[...]) -> 'Box':
-        final_hull = cls(*([None]*4))
-        for hull in hulls:
-            final_hull
-            raise NotImplementedError
-        return final_hull
-
-    @classmethod
-    def union(cls, *box) -> 'Box':
-        x2 = max(map(lambda b: b.x2, box))
-        y2 = max(map(lambda b: b.y2, box))
-        x1 = min(map(lambda b: b.x, box))
-        y1 = min(map(lambda b: b.y, box))
-        return cls(y1, y2-y1, x1, x2-x1)
-
-    @classmethod
-    def from_events(cls, events: list[BaseEvent]) -> 'Box':
-        """
-        From a chain of event, find the "working box" to minimise
-        memory usage of the buffers while optimising.
-        """
-        if len(events) == 0:
-            raise ValueError("No events given.")
-
-        pxtl, pytl = np.inf, np.inf
-        pxbr, pybr = 0, 0
-        for event in events:
-            pxtl = min(pxtl, event.x)
-            pxbr = max(pxbr, event.x + event.width)
-            pytl = min(pytl, event.y)
-            pybr = max(pybr, event.y + event.height)
-        return cls(int(pytl), int(pybr-pytl), int(pxtl), int(pxbr-pxtl))
-
-    @classmethod
-    def from_coords(cls, x1: int, y1: int, x2 : int, y2: int) -> 'Box':
-        return cls(min(y1, y2), abs(y2-y1), min(x1, x2), abs(x2-x1))
-#%%
-####
-@dataclass(frozen=True)
-class ScreenRegion(Box):
-    t:  int
-    dt: int
-    region: _Region
-
-    @classmethod
-    def from_slices(cls, slices: tuple[slice], region: Optional[_Region] = None) -> 'ScreenRegion':
-        f_ZWz = lambda slz : (int(slz.start), int(slz.stop-slz.start))
-        X, Y, T = f_ZWz(slices[2]), f_ZWz(slices[1]), f_ZWz(slices[0])
-
-        if len(slices) != 3:
-            raise ValueError("Expected 3 slices (t, y, x).")
-        return cls(*Y, *X, *T, region)
-
-    @property
-    def spatial_slice(self) -> tuple[slice]:
-        return (slice(self.y, self.y2),
-                slice(self.x, self.x2))
-
-    @property
-    def slice(self) -> tuple[slice]:
-        return (slice(self.t, self.t2),
-                slice(self.y, self.y2),
-                slice(self.x, self.x2))
-
-    @property
-    def range(self) -> tuple[range]:
-        return (range(self.t, self.t2),
-                range(self.y, self.y2),
-                range(self.x, self.x2))
-
-    @property
-    def t2(self) -> int:
-        return self.t + self.dt
-
-    @classmethod
-    def from_region(cls, region: _Region) -> 'ScreenRegion':
-        return cls.from_slices(region.slice, region)
-
-    @classmethod
-    def from_coords(cls, x1: int, y1: int, t1: int, x2: int, y2: int, t2: int, region: _Region) -> 'ScreenRegion':
-        return cls(min(y1, y2), abs(y2-y1), min(x1, x2), abs(x2-x1), min(t1, t2), abs(t2-t1), region=region)
-####
-
-class WindowOnBuffer:
-    def __init__(self, screen_regions: list[ScreenRegion], duration: int) -> None:
-        self.srs = screen_regions
-        self.duration = duration
-
-    def get_window(self) -> Box:
-        mxy = np.asarray([np.inf, np.inf])
-        Mxy = np.asarray([-1, -1])
-        for sr in self.srs:
-            mxy[:] = np.min([np.asarray((sr.y,  sr.x)),  mxy], axis=0)
-            Mxy[:] = np.max([np.asarray((sr.y2, sr.x2)), Mxy], axis=0)
-        mxy, Mxy = np.int32((mxy, Mxy))
-        return Box(mxy[0], max(Mxy[0]-mxy[0], 8), mxy[1], max(Mxy[1]-mxy[1], 8))
-
-    def area(self) -> int:
-        return self.get_window().area
-####
+dts_strategy = (True, False)
 
 #%%
 class GroupingEngine:
@@ -234,7 +56,7 @@ class GroupingEngine:
 
         self.kwargs = kwargs
 
-    def coarse_grouping(self, group: list[Type[BaseEvent]]) -> tuple[_Region, npt.NDArray[np.uint8], Box]:
+    def coarse_grouping(self, group: list[Type[BaseEvent]]) -> tuple[RegionType, npt.NDArray[np.uint8], Box]:
         # SD content should be blurred with lower coeffs. Remove constant.
         blur_mul = self.blur_mul
         blur_c = self.blur_c
@@ -328,7 +150,7 @@ class GroupingEngine:
         return tuple(sorted(wobs[0], key=lambda x: x.srs[0].t)), box
 
     @staticmethod
-    def crop_region(region: _Region, gs_origs: npt.NDArray[np.uint8]) -> _Region:
+    def crop_region(region: RegionType, gs_origs: npt.NDArray[np.uint8]) -> RegionType:
         #Mask out object outside of the active region.
         gs_origs = gs_origs.copy()
         #Apply blurred mask  so we don't catch nearby graphics by working with just rectangles
@@ -388,8 +210,8 @@ class WOBSAnalyzer:
         return None
 
     def analyze(self):
-        global skip_dts
-        skip_dts = not self.kwargs.get('enforce_dts', True)
+        global dts_strategy
+        dts_strategy = (self.kwargs.get('enforce_dts', True), self.kwargs.get('ts_long', False))
         allow_normal_case = self.kwargs.get('normal_case_ok', False)
         woba = []
         pm = PaletteManager()
@@ -444,7 +266,7 @@ class WOBSAnalyzer:
         # step to either discard the impossible events or shift some PG operations
         pts_delta = nodes[0].write_duration()/PGDecoder.FREQ
         k = len(states)-1
-        while k > 0 and not skip_dts:
+        while k > 0 and dts_strategy[0]:
             if not (absolutes[k] and not acqs[k] and flags[k] == 0):
                 k -= 1
                 continue
@@ -1212,11 +1034,15 @@ class DSNode:
         return not (self._dts is None)
 
     def get_dts_markers(self) -> float:
+        global dts_strategy
         t_decoding = 0
 
         if not self.nc_refresh:
             assigned_wd = list(map(lambda x: x[0] is not None and (not self.partial or self.partial and x[1]), zip_longest(self.objects, self.new_mask)))
             decode_duration = sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*PGDecoder.FREQ/PGDecoder.RC) for wid, flag in enumerate(assigned_wd) if not flag])
+
+            if dts_strategy[1]:
+                decode_duration = self.wipe_duration()
 
             for wid, obj in enumerate(self.objects):
                 if obj is None:
@@ -1245,6 +1071,8 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optio
     :param wds: WDS of the epoch.
     :return: Pairs of timestamps in ticks for each segment in the displayset.
     """
+    global dts_strategy
+
     ddurs = {}
     for ods in ds.ods:
         if ods.flags & ods.ODSFlags.SEQUENCE_FIRST:
@@ -1269,6 +1097,9 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optio
         unassigned_windows = [wd for wd in windows if wd not in assigned_windows]
         decode_duration = sum([np.ceil(windows[wid][0]*windows[wid][1]*PGDecoder.FREQ/PGDecoder.RC) for wid in unassigned_windows])
 
+        if ds.ods and dts_strategy[1]:
+            decode_duration = wipe_duration
+
     object_decode_duration = ddurs.copy()
 
     #For every composition object, compute the transfer time
@@ -1277,10 +1108,13 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optio
         assert shape is not None, "Object does not exist in buffer."
         w, h = windows[cobj.window_id][0], windows[cobj.window_id][1]
 
-        t_decoding += object_decode_duration.pop(cobj.o_id, 0)
+        t_dec_obj = object_decode_duration.pop(cobj.o_id, 0)
+        t_decoding += t_dec_obj
 
         # Same window -> patent claims a window is written only once after the two cobj are processed.
         if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
+            continue
+        if dts_strategy[1] and t_dec_obj == 0:
             continue
         copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
         decode_duration = max(decode_duration, t_decoding) + copy_dur
@@ -1313,9 +1147,9 @@ def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optio
     return ts_pairs
 
 def apply_pts_dts(ds: DisplaySet, ts: tuple[int, int]) -> None:
-    global skip_dts
-    nullify_dts = lambda x: x*(0 if skip_dts else 1)
-    select_pts = lambda x: ts[0][0] if skip_dts else x
+    global dts_strategy
+    nullify_dts = lambda x: x*(1 if dts_strategy[0] else 0)
+    select_pts = lambda x: x if dts_strategy[0] else ts[0][0]
 
     assert len(ds) == len(ts), "Timestamps-DS size mismatch."
     for seg, (pts, dts) in zip(ds, ts):

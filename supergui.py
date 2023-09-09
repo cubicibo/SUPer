@@ -46,11 +46,12 @@ def get_kwargs() -> dict[str, int]:
         'quantize_lib': Quantizer.get_option_id(quantcombo.value),
         'bt_colorspace': colorspace.value,
         'enforce_dts': set_dts.value,
-        'no_overlap': scenarist_checks.value,
+        'no_overlap': True, #scenarist_checks.value,
         'full_palette': scenarist_fullpal.value,
         'output_all_formats': all_formats.value,
         'normal_case_ok': normal_case_ok.value,
         'libs_path': lib_paths,
+        'ts_long': soft_dts.value
     }
 
 def wrapper_mp() -> None:
@@ -110,10 +111,14 @@ def monitor_mp() -> None:
 
 def hide_chkbox() -> None:
     if all_formats.value:
-        set_dts.value = scenarist_checks.value = scenarist_fullpal.value = True
-        set_dts.enabled = scenarist_checks.enabled = scenarist_fullpal.enabled = False
+        set_dts.value = True
+        scenarist_fullpal.value = True
+        #scenarist_checks.value = True
+        set_dts.enabled = scenarist_fullpal.enabled = False
+        #scenarist_checks.enabled = False
     elif not supout.value.lower().endswith('pes'):
-        set_dts.enabled = scenarist_checks.enabled = scenarist_fullpal.enabled = True
+        set_dts.enabled = scenarist_fullpal.enabled = True
+        #scenarist_checks.enabled = True
 
 def get_bdnxml() -> None:
     bdn_xml_types = ("*.xml", "*.XML")
@@ -135,14 +140,14 @@ def set_outputsup() -> None:
     if supout.value.lower().endswith('pes'):
         set_dts.value = True
         set_dts.enabled = False
-        scenarist_checks.value = True
-        scenarist_checks.enabled = False
+        #scenarist_checks.value = True
+        #scenarist_checks.enabled = False
         scenarist_fullpal.value = True
         scenarist_fullpal.enabled = False
     else:
         if not all_formats.value:
             set_dts.enabled = True
-            scenarist_checks.enabled = True
+            #scenarist_checks.enabled = True
             scenarist_fullpal.enabled = True
 
     if bdnname.value != '' and do_super.text == SUPER_STRING:
@@ -255,22 +260,21 @@ if __name__ == '__main__':
     Text(bquant, "Quantization: ", grid=[0,0], align='left', size=11)
     quantcombo = Combo(bquant, options=list(map(lambda x: ' '.join(x), opts_quant.values())), grid=[1,0], align='left')
 
-    scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
-                           "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
-                           "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
-                           "as if it was 59.94. This flag is meaningless with 23.976 or 24p.")
+    normal_case_ok = CheckBox(app, text="Allow normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
+    Hovertip(normal_case_ok.tk, "This option may reduce the number of dropped events on complicated animations.\n"\
+                                "When there are two objects on screen and one must be updated, it may be possible\n"\
+                                "to update the given object in a tighter time window than in an acquisition (both objects refreshed).")
 
-    set_dts = CheckBox(app, text="Ensure strict compliancy (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    set_dts = CheckBox(app, text="Enforce strict compliancy (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     set_dts.value = 1
     Hovertip(set_dts.tk, "PG streams include a decoding timestamp. This timestamp is required by old decoders\n"\
                          "else the on-screen behaviour is erratic. This is forcefully ticked for PES+MUI output.\n"\
                          "It must be ticked to ensure compatibility and strict compliancy to Blu-ray specifications.")
 
-    scenarist_checks = CheckBox(app, text="Apply additional compliancy rules for Scenarist BD", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    scenarist_checks.value = 1
-    Hovertip(scenarist_checks.tk, "Scenarist BD has additional hard rules. This checkbox enforces them\n"\
-                                  "and the generated stream shall pass all Scenarist checks.")
+    #scenarist_checks = CheckBox(app, text="Apply additional compliancy rules for Scenarist BD", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    #scenarist_checks.value = 1
+    #Hovertip(scenarist_checks.tk, "Scenarist BD has additional hard rules. This checkbox enforces them\n"\
+    #                              "and the generated stream shall pass all Scenarist checks.")
 
     scenarist_fullpal = CheckBox(app, text="Always write the full palette", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(scenarist_fullpal.tk, "Scenarist BD mendles with the imported files and may mess up the palette assignments.\n"\
@@ -278,10 +282,15 @@ if __name__ == '__main__':
 
     all_formats = CheckBox(app, text="Generate both SUP and PES+MUI files.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
 
-    normal_case_ok = CheckBox(app, text="Allow normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
-    Hovertip(normal_case_ok.tk, "This option may reduce the number of dropped events on complicated animations.\n"\
-                                "When there are two objects on screen and one must be updated, it may be possible\n"\
-                                "to update the given object in a tighter time window than in an acquisition (both objects refreshed).")
+    scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
+                           "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
+                           "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
+                           "as if it was 59.94. This flag is meaningless with 23.976 or 24p.")
+
+    soft_dts = CheckBox(app, text="Use PTS/DTS strategy with margin.", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(soft_dts.tk, "When new objects are defined, the DTS-PTS delta includes an additional (unecessary) margin.\n"\
+                          "This reduces the ability to perform acquisitions.")
 
     Text(app, grid=[0,pos_v:=pos_v+1,2,1], align='left', text="Progress data is displayed in the command line!")
     app.repeat(1000, monitor_mp)  # Schedule call to monitor_mp() every 1000ms

@@ -32,22 +32,26 @@ On UNIX systems, pngquant is fairly easily to get in your PATH via brew, apt-get
 #### CLI Parameters
 ```
  -i, --input         Input BDNXML file.
- -c, --compression   Main compression parameter, high value will increase the time margin needed to perform an acquisitions. [int, 0-100, def: 65]
- -r, --acqrate       Acquisition rate (lower values will increase compression). [int, 0-100, def: 100]
+ -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
+ -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
  -q, --qmode         Image quantization mode. [1: PIL+K-Means on fades, 2: K-Means, 3: PILIQ, def: 1]
+ -l, --allow-normal  Allow normal case object redefinition, can reduce the number of dropped events on complex animations.
  -b, --bt            Target BT matrix [601, 709, 2020, def: 709]
  -s, --subsampled    Flag to indicate BDNXML is subsampled (e.g 29.97 BDNXML for 59.94 output).
- -d, --nodts         Dont compute DTS in stream (not compatible with PES).
  -p, --palette       Always write the full palette (enforced for PES).
- -a, --aheadoftime   Allow ahead of time decoding (not compatible with PES).
- -y, --yes           Overwrite output file if it already exists.
- -w, --withsup       Write SUP aside of PES+MUI assets
- -l, --allow-normal  Allow normal case object redefinition, can reduce the number of dropped events on complex animations.
+ -y, --yes           Flag to overwrite output file if it already exists.
+ -w, --withsup       Flag to write both SUP and PES+MUI files.
+ -t, --tslong        Flag to use a conservative PTS/DTS strategy (more events may be filtered out on complex animations).
  -v, --version       Print the version and exit.
 ```
 - Image quantization mode 3 ("PILIQ") is either libimagequant or pngquant, whichever specified in config.ini or available in your system.
 - The output file extension is used to infer the desired output type (SUP or PES).
 - If `--allow-normal` (`-l`) is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Scenarist BD does not implement normal case object redefinition and may destroy the stream. You do not need to do those operation to mux the assets in any case.
+
+Additionally, one flag is available to generate SUPs that are not subject to decoding constraints. This flag is unmaintained code and its operability not guaranteed.
+```
+ -n, --nodts         Flag to not set the DTS in stream (NOT compliant).
+```
 
 ### Python package installation
 If you plan to execute SUPer with your own Python environment, you must first install the package:<br/>
@@ -55,12 +59,14 @@ If you plan to execute SUPer with your own Python environment, you must first in
 Where SUPer is the actual base directory. You should then be able to execute `python3 supergui.py`, `python3 supercli.py [...]`, or use the internal libraries in your own Python scripts by calling `import SUPer` or `from SUPer import [...]`.
 
 ## Misc
-#### GUI/CLI options
+### GUI/CLI options
+Here are some additional info on some of the options available, especially those that shape the datastream and affect the output
 - Compression rate: minimum time margin (in %) between two events to perform an acquisition.
 - Acquisition rate: lower values reduces the number of acquisition and leads to longer drought
 - Quantization: image quantizer to use. PIL+K-Means is low quality but fast. K-Means and pngquant/libimagequant are high quality but slower.
 - Allow normal case object redefinition: When two objects are on screen, one object can be updated while the other is kept. This can greatly helps animations.
 - Subsampled BDN.XML: Use a 25 or 29.97 fps BDN.XML and generate the SUP as if it was for 50 or 59.94 fps.
+- Conservative PTS/DTS strategy: doubles the graphic plane access time.
 
 ### How SUPer works
 SUPer implements a conversion engine that uses the entirety of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities that includes palette updates, object redefinition, object cropping and events buffering.
