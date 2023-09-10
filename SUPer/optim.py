@@ -123,7 +123,10 @@ class Preprocess:
             return np.reshape(label.flatten(), ocv_img.shape[:-1]).astype(np.uint8), center[occs]
 
         elif Quantizer.Libs.PILIQ == quant_method:
-            nc = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
+            if kwargs.get('single_bitmap', False):
+                nc = colors
+            else:
+                nc = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
 
             lib_piq = Quantizer.get_piliq()
             assert lib_piq is not None
@@ -201,8 +204,9 @@ class Optimise:
         """
 
         sequences = []
+        single_bitmap = len(events) == 1
         for event in events:
-            img, clut = Preprocess.quantize(event, colors, **kwargs)
+            img, clut = Preprocess.quantize(event, colors, single_bitmap=single_bitmap, **kwargs)
             sequences.append(clut[img])
 
         sequences = np.stack(sequences, axis=2).astype(np.uint8)

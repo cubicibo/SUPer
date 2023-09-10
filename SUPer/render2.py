@@ -957,7 +957,7 @@ class WOBAnalyzer:
 
                 rgba_i = Image.fromarray(rgba)
                 score, cross_percentage = self.compare(alpha_compo, rgba_i)
-                if score >= max(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage)) - 0.008333:
+                if score >= min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333):
                     bitmaps.append(rgba)
                     alpha_compo.alpha_composite(rgba_i)
                 else:
