@@ -20,6 +20,7 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 from SUPer import BDNRender, get_super_logger
 from SUPer.__metadata__ import __author__, __version__ as LIB_VERSION
+from SUPer.optim import Quantizer
 
 import os
 import sys
@@ -108,8 +109,25 @@ if __name__ == '__main__':
           "                  @@@BP€    @@@\n"\
           "                  @@@       @@@\n"\
           "                   @@YY@@   @@@\n")
-
-    ##
+    
+    if args.qmode == 3:
+        config_file = Path('config.ini')
+        exepath = None
+        if config_file.exists():
+            try:
+                import configparser
+                config = configparser.ConfigParser()
+                config.read(config_file)
+                exepath = get_value_key(config['PILIQ'], 'quantizer')
+                if not os.path.isabs(exepath):
+                    exepath = str(CWD.joinpath(exepath))
+            except:
+                ...
+        if Quantizer.init_piliq(exepath):
+            logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
+        else:
+            exit_msg("Could not initialise advanced image quantizer, aborting.", True)
+    ###
     parameters = {
         'quality_factor': int(args.compression)/100,
         'refresh_rate': int(args.acqrate)/100,
