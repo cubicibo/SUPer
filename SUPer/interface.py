@@ -42,7 +42,7 @@ class BDNRender:
                 self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
 
     def optimise(self) -> None:
-        from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant
+        from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant, check_pts_dts_sanity
 
         kwargs = self.kwargs
         stkw = ''
@@ -76,7 +76,7 @@ class BDNRender:
         final_ds = None
         last_pts_out = None
         for group in bdn.groups(epochstart_dd_fn(screen_area)):
-            if last_pts_out is not None and TC.tc2s(group[0].tc_in, bdn.fps) - last_pts_out > 1.5:
+            if last_pts_out is not None and TC.tc2s(group[0].tc_in, bdn.fps) - last_pts_out > 1.1:
                 logger.debug("Adding screen wipe since there was enough time between two epochs.")
                 assert final_ds is not None
                 self._epochs[-1].ds.append(final_ds)
@@ -125,6 +125,13 @@ class BDNRender:
         # Final check
         logger.info("Checking stream consistency and compliancy...")
         is_compliant(self._epochs, bdn.fps * int(1+scaled_fps), self.kwargs.get('enforce_dts', True))
+
+        if self.kwargs.get('enforce_dts', True):
+            logger.info("Checking PTS and DTS rules [EXPERIMENTAL TEST]...")
+            if check_pts_dts_sanity(self._epochs, bdn.fps * int(1+scaled_fps)):
+                logger.info("PTS and DTS values in stream seem to be valid.")
+            else:
+                logger.warning("Maybe a PTS/DTS issue in PGS (this test is experimental, a false negative is possible).")
     ####
 
     def scale_pcsfps(self) -> bool:
