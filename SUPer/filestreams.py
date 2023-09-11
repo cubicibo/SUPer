@@ -466,11 +466,9 @@ class BDNXML(SeqIO):
         self._parse_events()
 
     def parse_header(self) -> None:
-        escape_xml = lambda c: re.sub(u'[\x00-\x08\x0b\x0c\x0e-\x1F\uD800-\uDFFF\uFFFE\uFFFF]', '', c)
-
         content = None
-        with open(self._file, 'r') as f:
-            content = ET.fromstring(escape_xml(f.read()))
+        with open(self._file, 'r', encoding="utf-8-sig") as f:
+            content = ET.fromstring(f.read())
         assert content is not None, "Failed to parse file."
         header, self._raw_events = content[0:2]
 
