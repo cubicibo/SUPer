@@ -35,7 +35,7 @@ On UNIX systems, pngquant is fairly easily to get in your PATH via brew, apt-get
  -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
  -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
  -q, --qmode         Image quantization mode. [1: PIL+K-Means on fades, 2: K-Means, 3: PILIQ, def: 1]
- -l, --allow-normal  Allow normal case object redefinition, can reduce the number of dropped events on complex animations.
+ -n, --allow-normal  Allow normal case object redefinition, can reduce the number of dropped events on complex animations.
  -b, --bt            Target BT matrix [601, 709, 2020, def: 709]
  -s, --subsampled    Flag to indicate BDNXML is subsampled (e.g 29.97 BDNXML for 59.94 output).
  -p, --palette       Always write the full palette (enforced for PES).
@@ -50,7 +50,7 @@ On UNIX systems, pngquant is fairly easily to get in your PATH via brew, apt-get
 
 Additionally, one flag is available to generate SUPs that are not subject to decoding constraints. This flag is unmaintained code and its operability not guaranteed.
 ```
- -n, --nodts         Flag to not set the DTS in stream (NOT compliant).
+ --nodts         Flag to not set the DTS in stream (NOT compliant).
 ```
 
 ### Python package installation
@@ -67,6 +67,13 @@ Here are some additional info on some of the options available, especially those
 - Allow normal case object redefinition: When two objects are on screen, one object can be updated while the other is kept. This can greatly helps animations.
 - Subsampled BDN.XML: Use a 25 or 29.97 fps BDN.XML and generate the SUP as if it was for 50 or 59.94 fps.
 - Conservative PTS/DTS strategy: doubles the graphic plane access time.
+
+### TL;DR Options
+First of all, don't touch the acquisition rate at 100% unless you really want to compress the subs stream.
+
+- You don't trust SUPer: Use a low compression rate (< 50%), use the conservative PTS/DTS strategy.
+Then, in Scenarist BD, import the resulting PES+MUI and Encode->Build or Encode->Rebuild the file to have Scenarist re-encode the SUP according to their compliancy rules and check.
+- You trust SUPer: Don't use the conservative PTS/DTS strategy, set to allow normal case object redefinition. Use an appropriate compression rate (60% typ.). Then, in Scenarist BD, do <b>NOT</b> Encode->Build/Rebuild the project. The output can still be muxed without building/rebuilding. This is mandatory because Scenarist BD does not know how to encode normal case object redefinition.
 
 ### How SUPer works
 SUPer implements a conversion engine that uses the entirety of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities that includes palette updates, object redefinition, object cropping and events buffering.
