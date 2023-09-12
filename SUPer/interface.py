@@ -124,14 +124,19 @@ class BDNRender:
 
         # Final check
         logger.info("Checking stream consistency and compliancy...")
-        is_compliant(self._epochs, bdn.fps * int(1+scaled_fps), self.kwargs.get('enforce_dts', True))
+        compliant, warnings = is_compliant(self._epochs, bdn.fps * int(1+scaled_fps), self.kwargs.get('enforce_dts', True))
 
-        if self.kwargs.get('enforce_dts', True):
+        if compliant and self.kwargs.get('enforce_dts', True):
             logger.info("Checking PTS and DTS rules [EXPERIMENTAL TEST]...")
-            if check_pts_dts_sanity(self._epochs, bdn.fps * int(1+scaled_fps)):
-                logger.info("PTS and DTS values in stream seem to be valid.")
-            else:
-                logger.warning("Maybe a PTS/DTS issue in PGS (this test is experimental, a false negative is possible).")
+            compliant &= check_pts_dts_sanity(self._epochs, bdn.fps * int(1+scaled_fps))
+            if not compliant:
+                logger.error("=> Stream has a PTS/DTS issue!!")
+        if warnings == 0 and compliant:
+            logger.info("=> Output PGS seems compliant.")
+        if warnings > 0 and compliant:
+            logger.warning("=> Excessive bandwidth detected, requires HW testing.")
+        elif not compliant:
+            logger.error("=> Output PGS is not compliant. Expect display issues or decoder crash.")
     ####
 
     def scale_pcsfps(self) -> bool:

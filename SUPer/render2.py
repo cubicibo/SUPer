@@ -271,6 +271,12 @@ class WOBSAnalyzer:
                 k -= 1
                 continue
 
+            #Drop impossible screen wipe
+            if durs[k][1] > 0:
+                assert nodes[k].parent is not None
+                logger.warning(f"Discarded screen wipe before {self.events[k].tc_in} to perform a mandatory acquisition.")
+                durs[k] = (durs[k][0], 0)
+
             mask = nodes[k].new_mask.copy()
             dts_start_nc = dts_start = nodes[k].dts()
             dropped_nc = dropped = 0
@@ -295,14 +301,10 @@ class WOBSAnalyzer:
                     j_nc -= 1
                 nodes[k].partial = False
 
-            #Normal case is impossible if we hit epoch start and dts or pts still not valid
+            #Normal case is impossible if we hit epoch start, and dts or pts still not valid
             nc_not_ok = normal_case_possible and j_nc == 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts())
             # we can't delete or move epoch start -> delete self if we can't shift it forward
             if nc_not_ok or (not normal_case_possible and j == 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts())):
-                if durs[k][1] > 0:
-                    logger.info(f"Discarded screen wipe before {self.events[k].tc_in} as it collides with epoch start.")
-                    durs[k] = (durs[k][0], 0) # Drop screen wipe (we can't do it!)
-
                 #If this event is long enough, we shift it forward in time.
                 wipe_area = nodes[0].wipe_duration()
                 worst_dur = (np.ceil(wipe_area*2) + 3)
@@ -311,6 +313,9 @@ class WOBSAnalyzer:
                     logger.warning(f"Shifted event at {self.events[k].tc_in} by +{nodes[k].tc_shift} frames to account for epoch start and compliancy.")
                     #wipe all events in between epoch start and this point
                     for ze in range(j+1, k):
+                        if durs[ze][1] > 0:
+                            durs[ze] = (durs[ze][0], 0)
+                            assert nodes[ze].parent is not None
                         logger.warning(f"Discarded event at {self.events[ze].tc_in} to perform a mendatory acquisition right after epoch start.")
                         flags[ze] = -1
                 else:
@@ -327,10 +332,10 @@ class WOBSAnalyzer:
                         for zek in range(k+1, ze):
                             if nodes[zek].parent is not None and (nodes[zek].parent.dts_end() >= nodes[ze].dts() or nodes[zek].parent.pts() + pts_delta >= nodes[k].pts()):
                                 durs[zek] = (durs[zek][0], 0) # Drop screen wipe (we can't do it!)
-                                logger.info(f"Dropped screen wipe before {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
+                                logger.warning(f"Dropped screen wipe before {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
                             if nodes[zek].dts_end() >= nodes[ze].dts() or nodes[zek].pts() + pts_delta >= nodes[k].pts():
                                 flags[zek] = -1
-                                logger.info(f"Dropped event at {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
+                                logger.warning(f"Dropped event at {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
                         break
                 k -= 1
                 continue
@@ -1351,14 +1356,9 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool
             elif (last_rc+Rc)/nf > PGDecoder.RC and not has_dts:
                 logger.warning(f"Graphic plane overloaded. Display is not ensured at {to_tc(seg.pts)}.")
                 warnings += 1
-
-    if warnings == 0 and compliant:
-        logger.info("Output PGS seems compliant.")
-    if warnings > 0 and compliant:
-        logger.warning("Excessive bandwidth detected, requires HW testing (PGS may go out of sync).")
-    elif not compliant:
-        logger.error("Output PGS is not compliant. Expect display issues or decoder crash.")
-    return compliant
+        #### for ds
+    ####for epoch
+    return compliant, warnings
 
 def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     PTS_MASK = (1 << 32) - 1
