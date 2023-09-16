@@ -210,9 +210,13 @@ class WOBSAnalyzer:
         return None
 
     def analyze(self):
+        allow_normal_case = self.kwargs.get('normal_case_ok', False)
+        scale_pts = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
+        dts_strat = self.kwargs.get('ts_long', False)
+        DSNode.configure(scale_pts, self.bdn.fps, dts_strat)
+
         global dts_strategy
         dts_strategy = (self.kwargs.get('enforce_dts', True), self.kwargs.get('ts_long', False))
-        allow_normal_case = self.kwargs.get('normal_case_ok', False)
         woba = []
         pm = PaletteManager()
 
@@ -266,15 +270,17 @@ class WOBSAnalyzer:
         # so we have to filter out some less relevant events.
         pts_delta = nodes[0].write_duration()/PGDecoder.FREQ
 
+        logger.debug("Backtracking to filter acquisitions and events.")
         k = len(states)-1
         while k > 0:
-            #If the acquisition is not a mandatory one or is simply possible
-            if not absolutes[k] or acqs[k]:
+            #If the acquisition is not a mandatory one or was already discarded
+            if not absolutes[k] or acqs[k] or flags[k] == -1:
+                logger.debug(f"Not analyzing event at {nodes[k].tc_pts} due to filtering (f={absolutes[k]}, a={flags[k]}).")
                 k -= 1
                 continue
 
+            assert states[k] == PCS.CompositionState.ACQUISITION
             dts_start_nc = dts_start = nodes[k].dts()
-
             dropped_nc = dropped = 0
             j = j_nc = k - 1
             while j > 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts()):
@@ -741,7 +747,8 @@ class WOBSAnalyzer:
         displaysets.append(uds)
 
         #We wipe the screen for the very last epoch. add 4 frames so we don't have to care about decoding constraints
-        final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, 4)
+        w, h = self.bdn.format.value
+        final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, int(np.ceil((w*h*self.target_fps)/PGDecoder.RC)))
         final_ds = self._get_undisplay(get_pts(final_pts), pcs_id, wds_base, last_palette_id, pcs_fn)
         return Epoch(displaysets), final_ds
     ####
@@ -761,11 +768,11 @@ class WOBSAnalyzer:
         prev_dt = 6
         k_offset = 0
         for k, (dt, node) in enumerate(zip(durs, nodes)):
+            is_new = [False]*len(windows)
+            force_acq = False
             #NC palette updates don't need to know about the objects
             if not node.nc_refresh:
-                is_new = [False]*len(windows)
                 margin = prev_dt/self.bdn.fps
-                force_acq = False
                 for wid, wd in enumerate(windows):
                     is_new[wid] = False
                     if objs[wid] and not objs[wid].is_active(k-k_offset):
@@ -778,11 +785,10 @@ class WOBSAnalyzer:
                         else:
                             assert not pgobjs_proc[wid][0].is_active(k-k_offset)
 
-                nodes[k].objects = objs.copy()
-                nodes[k].new_mask = is_new
+                node.objects = objs.copy()
             else:
                 k_offset += 1
-                force_acq = False
+            node.new_mask = is_new
             ####!nc_refresh
 
             if k == 0:
@@ -790,9 +796,9 @@ class WOBSAnalyzer:
             else:
                 prev_dts = nodes[k-1].dts_end()
                 prev_pts = nodes[k-1].pts()
-            valid[k] = (nodes[k].dts() > prev_dts and nodes[k].pts() - prev_pts > write_duration)
+            valid[k] = (node.dts() > prev_dts and node.pts() - prev_pts > write_duration)
             absolutes[k] = force_acq
-            dtl[k] = (nodes[k].dts() - prev_dts)/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
+            dtl[k] = (node.dts() - prev_dts)/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
             prev_dt = dt
         return valid, absolutes, dtl, durs, nodes, flags
     ####
@@ -803,10 +809,6 @@ class WOBSAnalyzer:
         Additionally, the offset from the previous event is also returned. This value
         is zero unless there are no PG objects shown at some point in the epoch.
         """
-        scale_pts = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
-        dts_strat = self.kwargs.get('ts_long', False)
-        DSNode.configure(scale_pts, self.bdn.fps, dts_strat)
-
         top = TC.tc2f(self.events[0].tc_in, self.bdn.fps)
         delays = []
         nodes = []
@@ -850,7 +852,7 @@ class WOBSAnalyzer:
 #%%
 
 class WOBAnalyzer:
-    def __init__(self, wob, ssim_threshold: float = 0.95, overlap_threshold: float = 0.995) -> None:
+    def __init__(self, wob, ssim_threshold: float = 0.986, overlap_threshold: float = 0.995) -> None:
         self.wob = wob
         assert ssim_threshold < 1.0, "Not a valid SSIM threshold"
         self.ssim_threshold = ssim_threshold

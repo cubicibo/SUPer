@@ -103,7 +103,7 @@ class BDNRender:
 
             #Epoch generation (each subgroup will be its own epoch)
             for subgroup in reversed(subgroups):
-                logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}:")
+                logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)} event(s):")
 
                 wob, box = GroupingEngine(n_groups=2, **kwargs).group(subgroup)
                 logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
