@@ -237,6 +237,9 @@ class WOBSAnalyzer:
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
         acqs, absolutes, margins, durs, nodes, flags = self.find_acqs(pgobjs_proc, windows)
+        allow_normal_case = self.kwargs.get('normal_case_ok', False)
+        allow_overlaps = self.kwargs.get('allow_overlaps', False)
+
         states = [PCS.CompositionState.NORMAL] * len(acqs)
         states[0] = PCS.CompositionState.EPOCH_START
         drought = 0
@@ -245,12 +248,12 @@ class WOBSAnalyzer:
         dthresh = self.kwargs.get('dquality_factor', 0.035)
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
-        for k, (acq, forced, margin) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:]), 1):
-            if thresh < 0:
+        for k, (acq, forced, margin, node) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:], nodes[1:]), 1):
+            if thresh < 0 and not node.nc_refresh:
                 states[k] = PCS.CompositionState.ACQUISITION
                 absolutes[k] = True
                 continue
-            if (forced or (acq and margin > max(thresh-dthresh*drought, 0))):
+            if (forced or (acq and margin > max(thresh-dthresh*drought, 0))) and not node.nc_refresh:
                 states[k] = PCS.CompositionState.ACQUISITION
                 drought = 0
             else:
@@ -259,160 +262,122 @@ class WOBSAnalyzer:
             if states[k] == PCS.CompositionState.NORMAL:
                 nodes[k].nc_refresh = True
 
-        allow_overlaps = not self.kwargs.get('no_overlap', False)
-
-        #At this point, we have the stream acquisition shaped nicely
-        # except that some of them may be impossible. We apply a final filtering
-        # step to either discard the impossible events or shift some PG operations
+        #At this point, we have the stream acquisitions. Some may be impossible,
+        # so we have to filter out some less relevant events.
         pts_delta = nodes[0].write_duration()/PGDecoder.FREQ
+
         k = len(states)-1
-        while k > 0 and dts_strategy[0]:
-            if not (absolutes[k] and not acqs[k] and flags[k] == 0):
+        while k > 0:
+            #If the acquisition is not a mandatory one or is simply possible
+            if not absolutes[k] or acqs[k]:
                 k -= 1
                 continue
 
-            #Drop impossible screen wipe
-            if durs[k][1] > 0:
-                assert nodes[k].parent is not None
-                logger.warning(f"Discarded screen wipe before {self.events[k].tc_in} to perform a mandatory acquisition.")
-                durs[k] = (durs[k][0], 0)
-
-            mask = nodes[k].new_mask.copy()
             dts_start_nc = dts_start = nodes[k].dts()
+
             dropped_nc = dropped = 0
-            j_nc = j = k - 1
+            j = j_nc = k - 1
             while j > 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts()):
-                if absolutes[j] is True:
-                    assert len(nodes[j].new_mask) == len(mask)
-                    for km, mask_v in enumerate(nodes[j].new_mask):
-                        mask[km] |= mask_v
+                if absolutes[j]:
                     dropped += 1
                 j -= 1
 
             #Normal case is only possible if we discard past acquisitions that redefined the same object
-            normal_case_possible = sum(nodes[k].new_mask) == sum(mask) == 1 and sum(map(lambda x: x is not None, nodes[k].objects)) == 2
+            normal_case_possible = sum(nodes[k].new_mask) == 1 and sum(map(lambda x: x is not None, nodes[k].objects)) == 2
             normal_case_possible &= allow_normal_case
             if normal_case_possible:
+                mask = nodes[k].new_mask.copy()
                 nodes[k].partial = True
                 dts_start_nc = nodes[k].dts()
-                while j_nc > 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts()):#nodes[j_nc].dts_end() >= dts_start:
-                    if absolutes[j_nc] is True: #and nodes[j_nc].dts_end() >= dts_start_nc:
+
+                while j_nc > 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts()):
+                    if absolutes[j_nc]:
+                        for km, mask_v in enumerate(nodes[j_nc].new_mask):
+                            mask[km] |= mask_v
                         dropped_nc += 1
                     j_nc -= 1
+                # Normal case
+                normal_case_possible &= sum(mask) == 1
                 nodes[k].partial = False
 
-            #Normal case is impossible if we hit epoch start, and dts or pts still not valid
+            #Normal case is not possible (collision with epoch start)
             nc_not_ok = normal_case_possible and j_nc == 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts())
-            # we can't delete or move epoch start -> delete self if we can't shift it forward
+            #
             if nc_not_ok or (not normal_case_possible and j == 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts())):
                 #If this event is long enough, we shift it forward in time.
-                wipe_area = nodes[0].wipe_duration()
+                wipe_area = nodes[j].wipe_duration()
                 worst_dur = (np.ceil(wipe_area*2) + 3)
-                if durs[k][0]*1/self.bdn.fps > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
+
+                #K-node are always a mandatory acquisition
+                if durs[k]/self.bdn.fps > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
                     nodes[k].tc_shift = int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps))
-                    logger.warning(f"Shifted event at {self.events[k].tc_in} by +{nodes[k].tc_shift} frames to account for epoch start and compliancy.")
+                    logger.warning(f"Shifted event at {nodes[k].tc_pts} by +{nodes[k].tc_shift} frames to account for epoch start and compliancy.")
                     #wipe all events in between epoch start and this point
                     for ze in range(j+1, k):
-                        if durs[ze][1] > 0:
-                            durs[ze] = (durs[ze][0], 0)
-                            assert nodes[ze].parent is not None
-                        logger.warning(f"Discarded event at {self.events[ze].tc_in} to perform a mendatory acquisition right after epoch start.")
+                        logger.warning(f"Discarded event at {nodes[k].tc_pts} to perform a mendatory acquisition right after epoch start.")
                         flags[ze] = -1
                 else:
                     # event is short, we can't shift it so we just discard it.
-                    logger.warning(f"Discarded event at {self.events[k].tc_in} colliding with epoch start.")
+                    logger.warning(f"Discarded event at {nodes[k].tc_pts} colliding with epoch start.")
                     flags[k] = -1
-                ze = k
-                #We may have discarded an acquisition followed by NCs, we must find the new acquisition point.
-                while (ze := ze+1) < len(states) and states[ze] != PCS.CompositionState.ACQUISITION:
-                    nodes[ze].nc_refresh = False
-                    if flags[ze] != -1 and (nodes[ze].dts() > dts_start and nodes[ze].pts() + pts_delta >= nodes[0].pts()):
-                        logger.info(f"Epoch start collision: promoted normal case to acquisition at {self.events[ze].tc_in}.")
-                        states[ze] = PCS.CompositionState.ACQUISITION
-                        for zek in range(k+1, ze):
-                            if nodes[zek].parent is not None and (nodes[zek].parent.dts_end() >= nodes[ze].dts() or nodes[zek].parent.pts() + pts_delta >= nodes[k].pts()):
-                                durs[zek] = (durs[zek][0], 0) # Drop screen wipe (we can't do it!)
-                                logger.warning(f"Dropped screen wipe before {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
-                            if nodes[zek].dts_end() >= nodes[ze].dts() or nodes[zek].pts() + pts_delta >= nodes[k].pts():
-                                flags[zek] = -1
-                                logger.warning(f"Dropped event at {self.events[zek].tc_in} as it hinders the promoted acquisition point.")
-                        break
-                k -= 1
-                continue
 
-            # Analyze normal case only if it is worthwile, with DSj dropped otherwise
-            if dts_start_nc > dts_start and normal_case_possible and j_nc > j:
-                num_pal_nc = 0
-                objs = list(map(lambda x: x is not None, nodes[j_nc].objects))
-                for l in range(j_nc+1, k):
-                    if nodes[l].parent is not None:
-                        if num_pal_nc < 7 and allow_overlaps:
-                            if nodes[l].parent.dts() >= dts_start_nc:
-                                nodes[l].parent.set_dts(dts_start_nc - 1/PGDecoder.FREQ)
-                            num_pal_nc += 1
-                        else:
-                            logger.warning(f"Discarded screen wipe before {self.events[l].tc_in} to perform a mendatory acquisition.")
-                            durs[l] = (durs[l][0], 0) # Drop screen wipe (we can't do it!)
-                    for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
-                        objs[ko] &= (obj is not None) & (not mask)
-                    # We ran out of palette or the objects are too different -> drop
-                    if sum(objs) == 0 or num_pal_nc >= 7 or not allow_overlaps:
-                        logger.warning(f"Discarded event at {self.events[l].tc_in} to perform a mendatory acquisition.")
-                        flags[l] = -1
-                    else:
-                        num_pal_nc += 1
-                        nodes[l].objects = []
-                        if nodes[l].dts() >= dts_start_nc:
-                            nodes[l].set_dts(dts_start_nc - 1/PGDecoder.FREQ)
-                    states[l] = PCS.CompositionState.NORMAL
-                states[k] = PCS.CompositionState.NORMAL
-                nodes[k].partial = True
-                flags[k] = 1
-                logger.info(f"Object refreshed with a NORMAL CASE at {self.events[k].tc_in} (tight timing).")
+                    ze = k
+                    #We may have discarded an acquisition followed by NCs, we must find the new acquisition point.
+                    while (ze := ze+1) < len(states) and states[ze] != PCS.CompositionState.ACQUISITION:
+                        #Screen wipes do not define any composition
+                        if nodes[ze].objects == [] and nodes[ze].nc_refresh:
+                            continue
+                        nodes[ze].nc_refresh = False
+                        if flags[ze] != -1 and (nodes[ze].dts() > dts_start and nodes[ze].pts() - pts_delta > nodes[0].pts()):
+                            logger.info(f"Epoch start collision: promoted normal case to acquisition at {nodes[ze].tc_pts}.")
+                            states[ze] = PCS.CompositionState.ACQUISITION
+                            for zek in range(k+1, ze):
+                                if nodes[zek].dts_end() >= nodes[ze].dts() or nodes[zek].pts() + pts_delta >= nodes[ze].pts():
+                                    flags[zek] = -1
+                                    logger.warning(f"Dropped event at {nodes[zek].tc_pts} as it hinders the promoted acquisition point.")
+                            break
+                    ###while ze
+                ###event shift
             else:
+                #Filter the events
+                is_normal_case = dts_start_nc > dts_start and normal_case_possible and j_nc > j
+                j_iter = j_nc if is_normal_case else j
+                dts_iter = dts_start_nc if is_normal_case else dts_start
+
                 num_pal = 0
-                objs = list(map(lambda x: x is not None, nodes[j].objects))
-                for l in range(j+1, k):
-                    if nodes[l].parent is not None:
-                        if num_pal < 7 and allow_overlaps:
-                            if nodes[l].parent.dts() >= dts_start:
-                                nodes[l].parent.set_dts(dts_start - 1/PGDecoder.FREQ)
-                            num_pal += 1
-                        else:
-                            logger.warning(f"Discarded screen wipe before {self.events[l].tc_in} to perform a mendatory acquisition.")
-                            durs[l] = (durs[l][0], 0) #Drop screen wipe (we can't do it!)
-                    for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
-                        objs[ko] &= (obj is not None) & (not mask)
+                objs = list(map(lambda x: x is not None, nodes[j_iter].objects))
+                for l in range(j_iter+1, k):
+                    if allow_overlaps:
+                        for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
+                            objs[ko] &= (obj is not None) & (not mask)
                     # We ran out of palette or the objects are too different -> drop
-                    if sum(objs) == 0 or num_pal >= 7 or not allow_overlaps:
-                        logger.warning(f"Discarded event at {self.events[l].tc_in} to perform a mendatory acquisition.")
+                    if not allow_overlaps or sum(objs) == 0 or num_pal >= 7:
+                        logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
                         flags[l] = -1
                     else:
                         num_pal += 1
-                        nodes[l].objects = []
-                        if nodes[l].dts() >= dts_start:
-                            nodes[l].set_dts(dts_start - 1/PGDecoder.FREQ)
-                        states[l] = PCS.CompositionState.NORMAL
-                states[k] = PCS.CompositionState.ACQUISITION
+                        nodes[l].nc_refresh = True
+                        if nodes[l].dts() >= dts_iter:
+                            nodes[l].set_dts(dts_iter - 1/PGDecoder.FREQ)
+                    states[l] = PCS.CompositionState.NORMAL
+
+                states[k] = PCS.CompositionState.NORMAL if is_normal_case else PCS.CompositionState.ACQUISITION
+                nodes[k].partial = is_normal_case
+                flags[k] = int(is_normal_case)
+                if is_normal_case:
+                    logger.info(f"Object refreshed with a NORMAL CASE at {nodes[k].tc_pts} (tight timing).")
             k -= 1
-        ####
+        ####while k > 0
 
         #Allocate palettes as a test, this is essentially doing a final sanity check
         #on the selected display sets. The palette values generated here are not used.
         for k, (node, state, flag) in enumerate(zip(nodes, states, flags)):
             if flag == 0 and state == PCS.CompositionState.NORMAL:
-                node.objects = []
+                assert nodes[k].nc_refresh
                 assert allow_overlaps or not node.is_custom_dts()
-            if node.parent and durs[k][1] > 0:
-                assert allow_overlaps or not node.parent.is_custom_dts()
-                node.parent.palette_id = pm.get_palette(node.parent.dts())
-                if not pm.lock_palette(node.parent.palette_id, node.parent.pts(), node.parent.dts()):
-                    logger.error(f"Cannot acquire palette (rendering error) at {node.parent.pts():.05f}, discarding.")
-                    assert durs[k][1] > 0
-                    durs[k] = (durs[k][0], 0)
-                else:
-                    node.parent.pal_vn = pm.get_palette_version(node.parent.palette_id)
-                logger.debug(f"{state} {flag} - {node.parent.partial} DTS={node.parent.dts():.05f} PTS={node.parent.pts():.05f} {node.parent.palette_id} {node.parent.pal_vn}")
+            elif flag == 1:
+                assert state == PCS.CompositionState.NORMAL
+                assert nodes[k].objects != [] and sum(nodes[k].new_mask) == 1
             #Deleted event are skipped
             if flag == -1:
                 continue
@@ -422,9 +387,11 @@ class WOBSAnalyzer:
                 flags[k] = -1
             else:
                 node.pal_vn = pm.get_palette_version(node.palette_id)
-
             logger.debug(f"{state:02X} {flag} - {node.partial} DTS={node.dts():.05f}->{node.dts_end():.05f} PTS={node.pts():.05f} {node.palette_id} {node.pal_vn}")
-        return self._convert(states, pgobjs, windows, durs, flags, nodes)
+        ####
+        r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
+        return self._convert(r_states, pgobjs, windows, r_durs, r_flags, r_nodes)
+    ####
 
     @staticmethod
     def _get_stack_direction(*box) -> tuple[npt.NDArray[np.uint16], tuple[int, int]]:
@@ -612,7 +579,6 @@ class WOBSAnalyzer:
             pal_id = pal_manager.get_palette(node.dts())
             assert pal_manager.lock_palette(pal_id, node.pts(), node.dts())
             return pal_id, pal_manager.get_palette_version(pal_id)
-
         ####
 
         i = 0
@@ -627,7 +593,7 @@ class WOBSAnalyzer:
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
-        final_node = DSNode([None, None], windows, TC.tc2s(self.events[-1].tc_out, self.bdn.fps), None, scale_pts=time_scale, nc_refresh=True)
+        final_node = DSNode([], windows, self.events[-1].tc_out, nc_refresh=True)
 
         try:
             use_pbar = False
@@ -639,17 +605,6 @@ class WOBSAnalyzer:
 
         pbar = tqdm(range(n_actions))
         while i < n_actions:
-            if flags[i] == -1:
-                i+=1
-                continue
-            assert states[i] != PCS.CompositionState.NORMAL
-            normal_case_refresh = False
-            for k in range(i+1, n_actions+1):
-                if k < n_actions:
-                    normal_case_refresh |= (flags[k] == 1)
-                if k == n_actions or states[k] != PCS.CompositionState.NORMAL:
-                    break
-            assert k > i
 
             if durs[i][1] != 0:
                 assert i > 0
@@ -660,11 +615,25 @@ class WOBSAnalyzer:
                 uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255, wds_base)
                 displaysets.append(uds)
 
+            if flags[i] == -1:
+                i+=1
+                continue
+
+            assert states[i] != PCS.CompositionState.NORMAL
+            normal_case_refresh = False
+            for k in range(i+1, n_actions+1):
+                if k < n_actions:
+                    normal_case_refresh |= (flags[k] == 1)
+                if k == n_actions or states[k] != PCS.CompositionState.NORMAL:
+                    break
+            assert k > i
+
             if nodes[i].tc_shift == 0:
+                assert nodes[i].tc_pts == self.events[i].tc_in
                 c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
             else:
-                c_pts = get_pts(TC.add_frames(self.events[i].tc_in, self.bdn.fps, nodes[i].tc_shift))
-            nodes[i].tc_pts = c_pts
+                nodes[i].tc_pts = TC.add_framestc(self.events[i].tc_in, self.bdn.fps, nodes[i].tc_shift)
+                c_pts = get_pts(nodes[i].tc_pts, self.bdn.fps)
 
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
@@ -775,6 +744,7 @@ class WOBSAnalyzer:
         final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, 4)
         final_ds = self._get_undisplay(get_pts(final_pts), pcs_id, wds_base, last_palette_id, pcs_fn)
         return Epoch(displaysets), final_ds
+    ####
 
     def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows: list[Box]):
         #get the frame count between each screen update and find where we can do acqs
@@ -786,35 +756,37 @@ class WOBSAnalyzer:
         flags = [0] * len(durs)
 
         objs = [None for objs in pgobjs_proc]
-
         write_duration = nodes[0].write_duration()/PGDecoder.FREQ
 
         prev_dt = 6
-        for k, (dt, delay) in enumerate(durs):
-            is_new = [False]*len(windows)
-            margin = (delay + prev_dt)/self.bdn.fps
-            force_acq = False
-            for wid, wd in enumerate(windows):
-                is_new[wid] = False
-                if objs[wid] and not objs[wid].is_active(k):
-                    objs[wid] = None
-                if len(pgobjs_proc[wid]):
-                    if not objs[wid] and pgobjs_proc[wid][0].is_active(k):
-                        objs[wid] = pgobjs_proc[wid].pop(0)
-                        force_acq = True
-                        is_new[wid] = True
-                    else:
-                        assert not pgobjs_proc[wid][0].is_active(k)
+        k_offset = 0
+        for k, (dt, node) in enumerate(zip(durs, nodes)):
+            #NC palette updates don't need to know about the objects
+            if not node.nc_refresh:
+                is_new = [False]*len(windows)
+                margin = prev_dt/self.bdn.fps
+                force_acq = False
+                for wid, wd in enumerate(windows):
+                    is_new[wid] = False
+                    if objs[wid] and not objs[wid].is_active(k-k_offset):
+                        objs[wid] = None
+                    if len(pgobjs_proc[wid]):
+                        if not objs[wid] and pgobjs_proc[wid][0].is_active(k-k_offset):
+                            objs[wid] = pgobjs_proc[wid].pop(0)
+                            force_acq = True
+                            is_new[wid] = True
+                        else:
+                            assert not pgobjs_proc[wid][0].is_active(k-k_offset)
 
-            nodes[k].objects = objs.copy()
-            nodes[k].new_mask = is_new
+                nodes[k].objects = objs.copy()
+                nodes[k].new_mask = is_new
+            else:
+                k_offset += 1
+                force_acq = False
+            ####!nc_refresh
 
             if k == 0:
-                prev_dts = -np.inf
-                prev_pts = - np.inf
-            elif nodes[k].parent:
-                prev_dts = nodes[k].parent.dts_end()
-                prev_pts = nodes[k].parent.pts()
+                prev_pts = prev_dts = -np.inf
             else:
                 prev_dts = nodes[k-1].dts_end()
                 prev_pts = nodes[k-1].pts()
@@ -832,19 +804,48 @@ class WOBSAnalyzer:
         is zero unless there are no PG objects shown at some point in the epoch.
         """
         scale_pts = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
+        dts_strat = self.kwargs.get('ts_long', False)
+        DSNode.configure(scale_pts, self.bdn.fps, dts_strat)
+
         top = TC.tc2f(self.events[0].tc_in, self.bdn.fps)
         delays = []
         nodes = []
         for ne, event in enumerate(self.events):
             tic = TC.tc2f(event.tc_in, self.bdn.fps)
             toc = TC.tc2f(event.tc_out,self.bdn.fps)
-            delays.append((toc-tic, tic-top))
-            parent = None
-            if tic-top > 0:
-                parent = DSNode([], windows, TC.tc2s(self.events[ne-1].tc_out, self.bdn.fps), scale_pts=scale_pts, nc_refresh=True)
-            nodes.append(DSNode([], windows, TC.tc2s(event.tc_in, self.bdn.fps), parent=parent, scale_pts=scale_pts))
+            clear_duration = tic-top
+            delays += [toc-tic]
+            if clear_duration > 0:
+                delays += [clear_duration]
+                nodes.append(DSNode([], windows, self.events[ne-1].tc_out, nc_refresh=True))
+            nodes.append(DSNode([], windows, event.tc_in))
             top = toc
         return delays, nodes
+    ####
+
+    def roll_nodes(self, nodes, durs, flags, states) -> ...:
+        k = 0
+        r_nodes = []
+        r_durs = []
+        r_states = []
+        r_flags = []
+        for ne, event in enumerate(self.events):
+            parent = nodes[k] if nodes[k].objects == [] else None
+            valid_parent = parent is not None and flags[k] == 0
+            k += parent is not None
+            nodes[k].parent = parent
+
+            assert parent is None or self.events[ne-1].tc_out == nodes[k].parent.tc_pts
+            assert nodes[k].tc_pts == event.tc_in
+
+            r_durs.append((durs[k], 0 if not valid_parent else durs[k-1]))
+            r_nodes.append(nodes[k])
+            r_flags.append(flags[k])
+            r_states.append(states[k])
+            k += 1
+        assert k == len(nodes)
+        return r_states, r_durs, r_nodes, r_flags
+    ####
 ####
 #%%
 
@@ -980,26 +981,35 @@ class WOBAnalyzer:
         return # StopIteration
 ####
 class DSNode:
+    scale_pts = 1.0
+    bdn_fps = None
+    conservative_dts = False
+
     def __init__(self,
             objects: list[Optional[PGObject]],
             windows: list[Box],
-            tc_pts: float,
-            parent: Optional['DSNode'] = None,
-            scale_pts: float = 1,
-            nc_refresh: bool = False
+            tc_pts: str,
+            nc_refresh: bool = False,
         ) -> None:
         self.objects = objects
         self.windows = windows
-        self.tc_pts = max(tc_pts - (1/3)/PGDecoder.FREQ, 0) * scale_pts
+        self.tc_pts = tc_pts
+        self.nc_refresh = nc_refresh
+
         self.new_mask = []
-        self.parent = parent
         self.partial = False
         self.tc_shift = 0
 
-        self._pal_id = None
+        self.parent = None
+        self.palette_id = None
         self.pal_vn = 0
         self._dts = None
-        self.nc_refresh = nc_refresh
+
+    @classmethod
+    def configure(cls, scale_pts: float, fps: BDVideo.FPS, conservative_dts: bool = False) -> None:
+        cls.scale_pts = scale_pts
+        cls.bdn_fps = fps
+        cls.conservative_dts = conservative_dts
 
     def wipe_duration(self) -> int:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
@@ -1010,14 +1020,6 @@ class DSNode:
     def set_dts(self, dts: Optional[float]) -> None:
         assert dts is None or dts <= self.dts()
         self._dts = round(dts*PGDecoder.FREQ) if dts is not None else None
-
-    @property
-    def palette_id(self) -> Optional[int]:
-        return self._pal_id
-
-    @palette_id.setter
-    def palette_id(self, palette_id: Optional[int]) -> None:
-        self._pal_id = palette_id
 
     def dts_end(self) -> float:
         if self._dts is not None:
@@ -1033,20 +1035,19 @@ class DSNode:
         return self.get_dts_markers()[1]/PGDecoder.FREQ
 
     def pts(self) -> float:
-        return self.tc_pts
+        return max(TC.tc2s(self.tc_pts, self.__class__.bdn_fps) - (1/3)/PGDecoder.FREQ, 0) * self.__class__.scale_pts
 
     def is_custom_dts(self) -> bool:
         return not (self._dts is None)
 
     def get_dts_markers(self) -> float:
-        global dts_strategy
         t_decoding = 0
 
         if not self.nc_refresh:
             assigned_wd = list(map(lambda x: x[0] is not None and (not self.partial or self.partial and x[1]), zip_longest(self.objects, self.new_mask)))
             decode_duration = sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*PGDecoder.FREQ/PGDecoder.RC) for wid, flag in enumerate(assigned_wd) if not flag])
 
-            if dts_strategy[1]:
+            if self.__class__.conservative_dts:
                 decode_duration = self.wipe_duration()
 
             for wid, obj in enumerate(self.objects):
@@ -1060,7 +1061,8 @@ class DSNode:
                 decode_duration = max(decode_duration, t_decoding) + np.ceil(read/PGDecoder.RC)
         else:
             decode_duration = self.write_duration() + 1
-        return (round(self.tc_pts*PGDecoder.FREQ) - decode_duration, t_decoding)
+        return (round(self.pts()*PGDecoder.FREQ) - decode_duration, t_decoding)
+    ####
 
 #%%
 def get_wipe_duration(wds: WDS) -> int:

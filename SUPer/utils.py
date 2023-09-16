@@ -380,9 +380,14 @@ class TimeConv:
         return str(Timecode(round(fps, 2), frames=f+1, force_non_drop_frame=cls.FORCE_NDF))
 
     @classmethod
+    def add_framestc(cls, tc: str, fps: float, nf: int) -> str:
+        fps = round(fps, 2)
+        return str(Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF) + nf)
+
+    @classmethod
     def add_frames(cls, tc: str, fps: float, nf: int) -> float:
         fps = round(fps, 2)
-        return cls.tc2s(str(Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF) + nf), fps)
+        return cls.tc2s(cls.add_framestc(tc, fps, nf), fps)
 
 def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """
