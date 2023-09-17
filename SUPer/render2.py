@@ -253,7 +253,7 @@ class WOBSAnalyzer:
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
         for k, (acq, forced, margin, node) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:], nodes[1:]), 1):
-            if thresh < 0 and not node.nc_refresh:
+            if thresh == 0 and not node.nc_refresh:
                 states[k] = PCS.CompositionState.ACQUISITION
                 absolutes[k] = True
                 continue
@@ -476,7 +476,8 @@ class WOBSAnalyzer:
                 if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
                     optional_skip = True
                     if normal_case_refresh:
-                        optional_skip = pgo is None
+                        #An object may exist but be masked for the whole acquisition, ignore it.
+                        optional_skip = pgo is None or (isinstance(normal_case_refresh, bool) and not np.any(pgo.mask[i-pgo.f:k-pgo.f]))
                         if optional_skip:
                             assert isinstance(normal_case_refresh, bool)
                             pals.append([Palette()] * (k-i))
