@@ -91,10 +91,10 @@ if __name__ == '__main__':
         logger.warning("Unknown BT ITU target, using bt709.")
         args.bt = 709
 
-    if (args.nodts or args.aheadoftime) and ext == 'pes':
+    if (args.nodts or args.aheadoftime) and (ext == 'pes' or args.withsup):
         exit_msg("PES output without DTS or with ahead-of-time decoding is not allowed, aborting.")
-    if ext == 'pes' and not args.palette:
-        logger.warning("PES output: generating with full palette flag.")
+    if (ext == 'pes' or args.withsup) and not args.palette:
+        logger.warning("PES output requested, adding --palette to command.")
         args.palette = True
 
     print("\n @@@@@@@   &@@@  @@@@   @@@@@@@\n"\
@@ -109,7 +109,7 @@ if __name__ == '__main__':
           "                  @@@BP€    @@@\n"\
           "                  @@@       @@@\n"\
           "                   @@YY@@   @@@\n")
-    
+
     if args.qmode == 3:
         config_file = Path('config.ini')
         exepath = None

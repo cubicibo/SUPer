@@ -1131,8 +1131,7 @@ class DSNode:
             decode_duration = max(decode_duration, t_decoding) + copy_dur
 
         #Prevent PTS(WDS) = PTS(PCS)
-        if decode_duration == sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values())):
-            decode_duration += 1
+        decode_duration = max(decode_duration, sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values())) + 1)
 
         mask = ((1 << 32) - 1)
         dts = int(ds.pcs.tpts - decode_duration) & mask

@@ -32,7 +32,7 @@ from idlelib.tooltip import Hovertip
 
 from SUPer import BDNRender, get_super_logger
 from SUPer.optim import Quantizer
-from SUPer.__metadata__ import __version__ as SUPVERS
+from SUPer.__metadata__ import __version__ as SUPVERS, __author__
 
 ### CONSTS
 SUPER_STRING = "Make it SUPer!"
@@ -42,16 +42,16 @@ def get_kwargs() -> dict[str, int]:
     return {
         'quality_factor': int(compression_txt.value)/100,
         'refresh_rate': int(refresh_txt.value)/100,
-        'scale_fps': scale_fps.value,
+        'scale_fps': bool(scale_fps.value),
         'quantize_lib': Quantizer.get_option_id(quantcombo.value),
         'bt_colorspace': colorspace.value,
-        'enforce_dts': set_dts.value,
+        'enforce_dts': bool(set_dts.value),
         'no_overlap': True, #scenarist_checks.value,
-        'full_palette': scenarist_fullpal.value,
-        'output_all_formats': all_formats.value,
-        'normal_case_ok': normal_case_ok.value,
+        'full_palette': bool(scenarist_fullpal.value),
+        'output_all_formats': bool(all_formats.value),
+        'normal_case_ok': bool(normal_case_ok.value),
         'libs_path': lib_paths,
-        'ts_long': soft_dts.value
+        'ts_long': bool(soft_dts.value),
     }
 
 def wrapper_mp() -> None:
@@ -117,7 +117,8 @@ def hide_chkbox() -> None:
         set_dts.enabled = scenarist_fullpal.enabled = False
         #scenarist_checks.enabled = False
     elif not supout.value.lower().endswith('pes'):
-        set_dts.enabled = scenarist_fullpal.enabled = True
+        set_dts.enabled = True
+        scenarist_fullpal.enabled = True
         #scenarist_checks.enabled = True
 
 def get_bdnxml() -> None:
@@ -210,7 +211,7 @@ if __name__ == '__main__':
     mp.freeze_support()
 
     logger = get_super_logger('SUPui')
-    logger.info(f"SUPer v{SUPVERS}")
+    logger.info(f"SUPer v{SUPVERS}, (c) {__author__}")
 
     lib_paths = init_extra_libs()
     opts_quant = Quantizer.get_options()
@@ -266,7 +267,7 @@ if __name__ == '__main__':
                                 "to update the given object in a tighter time window than in an acquisition (both objects refreshed).")
 
     set_dts = CheckBox(app, text="Enforce strict compliancy (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    set_dts.value = 1
+    set_dts.value = True
     Hovertip(set_dts.tk, "PG streams include a decoding timestamp. This timestamp is required by old decoders\n"\
                          "else the on-screen behaviour is erratic. This is forcefully ticked for PES+MUI output.\n"\
                          "It must be ticked to ensure compatibility and strict compliancy to Blu-ray specifications.")
