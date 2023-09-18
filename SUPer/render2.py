@@ -39,7 +39,6 @@ from .pgraphics import PGraphics, PGDecoder, PGObject, PGObjectBuffer, PaletteMa
 from .palette import Palette, PaletteEntry
 
 logger = get_super_logger('SUPer')
-dts_strategy = (True, False)
 
 #%%
 class GroupingEngine:
@@ -213,10 +212,10 @@ class WOBSAnalyzer:
         allow_normal_case = self.kwargs.get('normal_case_ok', False)
         scale_pts = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
         dts_strat = self.kwargs.get('ts_long', False)
-        DSNode.configure(scale_pts, self.bdn.fps, dts_strat)
+        enforce_dts = self.kwargs.get('enforce_dts', True)
 
-        global dts_strategy
-        dts_strategy = (self.kwargs.get('enforce_dts', True), self.kwargs.get('ts_long', False))
+        DSNode.configure(scale_pts, self.bdn.fps, dts_strat, enforce_dts)
+
         woba = []
         pm = PaletteManager()
 
@@ -550,7 +549,7 @@ class WOBSAnalyzer:
         pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, palette_id, [], c_pts)
         wds = wds_base.copy(pts=c_pts, in_ticks=False)
         uds = DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
-        apply_pts_dts(uds, set_pts_dts_sc(uds, self.buffer, wds))
+        DSNode.apply_pts_dts(uds, DSNode.set_pts_dts_sc(uds, self.buffer, wds))
         return uds
 
     def _get_undisplay_pds(self, c_pts: float, pcs_id: int, node: 'DSNode', cobjs: list[CObject],
@@ -559,7 +558,7 @@ class WOBSAnalyzer:
         tsp_e = PaletteEntry(16, 128, 128, 0)
         pds = PDS.from_scratch(Palette({k: tsp_e for k in range(n_colors)}), p_vn=node.pal_vn, p_id=node.palette_id, pts=c_pts)
         uds = DisplaySet([pcs, pds, ENDS.from_scratch(pts=c_pts)])
-        apply_pts_dts(uds, set_pts_dts_sc(uds, self.buffer, wds_base, node))
+        DSNode.apply_pts_dts(uds, DSNode.set_pts_dts_sc(uds, self.buffer, wds_base, node))
         return uds, pcs_id+1
 
     def _convert(self, states, pgobjs, windows, durs, flags, nodes):
@@ -661,7 +660,7 @@ class WOBSAnalyzer:
             pcs = pcs_fn(pcs_id, states[i], False, p_id, cobjs, c_pts)
 
             nds = DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)])
-            apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, wds, nodes[i]))
+            DSNode.apply_pts_dts(nds, DSNode.set_pts_dts_sc(nds, self.buffer, wds, nodes[i]))
             displaysets.append(nds)
 
             pcs_id += 1
@@ -724,7 +723,7 @@ class WOBSAnalyzer:
                     ods_upd = o_ods if flags[z] == 1 else []
 
                     nds = DisplaySet([pcs] + wds_upd + [pds] + ods_upd +[ENDS.from_scratch(pts=c_pts)])
-                    apply_pts_dts(nds, set_pts_dts_sc(nds, self.buffer, wds_base, nodes[z]))
+                    DSNode.apply_pts_dts(nds, DSNode.set_pts_dts_sc(nds, self.buffer, wds_base, nodes[z]))
                     displaysets.append(nds)
 
                     pcs_id += 1
@@ -982,6 +981,11 @@ class WOBAnalyzer:
             event_cnt += 1
         ####while
         return # StopIteration
+#%%
+def get_wipe_duration(wds: WDS) -> int:
+    return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.height*w.width/PGDecoder.RC, wds.windows)))
+
+#%%
 ####
 class DSNode:
     scale_pts = 1.0
@@ -1009,10 +1013,11 @@ class DSNode:
         self._dts = None
 
     @classmethod
-    def configure(cls, scale_pts: float, fps: BDVideo.FPS, conservative_dts: bool = False) -> None:
+    def configure(cls, scale_pts: float, fps: BDVideo.FPS, conservative_dts: bool = False, enforce_dts: bool = True) -> None:
         cls.scale_pts = scale_pts
         cls.bdn_fps = fps
         cls.conservative_dts = conservative_dts
+        cls.enforce_dts = enforce_dts
 
     def wipe_duration(self) -> int:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
@@ -1067,104 +1072,104 @@ class DSNode:
         return (round(self.pts()*PGDecoder.FREQ) - decode_duration, t_decoding)
     ####
 
-#%%
-def get_wipe_duration(wds: WDS) -> int:
-    return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.height*w.width/PGDecoder.RC, wds.windows)))
+    @classmethod
+    def set_pts_dts_sc(cls, ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optional['DSNode'] = None) -> list[tuple[int, int]]:
+        """
+        This function generates the timestamps (PTS and DTS) associated to a given DisplaySet.
 
-#%%
-def set_pts_dts_sc(ds: DisplaySet, buffer: PGObjectBuffer, wds: WDS, node: Optional['DSNode'] = None) -> list[tuple[int, int]]:
-    """
-    This function generates the timestamps (PTS and DTS) associated to a given DisplaySet.
+        :param ds: DisplaySet, PTS of PCS must be set to the right value.
+        :param buffer: Object buffer that supports allocation and returning a size of allocated slots.
+        :param wds: WDS of the epoch.
+        :return: Pairs of timestamps in ticks for each segment in the displayset.
+        """
+        ddurs = {}
+        for ods in ds.ods:
+            if ods.flags & ods.ODSFlags.SEQUENCE_FIRST:
+                assert ods.o_id not in ddurs, f"Object {ods.o_id} defined twice in DS."
+                if (shape := buffer.get(ods.o_id)) is not None:
+                    assert (ods.height, ods.width) == shape, "Dimension mismatch, buffer corruption."
+                else:
+                    # Allocate a buffer slot for this object
+                    assert buffer.allocate_id(ods.o_id, ods.height, ods.width) is True, "Slot already allocated or buffer overflow."
+                ddurs[ods.o_id] = np.ceil(ods.height*ods.width*PGDecoder.FREQ/PGDecoder.RD)
 
-    :param ds: DisplaySet, PTS of PCS must be set to the right value.
-    :param buffer: Object buffer that supports allocation and returning a size of allocated slots.
-    :param wds: WDS of the epoch.
-    :return: Pairs of timestamps in ticks for each segment in the displayset.
-    """
-    global dts_strategy
+        t_decoding = 0
+        decode_duration = 0
+        wipe_duration = get_wipe_duration(wds)
 
-    ddurs = {}
-    for ods in ds.ods:
-        if ods.flags & ods.ODSFlags.SEQUENCE_FIRST:
-            assert ods.o_id not in ddurs, f"Object {ods.o_id} defined twice in DS."
-            if (shape := buffer.get(ods.o_id)) is not None:
-                assert (ods.height, ods.width) == shape, "Dimension mismatch, buffer corruption."
-            else:
-                # Allocate a buffer slot for this object
-                assert buffer.allocate_id(ods.o_id, ods.height, ods.width) is True, "Slot already allocated or buffer overflow."
-            ddurs[ods.o_id] = np.ceil(ods.height*ods.width*PGDecoder.FREQ/PGDecoder.RD)
+        windows = {wd.window_id: (wd.height, wd.width) for wd in wds.windows}
 
-    t_decoding = 0
-    decode_duration = 0
-    wipe_duration = get_wipe_duration(wds)
+        if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
+            decode_duration = np.ceil(ds.pcs.width*ds.pcs.height*PGDecoder.FREQ/PGDecoder.RC)
+        else:
+            assigned_windows = list(map(lambda x: x.window_id, ds.pcs.cobjects))
+            unassigned_windows = [wd for wd in windows if wd not in assigned_windows]
+            decode_duration = sum([np.ceil(windows[wid][0]*windows[wid][1]*PGDecoder.FREQ/PGDecoder.RC) for wid in unassigned_windows])
 
-    windows = {wd.window_id: (wd.height, wd.width) for wd in wds.windows}
+            if cls.conservative_dts:
+                decode_duration = wipe_duration
 
-    if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
-        decode_duration = np.ceil(ds.pcs.width*ds.pcs.height*PGDecoder.FREQ/PGDecoder.RC)
-    else:
-        assigned_windows = list(map(lambda x: x.window_id, ds.pcs.cobjects))
-        unassigned_windows = [wd for wd in windows if wd not in assigned_windows]
-        decode_duration = sum([np.ceil(windows[wid][0]*windows[wid][1]*PGDecoder.FREQ/PGDecoder.RC) for wid in unassigned_windows])
+        object_decode_duration = ddurs.copy()
 
-        if ds.ods and dts_strategy[1]:
-            decode_duration = wipe_duration
+        #For every composition object, compute the transfer time
+        for k, cobj in enumerate(ds.pcs.cobjects):
+            shape = buffer.get(cobj.o_id)
+            assert shape is not None, "Object does not exist in buffer."
+            w, h = windows[cobj.window_id][0], windows[cobj.window_id][1]
 
-    object_decode_duration = ddurs.copy()
+            t_dec_obj = object_decode_duration.pop(cobj.o_id, 0)
+            t_decoding += t_dec_obj
 
-    #For every composition object, compute the transfer time
-    for k, cobj in enumerate(ds.pcs.cobjects):
-        shape = buffer.get(cobj.o_id)
-        assert shape is not None, "Object does not exist in buffer."
-        w, h = windows[cobj.window_id][0], windows[cobj.window_id][1]
+            # Same window -> patent claims a window is written only once after the two cobj are processed.
+            if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
+                single_window = True
+                continue
+            #This bypass is not correct if two compositions are in the same window
+            if cls.conservative_dts and t_dec_obj == 0:
+                continue
+            copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
+            decode_duration = max(decode_duration, t_decoding) + copy_dur
 
-        t_dec_obj = object_decode_duration.pop(cobj.o_id, 0)
-        t_decoding += t_dec_obj
+        #Prevent PTS(WDS) = PTS(PCS)
+        if decode_duration == sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values())):
+            decode_duration += 1
 
-        # Same window -> patent claims a window is written only once after the two cobj are processed.
-        if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
-            continue
-        if dts_strategy[1] and t_dec_obj == 0:
-            continue
-        copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
-        decode_duration = max(decode_duration, t_decoding) + copy_dur
+        mask = ((1 << 32) - 1)
+        dts = int(ds.pcs.tpts - decode_duration) & mask
+        if node is not None and node.is_custom_dts():
+            new_dts = round(node.dts()*PGDecoder.FREQ)
+            assert new_dts <= dts
+            dts = new_dts
 
-    #Prevent PTS(WDS) = PTS(PCS)
-    if decode_duration == sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values())):
-        decode_duration += 1
+        #PCS always exist
+        ts_pairs = [(ds.pcs.tpts, dts)]
 
-    mask = ((1 << 32) - 1)
-    dts = int(ds.pcs.tpts - decode_duration) & mask
-    if node is not None and node.is_custom_dts():
-        new_dts = round(node.dts()*PGDecoder.FREQ)
-        assert new_dts <= dts
-        dts = new_dts
+        if ds.wds:
+            ts_pairs.append((int(ds.pcs.tpts - wipe_duration) & mask, dts))
+        for pds in ds.pds:
+            ts_pairs.append((dts, dts))
 
-    #PCS always exist
-    ts_pairs = [(ds.pcs.tpts, dts)]
-
-    if ds.wds:
-        ts_pairs.append((int(ds.pcs.tpts - wipe_duration) & mask, dts))
-    for pds in ds.pds:
+        for ods in ds.ods:
+            ods_pts = int(dts + ddurs.get(ods.o_id)) & mask
+            ts_pairs.append((ods_pts, dts))
+            if ods.flags & ods.ODSFlags.SEQUENCE_LAST:
+                dts = ods_pts
         ts_pairs.append((dts, dts))
+        return ts_pairs
+    ####
 
-    for ods in ds.ods:
-        ods_pts = int(dts + ddurs.get(ods.o_id)) & mask
-        ts_pairs.append((ods_pts, dts))
-        if ods.flags & ods.ODSFlags.SEQUENCE_LAST:
-            dts = ods_pts
-    ts_pairs.append((dts, dts))
-    return ts_pairs
+    @classmethod
+    def apply_pts_dts(cls, ds: DisplaySet, ts: tuple[int, int]) -> None:
+        nullify_dts = lambda x: x*(1 if cls.enforce_dts else 0)
+        select_pts = lambda x: x if cls.enforce_dts else ts[0][0]
 
-def apply_pts_dts(ds: DisplaySet, ts: tuple[int, int]) -> None:
-    global dts_strategy
-    nullify_dts = lambda x: x*(1 if dts_strategy[0] else 0)
-    select_pts = lambda x: x if dts_strategy[0] else ts[0][0]
+        assert len(ds) == len(ts), "Timestamps-DS size mismatch."
+        for seg, (pts, dts) in zip(ds, ts):
+            seg.tpts, seg.tdts = select_pts(pts), nullify_dts(dts)
+    ####
+####
 
-    assert len(ds) == len(ts), "Timestamps-DS size mismatch."
-    for seg, (pts, dts) in zip(ds, ts):
-        seg.tpts, seg.tdts = select_pts(pts), nullify_dts(dts)
-
+#%%
 def test_diplayset(ds: DisplaySet) -> bool:
     """
     This function performs hard check on the display set
@@ -1367,6 +1372,7 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False) -> bool
 
 def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     PTS_MASK = (1 << 32) - 1
+    PTS_DIFF_BOUND = PTS_MASK >> 1
     is_compliant = True
     prev_pts = prev_dts = -99999999
     min_dts_delta = 99999999
@@ -1377,7 +1383,9 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
         wipe_duration = int(np.ceil(epoch[0].pcs.width*epoch[0].pcs.height*PGDecoder.FREQ/PGDecoder.RC))
         is_compliant &= (epoch[0].pcs.tpts - epoch[0].pcs.tdts) & PTS_MASK > wipe_duration
         #Must not decode epoch start before previous epoch is fully finished (at PTS)
-        is_compliant &= (epoch[0].pcs.tdts - prev_pts) & PTS_MASK > 0
+        diff = (epoch[0].pcs.tdts - prev_pts) & PTS_MASK
+        is_compliant &= diff > 0 and diff < PTS_DIFF_BOUND
+
         for l, ds in enumerate(epoch):
             #Check for minimum DTS delta between DS, ideally this should be bigger than 0
             min_dts_delta = min((ds.pcs.tdts - prev_dts) & PTS_MASK, min_dts_delta)
@@ -1385,7 +1393,8 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
                 faults_pts.append(ds.pcs.pts)
             if ds.wds:
                 # WDS action requires pts_delta margin from previous DS
-                is_compliant &= (ds.pcs.tpts - prev_pts) & PTS_MASK > pts_delta
+                diff = (ds.pcs.tpts - prev_pts) & PTS_MASK
+                is_compliant &= diff > pts_delta and diff < PTS_DIFF_BOUND
                 is_compliant &= (ds.pcs.tpts - ds.wds.tpts) & PTS_MASK <= pts_delta
                 is_compliant &= (ds.wds.tpts - ds.wds.tdts) & PTS_MASK <= wipe_duration*2
             else:
@@ -1394,7 +1403,8 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
             for pds in ds.pds:
                 is_compliant &= pds.tpts == pds.tdts
             for seg in ds:
-                is_compliant &= (seg.tdts - prev_dts) & PTS_MASK >= 0
+                diff = (seg.tdts - prev_dts) & PTS_MASK
+                is_compliant &= diff >= 0 and diff < PTS_DIFF_BOUND
                 prev_dts = seg.tdts
             prev_pts = ds.pcs.tpts
         ####ds
