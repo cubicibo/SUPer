@@ -531,9 +531,24 @@ class WOBSAnalyzer:
                 ods_reg[oid] += 1
             if id_skipped is not None:
                 assert isinstance(normal_case_refresh, list)
-                #The existing object should be the first composition (so key has to eval to False for it to be first)
-                cobjs_cropped = sorted(cobjs_cropped, key=lambda cobj: cobj.o_id != id_skipped)
-                cobjs = sorted(cobjs, key=lambda cobj: cobj.o_id != id_skipped)
+                #This is the unknown part of the PGS format: what's supposed to happen
+                # if we update only one object of the twos displayed? Is the decoder
+                # smart enough to understand that if ODS[0].ID != COBJ[0].ID then we use
+                # the existing object in the buffer? If true then, it should be the first composition.
+
+                #f_is_first_cobj = lambda cobj: cobj.o_id != id_skipped
+
+                #Or else, we have to wait for the END segment for the decoder
+                # to understand that the drawing operation happens with the buffered
+                # object. Then the decoded object should be the first composition.
+
+                f_is_first_cobj = lambda cobj: cobj.o_id == id_skipped
+
+                # Since the second condition is more restrictive, we use that.
+
+                cobjs_cropped = sorted(cobjs_cropped, key=f_is_first_cobj)
+                cobjs = sorted(cobjs, key=f_is_first_cobj)
+
 
         #Set the 0x00 entry once. It should never change during the epoch anyway.
         pals[0][0][0] = PaletteEntry(16, 128, 128, 0)
@@ -1052,12 +1067,13 @@ class DSNode:
         t_decoding = 0
 
         if not self.nc_refresh:
-            assigned_wd = list(map(lambda x: x[0] is not None and (not self.partial or self.partial and x[1]), zip_longest(self.objects, self.new_mask)))
+            assigned_wd = list(map(lambda x: x is not None, self.objects))
             decode_duration = sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*PGDecoder.FREQ/PGDecoder.RC) for wid, flag in enumerate(assigned_wd) if not flag])
 
             if self.__class__.conservative_dts:
                 decode_duration = self.wipe_duration()
 
+            t_other_copy = 0
             for wid, obj in enumerate(self.objects):
                 if obj is None:
                     continue
@@ -1065,8 +1081,16 @@ class DSNode:
                 read = box.dy*box.dx*PGDecoder.FREQ
                 if not self.partial or (self.partial and self.new_mask[wid]):
                     t_decoding += np.ceil(read/PGDecoder.RD)
+                elif self.partial and not self.new_mask[wid]:
+                    #the other object is copied at the end.
+                    assert sum(self.new_mask) == 1 and t_other_copy == 0
+                    t_other_copy += np.ceil(read/PGDecoder.RC)
+                    continue
 
                 decode_duration = max(decode_duration, t_decoding) + np.ceil(read/PGDecoder.RC)
+            ####
+            assert t_other_copy == 0 or self.partial
+            decode_duration += t_other_copy
         else:
             decode_duration = self.write_duration() + 1
         return (round(self.pts()*PGDecoder.FREQ) - decode_duration, t_decoding)
@@ -1122,10 +1146,6 @@ class DSNode:
 
             # Same window -> patent claims a window is written only once after the two cobj are processed.
             if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
-                single_window = True
-                continue
-            #This bypass is not correct if two compositions are in the same window
-            if cls.conservative_dts and t_dec_obj == 0:
                 continue
             copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
             decode_duration = max(decode_duration, t_decoding) + copy_dur
@@ -1413,4 +1433,3 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     for fault_pts in faults_pts:
         logger.warning(f"Found DTS(PCS(DSn)) == DTS(END(DSn-1)) @ {to_tc(fault_pts)}, decoder has no margin left !!")
     return is_compliant
-
