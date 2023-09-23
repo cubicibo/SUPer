@@ -70,6 +70,7 @@ if __name__ == '__main__':
     parser.add_argument('-y', '--yes', help="Flag to overwrite output file", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Flag to write both SUP and PES+MUI files.", action='store_true', default=False, required=False)
     parser.add_argument('-t', '--tslong', help="Flag to use PTS/DTS strategy with additional margins.", action='store_true', default=False, required=False)
+    parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
 
     parser.add_argument('--nodts', help="Flag to not set DTS in stream (NOT COMPLIANT)", action='store_true', default=False, required=False)
     #parser.add_argument('--aheadoftime', help="Flag to allow ahead of time decoding. (NOT COMPLIANT)", action='store_true', default=False, required=False)
@@ -90,6 +91,13 @@ if __name__ == '__main__':
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown BT ITU target, using bt709.")
         args.bt = 709
+
+    if args.max_kbps > 40000:
+        logger.warning("Max bitrate is beyond total BDAV video limits.")
+    elif 10 < args.max_kbps < 500:
+        logger.warning("Max bitrate is low. Buffer underflow errors may be spammed.")
+    elif args.max_kbps < 10:
+        exit_msg("Meaningless max bitrate, aborting.")
 
     if (args.nodts or args.aheadoftime) and (ext == 'pes' or args.withsup):
         exit_msg("PES output without DTS or with ahead-of-time decoding is not allowed, aborting.")
@@ -140,6 +148,7 @@ if __name__ == '__main__':
         'output_all_formats': args.withsup,
         'normal_case_ok': args.allow_normal,
         'ts_long': args.tslong,
+        'max_kbps': args.max_kbps,
     }
 
     bdnr = BDNRender(args.input, parameters)

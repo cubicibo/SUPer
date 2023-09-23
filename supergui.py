@@ -52,6 +52,7 @@ def get_kwargs() -> dict[str, int]:
         'normal_case_ok': bool(normal_case_ok.value),
         'libs_path': lib_paths,
         'ts_long': bool(soft_dts.value),
+        'max_kbps': int(max_kbps.value),
     }
 
 def wrapper_mp() -> None:
@@ -64,8 +65,9 @@ def wrapper_mp() -> None:
         return
     else:
         invalid = False
-        invalid |= not (0 <= kwargs['quality_factor'] <= 1 or kwargs['quality_factor'] == -0.01)
+        invalid |= not (0 <= kwargs['quality_factor'] <= 1)
         invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
+        invalid |= kwargs['max_kbps'] <= 0
         if invalid:
             logger.error("Invalid parameter found, aborting.")
             return
@@ -292,6 +294,14 @@ if __name__ == '__main__':
     soft_dts = CheckBox(app, text="Use PTS/DTS strategy with margin.", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(soft_dts.tk, "When new objects are defined, the DTS-PTS delta includes an additional (unecessary) margin.\n"\
                           "This reduces the ability to perform acquisitions.")
+
+    bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
+    max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="20000", align='left')
+    max_kbps_txt = Text(bmax_kbps, "Test against max bitrate [Kbps]: ", grid=[0,0], align='left', size=11)
+    Hovertip(bmax_kbps.tk, "Test the stream against the given bitrate. This value does not shape the output.\n"\
+                           "Change the quantizer and compression value to effectively lower the bitrate.\n"\
+                           "Set to zero to disable the test. Missused low values can spam thousands of errors.")
+
 
     Text(app, grid=[0,pos_v:=pos_v+1,2,1], align='left', text="Progress data is displayed in the command line!")
     app.repeat(1000, monitor_mp)  # Schedule call to monitor_mp() every 1000ms

@@ -28,6 +28,7 @@ from .utils import TimeConv as TC, get_super_logger
 from .pgraphics import PGDecoder
 from .filestreams import BDNXML, SUPFile
 from .optim import Quantizer
+from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate
 
 logger = get_super_logger('SUPer')
 
@@ -42,7 +43,7 @@ class BDNRender:
                 self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
 
     def optimise(self) -> None:
-        from .render2 import GroupingEngine, WOBSAnalyzer, is_compliant, check_pts_dts_sanity
+        from .render2 import GroupingEngine, WOBSAnalyzer
 
         kwargs = self.kwargs
         stkw = ''
@@ -124,13 +125,18 @@ class BDNRender:
 
         # Final check
         logger.info("Checking stream consistency and compliancy...")
-        compliant, warnings = is_compliant(self._epochs, bdn.fps * int(1+scaled_fps), self.kwargs.get('enforce_dts', True))
+        final_fps = bdn.fps * int(1+scaled_fps)
+        compliant, warnings = is_compliant(self._epochs, final_fps, self.kwargs.get('enforce_dts', True), self.kwargs.get('adjust_dropframe', False))
 
         if compliant and self.kwargs.get('enforce_dts', True):
             logger.info("Checking PTS and DTS rules [EXPERIMENTAL TEST]...")
-            compliant &= check_pts_dts_sanity(self._epochs, bdn.fps * int(1+scaled_fps))
+            compliant &= check_pts_dts_sanity(self._epochs, final_fps, self.kwargs.get('adjust_dropframe', False))
             if not compliant:
                 logger.error("=> Stream has a PTS/DTS issue!!")
+            elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
+                logger.info(f"Checking PG buffer usage w.r.t bitrate: {max_bitrate} Kbps")
+                max_bitrate = max_bitrate*1000/8
+                warnings += not test_rx_bitrate(self._epochs, int(max_bitrate), final_fps, self.kwargs.get('adjust_dropframe', False))
         if warnings == 0 and compliant:
             logger.info("=> Output PGS seems compliant.")
         if warnings > 0 and compliant:

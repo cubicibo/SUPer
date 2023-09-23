@@ -27,3 +27,4 @@ from .optim import Preprocess, Optimise
 from .utils import BDVideo, TimeConv, get_super_logger
 from .pgraphics import PGraphics
 from .interface import BDNRender
+from .pgstream import is_compliant, test_diplayset, check_pts_dts_sanity, test_rx_bitrate
