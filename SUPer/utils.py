@@ -435,24 +435,44 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
         raise NotImplementedError("Unknown/Not implemented conversion standard.")
     return mat
 
-def get_super_logger(name: str, level: int = logging.INFO):
-  """ Example of a custom logger.
+class LogFacility:
+    @staticmethod
+    def set_file_log(logger: logging.Logger, fp: str, level: Optional[int] = None) -> None:
+        lfh = logging.FileHandler(fp, mode='w')
+        formatter = logging.Formatter('%(levelname).8s: %(message)s')
+        lfh.setFormatter(formatter)
+        lfh.setLevel(logging.WARNING if level is None else level)
+        logger.addHandler(lfh)
 
-    This function takes in two parameters: name and level and logs to console.
-    The place to log in this case is defined by the handler which we set
-    to logging.StreamHandler().
+    @classmethod
+    def get_logger(cls, name: str, level: int = logging.INFO):
+      """ Example of a custom logger.
 
-    Args:
-      name: Name for the logger.
-      level: Minimum level for messages to be logged
-  """
-  logger = logging.getLogger(name)
-  logger.setLevel(level)
+        This function takes in two parameters: name and level and logs to console.
+        The place to log in this case is defined by the handler which we set
+        to logging.StreamHandler().
 
-  if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(' %(name)s: %(levelname).4s : %(message)s'.format(name))
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+        Args:
+          name: Name for the logger.
+          level: Minimum level for messages to be logged
+      """
+      cls.extend_logger()
 
-  return logger
+      logger = logging.getLogger(name)
+      logger.setLevel(level)
+
+      if not logger.handlers:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(' %(name)s: %(levelname).4s : %(message)s'.format(name))
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+      return logger
+
+    @staticmethod
+    def extend_logger() -> None:
+        INFO_OUT = logging.INFO + 5
+        logging.addLevelName(INFO_OUT, "IINFO")
+        def info_out(self, message, *args, **kws):
+            self._log(INFO_OUT, message, args, **kws)
+        logging.Logger.iinfo = info_out

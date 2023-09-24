@@ -30,7 +30,7 @@ from pathlib import Path
 from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
 
-from SUPer import BDNRender, get_super_logger
+from SUPer import BDNRender, LogFacility
 from SUPer.optim import Quantizer
 from SUPer.__metadata__ import __version__ as SUPVERS, __author__
 
@@ -53,6 +53,7 @@ def get_kwargs() -> dict[str, int]:
         'libs_path': lib_paths,
         'ts_long': bool(soft_dts.value),
         'max_kbps': int(max_kbps.value),
+        'log_to_file': opts_log[logcombo.value],
     }
 
 def wrapper_mp() -> None:
@@ -174,15 +175,15 @@ def terminate(frame = None, sig = None):
 
 def from_bdnxml(queue: ...) -> None:
     #### This function runs in MP context, not main.
-    logger = get_super_logger('SUPer')
+    logger = LogFacility.get_logger('SUPer')
     kwargs = queue.get()
     bdnf = queue.get()
     supo = queue.get()
 
     logger.info(f"Loading input BDN: {bdnf}")
-    sup_obj = BDNRender(bdnf, kwargs)
+    sup_obj = BDNRender(bdnf, kwargs, supo)
     sup_obj.optimise()
-    sup_obj.write_output(supo)
+    sup_obj.write_output()
     logger.info("Finished, exiting...")
 
 def init_extra_libs():
@@ -212,11 +213,12 @@ if __name__ == '__main__':
     import multiprocessing as mp
     mp.freeze_support()
 
-    logger = get_super_logger('SUPui')
+    logger = LogFacility.get_logger('SUPui')
     logger.info(f"SUPer v{SUPVERS}, (c) {__author__}")
 
     lib_paths = init_extra_libs()
     opts_quant = Quantizer.get_options()
+    opts_log = {'Disabled':  0, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30}
 
     pos_v = 0
 
@@ -243,15 +245,15 @@ if __name__ == '__main__':
     do_super.sup_kwargs = {}
 
     bcompre = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
-    brate = Box(app, layout="grid", grid=[1,pos_v], align='left')
     compression_txtstr = Text(bcompre, "Compression [int]%: ", grid=[0,0], align='left', size=11)
-    Hovertip(compression_txtstr.tk, "Defined as the minimum percentage of time to have between two events to perform an acquisition (object refresh).\n"\
-                              "-> 0: update as often as possible, -> 100 update as few times as possible.")
-
     compression_txt = TextBox(bcompre, width=4, height=1, grid=[1,0], text="85")
+    Hovertip(bcompre.tk, "Defined as the minimum percentage of time to have between two events to perform an acquisition (object refresh).\n"\
+                         "-> 0: update as often as possible, -> 100 update as few times as possible.")
+
+    brate = Box(app, layout="grid", grid=[1,pos_v], align='left')
     brate_txtstr = Text(brate, "Acquisition rate [int]%: ", grid=[0,0], align='left', size=11)
     refresh_txt = TextBox(brate, width=4, height=1, grid=[1,0], text="100")
-    Hovertip(brate_txtstr.tk, "Affect the decay ratio that determines the compression factor and thus, PG acquisitions (object refreshes).\n"\
+    Hovertip(brate.tk, "Affect the decay ratio that determines the compression factor and thus, PG acquisitions (object refreshes).\n"\
                               "Low values: slow decay -> fewer acquisitions. High values: more often (always within PG decoders limits).\n"\
                               "A value of zero results in the strict minimum number of refreshes and may show artifacts.")
 
@@ -295,13 +297,16 @@ if __name__ == '__main__':
     Hovertip(soft_dts.tk, "When new objects are defined, the DTS-PTS delta includes an additional (unecessary) margin.\n"\
                           "This reduces the ability to perform acquisitions.")
 
-    bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1,2,1])
+    bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
     max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="20000", align='left')
     max_kbps_txt = Text(bmax_kbps, "Test against max bitrate [Kbps]: ", grid=[0,0], align='left', size=11)
     Hovertip(bmax_kbps.tk, "Test the stream against the given bitrate. This value does not shape the output.\n"\
                            "Change the quantizer and compression value to effectively lower the bitrate.\n"\
                            "Set to zero to disable the test. Missused low values can spam thousands of errors.")
 
+    blog = Box(app, layout="grid", grid=[1, pos_v], align='left')
+    Text(blog, "Log to file: ", grid=[0,0], align='left', size=11)
+    logcombo = Combo(blog, options=list(opts_log), grid=[1,0], align='left')
 
     Text(app, grid=[0,pos_v:=pos_v+1,2,1], align='left', text="Progress data is displayed in the command line!")
     app.repeat(1000, monitor_mp)  # Schedule call to monitor_mp() every 1000ms

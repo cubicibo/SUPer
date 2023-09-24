@@ -32,9 +32,9 @@ from collections.abc import Generator
 from typing import Union, Optional, Type, Any, Callable
 
 from .segments import PGSegment, PCS, DisplaySet, Epoch
-from .utils import (BDVideo, TimeConv as TC, get_super_logger, Shape, Pos, Dim)
+from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Pos, Dim)
 
-logging = get_super_logger('SUPer')
+logging = LogFacility.get_logger('SUPer')
 
 #%%
 class SUPFile:

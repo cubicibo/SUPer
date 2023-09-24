@@ -26,14 +26,14 @@ import numpy as np
 from numpy import (typing as npt)
 from PIL import ImagePalette
 
-from .utils import get_matrix, get_super_logger
+from .utils import get_matrix, LogFacility
 
 #%%
 
 RGBA = namedtuple('RGBA', ['r', 'g', 'b', 'a'])
 FpPal = namedtuple('FpPal', 'y cb cr alpha')
 
-logging = get_super_logger('SUPer')
+logging = LogFacility.get_logger('SUPer')
 def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
     """
     Clip an array of YCxCyA values to s_range either {'limited', 'full'}

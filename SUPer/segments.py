@@ -23,11 +23,11 @@ from struct import unpack, pack
 from typing import Union, Optional, Any, Type
 from dataclasses import dataclass, field
 
-from .utils import get_super_logger, BDVideo
+from .utils import LogFacility, BDVideo
 from .palette import PaletteEntry, Palette
 
 #%%
-logging = get_super_logger('SUPer')
+logging = LogFacility.get_logger('SUPer')
 
 class PGSegment:
     class PGSOff(Enum):

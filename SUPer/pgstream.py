@@ -10,9 +10,9 @@ import numpy as np
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, Epoch, DisplaySet
 from .pgraphics import PGDecoder, PGraphics, PGObjectBuffer
 from .palette import Palette
-from .utils import get_super_logger, TimeConv as TC
+from .utils import LogFacility, TimeConv as TC
 
-logger = get_super_logger('SUPer')
+logger = LogFacility.get_logger('SUPer')
 
 @dataclass
 class BufferStats:
@@ -114,9 +114,9 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float, ndf_ntsc: boo
     stats = leaky.get_stats()
 
     avg_bitrate = sum(map(lambda x: len(bytes(x)), epochs))/(dur_offset/PGDecoder.FREQ)
-    logger.info(f"Bitrate: AVG={avg_bitrate/(128*1024):.04f} Mbps, PEAK_1s={stats[2]:.03f} Mbps @ {leaky.stats.tsavg}.")
+    logger.iinfo(f"Bitrate: AVG={avg_bitrate/(128*1024):.04f} Mbps, PEAK_1s={stats[2]:.03f} Mbps @ {leaky.stats.tsavg}.")
 
-    f_log_fun = logger.info if is_ok else logger.error
+    f_log_fun = logger.iinfo if is_ok else logger.error
     f_log_fun(f"Buffer margin: AVG={stats[1]:.02f}%, MIN={stats[0]:.02f}% @ {leaky.stats.tsmin}")
     return is_ok
 ####

@@ -31,14 +31,14 @@ from skimage.filters import gaussian
 from skimage.measure import regionprops, label
 
 #%%
-from .utils import get_super_logger, Pos, Dim, BDVideo, TimeConv as TC, Box, ScreenRegion, RegionType, WindowOnBuffer
+from .utils import LogFacility, Pos, Dim, BDVideo, TimeConv as TC, Box, ScreenRegion, RegionType, WindowOnBuffer
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise
 from .pgraphics import PGraphics, PGDecoder, PGObject, PGObjectBuffer, PaletteManager
 from .palette import Palette, PaletteEntry
 
-logger = get_super_logger('SUPer')
+logger = LogFacility.get_logger('SUPer')
 
 #%%
 class GroupingEngine:

@@ -32,9 +32,9 @@ from piliq import PILIQ
 import cv2
 
 from .palette import Palette, PaletteEntry
-from .utils import TimeConv as TC, get_super_logger
+from .utils import TimeConv as TC, LogFacility
 
-logger = get_super_logger('SUPer')
+logger = LogFacility.get_logger('SUPer')
 
 class FadeCurve(IntEnum):
     LINEAR = auto()

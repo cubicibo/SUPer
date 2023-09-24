@@ -34,19 +34,22 @@ On UNIX systems, pngquant is fairly easily to get in your PATH via brew, apt-get
  -i, --input         Input BDNXML file.
  -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
  -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
- -q, --qmode         Image quantization mode. [1: PIL+K-Means on fades, 2: K-Means, 3: PILIQ, def: 1]
- -n, --allow-normal  Allow normal case object redefinition, can reduce the number of dropped events on complex animations.
- -b, --bt            Target BT matrix [601, 709, 2020, def: 709]
+ -q, --qmode         Set the image quantization mode. [1: PIL+K-Means on fades, 2: K-Means, 3: PILIQ, def: 1]
+ -n, --allow-normal  Flag to allow normal case object redefinition, can reduce the number of dropped events on complex animations.
+ -b, --bt            Set the target BT matrix [601, 709, 2020, def: 709]
  -s, --subsampled    Flag to indicate BDNXML is subsampled (e.g 29.97 BDNXML for 59.94 output).
- -p, --palette       Always write the full palette (enforced for PES).
+ -p, --palette       Flag to always write the full palette (enforced for PES).
  -y, --yes           Flag to overwrite output file if it already exists.
  -w, --withsup       Flag to write both SUP and PES+MUI files.
  -t, --tslong        Flag to use a conservative PTS/DTS strategy (more events may be filtered out on complex animations).
+ -m, --max-kbps      Set the maximum bitrate to test the output against. Recommended range: [500-16000].
+ -l, --log-to-file   Set (enable) logging to file with the minimum message level: [20: info+, 25: iinf+, 30: warning+]
  -v, --version       Print the version and exit.
 ```
 - Image quantization mode 3 ("PILIQ") is either libimagequant or pngquant, whichever specified in config.ini or available in your system.
 - The output file extension is used to infer the desired output type (SUP or PES).
-- If `--allow-normal` (`-l`) is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Scenarist BD does not implement normal case object redefinition and may destroy the stream. You do not need to do those operation to mux the assets in any case.
+- If `--allow-normal`  is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Scenarist BD does not implement normal case object redefinition and may destroy the stream. You do not need to do those operation to mux the assets in any case.
+- `--max-kbps` does not shape the stream, it is just a limit to compare it to. Only `--compression` and `--qmode` may be used to reduce the filesize.
 
 Additionally, one flag is available to generate SUPs that are not subject to decoding constraints. This flag is unmaintained code and its operability not guaranteed.
 ```
