@@ -1135,20 +1135,21 @@ class DSNode:
 
         object_decode_duration = ddurs.copy()
 
-        #For every composition object, compute the transfer time
-        for k, cobj in enumerate(ds.pcs.cobjects):
-            shape = buffer.get(cobj.o_id)
-            assert shape is not None, "Object does not exist in buffer."
-            w, h = windows[cobj.window_id][0], windows[cobj.window_id][1]
+        if not ds.pcs.pal_flag:
+            #For every composition object, compute the transfer time
+            for k, cobj in enumerate(ds.pcs.cobjects):
+                shape = buffer.get(cobj.o_id)
+                assert shape is not None, "Object does not exist in buffer."
+                w, h = windows[cobj.window_id][0], windows[cobj.window_id][1]
 
-            t_dec_obj = object_decode_duration.pop(cobj.o_id, 0)
-            t_decoding += t_dec_obj
+                t_dec_obj = object_decode_duration.pop(cobj.o_id, 0)
+                t_decoding += t_dec_obj
 
-            # Same window -> patent claims a window is written only once after the two cobj are processed.
-            if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
-                continue
-            copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
-            decode_duration = max(decode_duration, t_decoding) + copy_dur
+                # Same window -> patent claims a window is written only once after the two cobj are processed.
+                if k == 0 and ds.pcs.n_objects > 1 and ds.pcs.cobjects[1].window_id == cobj.window_id:
+                    continue
+                copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
+                decode_duration = max(decode_duration, t_decoding) + copy_dur
 
         #Prevent PTS(WDS) = PTS(PCS)
         decode_duration = max(decode_duration, sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values())) + 1)
