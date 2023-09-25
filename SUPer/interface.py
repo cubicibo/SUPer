@@ -87,9 +87,8 @@ class BDNRender:
         final_ds = None
         last_pts_out = None
         for group in bdn.groups(epochstart_dd_fn(screen_area)):
-            if last_pts_out is not None and TC.tc2s(group[0].tc_in, bdn.fps) - last_pts_out > 1.1:
+            if final_ds is not None and TC.tc2s(group[0].tc_in, bdn.fps) - last_pts_out > 1.1:
                 logger.debug("Adding screen wipe since there was enough time between two epochs.")
-                assert final_ds is not None
                 self._epochs[-1].ds.append(final_ds)
 
             subgroups = []

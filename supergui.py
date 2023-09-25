@@ -299,7 +299,7 @@ if __name__ == '__main__':
 
     bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
     max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="16000", align='left')
-    max_kbps_txt = Text(bmax_kbps, "Test against max bitrate [Kbps]: ", grid=[0,0], align='left', size=11)
+    max_kbps_txt = Text(bmax_kbps, "Max bitrate test [Kbps]: ", grid=[0,0], align='left', size=11)
     Hovertip(bmax_kbps.tk, "Test the stream against the given bitrate. This value does not shape the output.\n"\
                            "Change the quantizer and compression value to effectively lower the bitrate.\n"\
                            "Set to zero to disable the test. Missused low values can spam thousands of errors.")

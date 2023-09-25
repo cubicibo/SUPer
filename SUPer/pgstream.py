@@ -173,6 +173,7 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
 
     for ke, epoch in enumerate(epochs):
         prev_pcs_id = -1
+        windows = {}
         window_area = {}
         objects_sizes = {}
         ods_vn = {}
@@ -214,6 +215,14 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
 
                 elif isinstance(seg, WDS):
                     compliant &= (ks == 1) #WDS is not second segment of DS, if present
+                    if len(windows) == 0:
+                        for w in seg.windows:
+                            windows[w.window_id] = (w.h_pos, w.v_pos, w.width, w.height)
+                    else:
+                        for w in seg.windows:
+                            if windows[w.window_id] != (w.h_pos, w.v_pos, w.width, w.height):
+                                logger.error(f"Window change mid-epoch at {to_tc(current_pts)}, this is prohibited.")
+                                compliant = False
                     for w in seg.windows:
                         window_area[w.window_id] = w.width*w.height
                 elif isinstance(seg, PDS):
@@ -373,4 +382,3 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float, ndf_ntsc: bool = False
     for fault_pts in faults_pts:
         logger.warning(f"Found DTS(PCS(DSn)) == DTS(END(DSn-1)) @ {to_tc(fault_pts)}, decoder has no margin left !!")
     return is_compliant
-

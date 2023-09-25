@@ -560,15 +560,15 @@ class WOBSAnalyzer:
 
         return cobjs if is_compat_mode else cobjs_cropped, pals, o_ods, pal
 
-    def _get_undisplay(self, c_pts: float, pcs_id: int, wds_base: WDS, palette_id: int, pcs_fn: Callable[[...], PCS]) -> DisplaySet:
+    def _get_undisplay(self, c_pts: float, pcs_id: int, wds_base: WDS, palette_id: int, pcs_fn: Callable[[...], PCS]) -> tuple[DisplaySet, int]:
         pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, False, palette_id, [], c_pts)
         wds = wds_base.copy(pts=c_pts, in_ticks=False)
         uds = DisplaySet([pcs, wds, ENDS.from_scratch(pts=c_pts)])
         DSNode.apply_pts_dts(uds, DSNode.set_pts_dts_sc(uds, self.buffer, wds))
-        return uds
+        return uds, pcs_id+1
 
     def _get_undisplay_pds(self, c_pts: float, pcs_id: int, node: 'DSNode', cobjs: list[CObject],
-                           pcs_fn: Callable[[...], PCS], n_colors: int, wds_base: WDS) -> tuple[DisplaySet, int, int]:
+                           pcs_fn: Callable[[...], PCS], n_colors: int, wds_base: WDS) -> tuple[DisplaySet, int]:
         pcs = pcs_fn(pcs_id, PCS.CompositionState.NORMAL, True, node.palette_id, cobjs, c_pts)
         tsp_e = PaletteEntry(16, 128, 128, 0)
         pds = PDS.from_scratch(Palette({k: tsp_e for k in range(n_colors)}), p_vn=node.pal_vn, p_id=node.palette_id, pts=c_pts)
@@ -615,6 +615,8 @@ class WOBSAnalyzer:
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
         final_node = DSNode([], windows, self.events[-1].tc_out, nc_refresh=True)
+        #Do we have time to redraw the window (with some margin)?
+        perform_wds_end = durs[-1][0] >= np.ceil(((final_node.write_duration() + 10)/PGDecoder.FREQ)*self.target_fps)
 
         try:
             use_pbar = False
@@ -654,7 +656,8 @@ class WOBSAnalyzer:
                 c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
             else:
                 nodes[i].tc_pts = TC.add_framestc(self.events[i].tc_in, self.bdn.fps, nodes[i].tc_shift)
-                c_pts = get_pts(nodes[i].tc_pts, self.bdn.fps)
+                c_pts = get_pts(TC.tc2s(nodes[i].tc_pts, self.bdn.fps))
+                logger.debug(f"Shifted event: {self.events[i].tc_in} -> {nodes[i].tc_pts}, {get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))} -> c_pts={c_pts}")
 
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
@@ -754,17 +757,28 @@ class WOBSAnalyzer:
         if use_pbar:
             pbar.close()
         ####while
-        #final "undisplay" displayset
-        p_id, p_vn = get_palette_data(palette_manager, final_node)
-        final_node.palette_id = p_id
-        final_node.pal_vn = p_vn
-        uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
-        displaysets.append(uds)
 
-        #We wipe the screen for the very last epoch. add 4 frames so we don't have to care about decoding constraints
-        w, h = self.bdn.format.value
-        final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, int(np.ceil((w*h*self.target_fps)/PGDecoder.RC)))
-        final_ds = self._get_undisplay(get_pts(final_pts), pcs_id, wds_base, last_palette_id, pcs_fn)
+        final_ds = None
+        #We can't undraw the screen due to delta PTS constraint, we clear it with a palette update and will undraw optionally at +N frames
+        if not perform_wds_end:
+            logger.debug("Performing palette wipe (delta PTS too short) at end of epoch.")
+            p_id, p_vn = get_palette_data(palette_manager, final_node)
+            last_palette_id = final_node.palette_id = p_id
+            final_node.pal_vn = p_vn
+            uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
+            displaysets.append(uds)
+
+            #Prepare an additional display set to undraw the screen. Will be added by parent if there's enough time before the next epoch.
+            final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, max(1, int(np.ceil(((final_node.write_duration()+10)*self.target_fps)/PGDecoder.FREQ))))
+            logger.debug(f"final screen clear PTS: {final_pts} vs palette wipe: {self.events[-1].tc_out}, sf={get_pts(final_pts)}, so={get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps))}")
+        else:
+            logger.debug("Performing standard screen clear at end of epoch.")
+            final_pts = TC.tc2s(self.events[-1].tc_out, self.bdn.fps)
+        final_ds, pcs_id = self._get_undisplay(get_pts(final_pts), pcs_id, wds_base, last_palette_id, pcs_fn)
+
+        if perform_wds_end:
+            displaysets.append(final_ds)
+            final_ds = None
         return Epoch(displaysets), final_ds
     ####
 
