@@ -632,10 +632,13 @@ class WOBSAnalyzer:
             if durs[i][1] != 0:
                 assert i > 0
                 assert nodes[i].parent is not None
-                p_id, p_vn = get_palette_data(palette_manager, nodes[i].parent)
-                nodes[i].parent.palette_id = p_id
-                nodes[i].parent.pal_vn = p_vn
-                uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255, wds_base)
+                if np.ceil(((nodes[i].parent.write_duration() + 10)/PGDecoder.FREQ)*self.target_fps) <= durs[i][1] and not nodes[i].parent.is_custom_dts():
+                    uds, pcs_id = self._get_undisplay(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, wds_base, last_palette_id, pcs_fn)
+                else:
+                    p_id, p_vn = get_palette_data(palette_manager, nodes[i].parent)
+                    nodes[i].parent.palette_id = p_id
+                    nodes[i].parent.pal_vn = p_vn
+                    uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255, wds_base)
                 displaysets.append(uds)
 
             if flags[i] == -1:
