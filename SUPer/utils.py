@@ -436,43 +436,72 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     return mat
 
 class LogFacility:
-    @staticmethod
-    def set_file_log(logger: logging.Logger, fp: str, level: Optional[int] = None) -> None:
+    _logger = dict()
+
+    @classmethod
+    def set_file_log(cls, logger: logging.Logger, fp: str, level: Optional[int] = None) -> None:
         lfh = logging.FileHandler(fp, mode='w')
         formatter = logging.Formatter('%(levelname).8s: %(message)s')
         lfh.setFormatter(formatter)
+        if logger.getEffectiveLevel() > level:
+            cls.set_logger_level(logger.name, level)
         lfh.setLevel(logging.WARNING if level is None else level)
         logger.addHandler(lfh)
 
     @classmethod
+    def _init_logger(cls, name: str) -> None:
+        cls._extend_logger()
+        logger = cls._logger[name] = logging.getLogger(name)
+
+        if not logger.hasHandlers():
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(' %(name)s: %(levelname).4s : %(message)s'.format(name))
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+
+    @classmethod
+    def set_logger_level(cls, name: str, level: int) -> None:
+        assert cls._logger.get(name, None) is not None
+        cls._logger[name].setLevel(level)
+        cls._logger[name].handlers[0].setLevel(level)
+
+    @classmethod
     def get_logger(cls, name: str, level: int = logging.INFO):
-      """ Example of a custom logger.
+        """ Example of a custom logger.
 
-        This function takes in two parameters: name and level and logs to console.
-        The place to log in this case is defined by the handler which we set
-        to logging.StreamHandler().
+          This function takes in two parameters: name and level and logs to console.
+          The place to log in this case is defined by the handler which we set
+          to logging.StreamHandler().
 
-        Args:
-          name: Name for the logger.
-          level: Minimum level for messages to be logged
-      """
-      cls.extend_logger()
+          Args:
+            name: Name for the logger.
+            level: Minimum level for messages to be logged
+        """
+        if cls._logger.get(name, None) is None:
+            cls._init_logger(name)
+            cls.set_logger_level(name, level)
 
-      logger = logging.getLogger(name)
-      logger.setLevel(level)
-
-      if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(' %(name)s: %(levelname).4s : %(message)s'.format(name))
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-
-      return logger
+        return cls._logger[name]
 
     @staticmethod
-    def extend_logger() -> None:
+    def _extend_logger() -> None:
         INFO_OUT = logging.INFO + 5
         logging.addLevelName(INFO_OUT, "IINFO")
         def info_out(self, message, *args, **kws):
             self._log(INFO_OUT, message, args, **kws)
         logging.Logger.iinfo = info_out
+
+        LOW_DEBUG = logging.DEBUG - 5
+        logging.addLevelName(LOW_DEBUG, "LDEBUG")
+        def low_debug(self, message, *args, **kws):
+            self._log(LOW_DEBUG, message, args, **kws)
+        logging.Logger.ldebug = low_debug
+
+        HIGH_DEBUG = logging.DEBUG - 2
+        logging.addLevelName(HIGH_DEBUG, "HDEBUG")
+        def high_debug(self, message, *args, **kws):
+            self._log(HIGH_DEBUG, message, args, **kws)
+        logging.Logger.hdebug = high_debug
+
+    ####
+####

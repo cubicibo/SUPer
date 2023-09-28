@@ -33,7 +33,8 @@ from .utils import get_matrix, LogFacility
 RGBA = namedtuple('RGBA', ['r', 'g', 'b', 'a'])
 FpPal = namedtuple('FpPal', 'y cb cr alpha')
 
-logging = LogFacility.get_logger('SUPer')
+logger = LogFacility.get_logger('SUPer')
+
 def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
     """
     Clip an array of YCxCyA values to s_range either {'limited', 'full'}
@@ -51,7 +52,7 @@ def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
         ycbcra = ycbcra.T
 
     if 'full' not in s_range:
-        logging.debug("Clipping values to limited range.")
+        logger.ldebug("Clipping values to limited range.")
         ycbcra[:, :3][ycbcra[:, :3] <  16] = 16
         ycbcra[:,  0][ycbcra[:,  0] > 235] = 235
         ycbcra[:,1:3][ycbcra[:,1:3] > 240] = 240
@@ -187,7 +188,7 @@ class Palette:
     def __setitem__(self, id: int, entry: PaletteEntry) -> None:
         if 0 <= id <= 255:
             if min(*entry[:3]) < 16 or entry[0] > 235 or max(*entry[1:3]) > 240:
-                logging.warning("Palette clamps outside limited YCrCb range.")
+                logger.warning("Palette clamps outside limited YCrCb range.")
             if isinstance(entry, PaletteEntry):
                 self.palette[id] = entry
             else:

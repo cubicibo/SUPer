@@ -51,6 +51,7 @@ class BDNRender:
         if file_logging_level > 0:
             logfile = str(self.outfile) + '.txt'
             LogFacility.set_file_log(logger, logfile, file_logging_level)
+            LogFacility.set_logger_level(logger.name, file_logging_level)
 
     def optimise(self) -> None:
         from .render2 import GroupingEngine, WOBSAnalyzer
@@ -84,6 +85,8 @@ class BDNRender:
         #Round up to tick
         epochstart_dd_fnr = lambda o_area: np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
 
+        debug_enabled = logger.level <= 10
+
         final_ds = None
         last_pts_out = None
         for group in bdn.groups(epochstart_dd_fn(screen_area)):
@@ -116,7 +119,12 @@ class BDNRender:
                 logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)} event(s):")
 
                 wob, box = GroupingEngine(n_groups=2, **kwargs).group(subgroup)
-                logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
+                if debug_enabled:
+                    for w_id, wb in enumerate(wob):
+                        wb = wb.get_window()
+                        logger.debug(f"Window {w_id}: X={wb.x+box.x}, Y={wb.y+box.y}, W={wb.dx}, H={wb.dy}")
+                else:
+                    logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
 
                 wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, **kwargs)
                 new_epoch, final_ds = wobz.analyze()
@@ -138,7 +146,7 @@ class BDNRender:
         compliant, warnings = is_compliant(self._epochs, final_fps, self.kwargs.get('enforce_dts', True), self.kwargs.get('adjust_dropframe', False))
 
         if compliant and self.kwargs.get('enforce_dts', True):
-            logger.info("Checking PTS and DTS rules [EXPERIMENTAL TEST]...")
+            logger.info("Checking PTS and DTS rules...")
             compliant &= check_pts_dts_sanity(self._epochs, final_fps, self.kwargs.get('adjust_dropframe', False))
             if not compliant:
                 logger.error("=> Stream has a PTS/DTS issue!!")
@@ -149,7 +157,7 @@ class BDNRender:
         if warnings == 0 and compliant:
             logger.info("=> Output PGS seems compliant.")
         if warnings > 0 and compliant:
-            logger.warning("=> Excessive bandwidth detected, requires HW testing.")
+            logger.warning("=> Excessive bandwidth detected, testing with mux required.")
         elif not compliant:
             logger.error("=> Output PGS is not compliant. Expect display issues or decoder crash.")
     ####

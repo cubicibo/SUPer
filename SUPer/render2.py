@@ -30,6 +30,11 @@ import numpy as np
 from skimage.filters import gaussian
 from skimage.measure import regionprops, label
 
+try:
+    from tqdm import tqdm
+except ModuleNotFoundError:
+    from contextlib import nullcontext as tqdm
+
 #%%
 from .utils import LogFacility, Pos, Dim, BDVideo, TimeConv as TC, Box, ScreenRegion, RegionType, WindowOnBuffer
 from .filestreams import BDNXMLEvent, BaseEvent
@@ -236,6 +241,7 @@ class WOBSAnalyzer:
                 except StopIteration:
                     pgobj = None
                 if pgobj is not None:
+                    logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
                     pgobjs[wid].append(pgobj)
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
@@ -274,7 +280,8 @@ class WOBSAnalyzer:
         while k > 0:
             #If the acquisition is not a mandatory one or was already discarded
             if not absolutes[k] or acqs[k] or flags[k] == -1:
-                logger.debug(f"Not analyzing event at {nodes[k].tc_pts} due to filtering (f={absolutes[k]}, a={flags[k]}).")
+                if flags[k] == -1:
+                    logger.debug(f"Not analyzing event at {nodes[k].tc_pts} due to filtering (f={absolutes[k]}, a={flags[k]}).")
                 k -= 1
                 continue
 
@@ -618,30 +625,30 @@ class WOBSAnalyzer:
         #Do we have time to redraw the window (with some margin)?
         perform_wds_end = durs[-1][0] >= np.ceil(((final_node.write_duration() + 10)/PGDecoder.FREQ)*self.target_fps)
 
-        try:
-            use_pbar = False
-            from tqdm import tqdm
-        except ModuleNotFoundError:
-            from contextlib import nullcontext as tqdm
-        else:
-            use_pbar = True
-
-        pbar = tqdm(range(n_actions))
+        if (use_pbar := logger.getEffectiveLevel() >= 20):
+            pbar = tqdm(range(n_actions))
+            if getattr(pbar, 'update', None) is None:
+                pbar.update = pbar.close = lambda *args, **kwargs: None
+        #Main conversion loop, using all assets
         while i < n_actions:
-
             if durs[i][1] != 0:
                 assert i > 0
                 assert nodes[i].parent is not None
+                w_pts = get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps))
                 if np.ceil(((nodes[i].parent.write_duration() + 10)/PGDecoder.FREQ)*self.target_fps) <= durs[i][1] and not nodes[i].parent.is_custom_dts():
-                    uds, pcs_id = self._get_undisplay(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, wds_base, last_palette_id, pcs_fn)
+                    uds, pcs_id = self._get_undisplay(w_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
+                    logger.debug(f"Writing screen clear with WDS before an acquisition at PTS={self.events[i-1].tc_out}")
                 else:
                     p_id, p_vn = get_palette_data(palette_manager, nodes[i].parent)
                     nodes[i].parent.palette_id = p_id
                     nodes[i].parent.pal_vn = p_vn
-                    uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps)), pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255, wds_base)
+                    uds, pcs_id = self._get_undisplay_pds(w_pts, pcs_id, nodes[i].parent, last_cobjs, pcs_fn, 255, wds_base)
+                    logger.debug(f"Writing screen clear with palette update before an acquisition at PTS={self.events[i-1].tc_out}")
                 displaysets.append(uds)
 
             if flags[i] == -1:
+                logger.debug(f"Skipping discarded event at PTS={self.events[i].tc_in}")
+
                 i+=1
                 continue
 
@@ -686,6 +693,7 @@ class WOBSAnalyzer:
 
             pcs_id += 1
             last_palette_id = p_id
+            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts:.03f}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}, L(ODS)={len(o_ods)}")
 
             if len(pals[0]) > 1:
                 # Pad palette chains
@@ -706,6 +714,7 @@ class WOBSAnalyzer:
                     #Is there a know screen clear in the chain? then use palette screen clear here
                     if durs[z][1] != 0:
                         assert nodes[z].parent is not None
+                        logger.debug(f"Writing screen wipe in palette update chain at PTS={self.events[z-1].tc_out}")
                         p_id, p_vn = get_palette_data(palette_manager, nodes[z].parent)
                         nodes[z].parent.palette_id = p_id
                         nodes[z].parent.pal_vn = p_vn
@@ -713,8 +722,11 @@ class WOBSAnalyzer:
                         displaysets.append(uds)
                         #We just wipped a palette, whatever the next palette id, rewrite it fully
                         last_palette_id = None
+                        #Should not be necessary but in any case...
+                        durs[z] = (durs[z][0], 0)
 
                     if flags[z] == 1:
+                        logger.debug(f"NORMAL CASE: PTS={self.events[z].tc_in}={c_pts}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
                         normal_case_refresh = nodes[z].new_mask
                         r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), windows, double_buffering, has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
                         cobjs, n_pals, o_ods, new_pal = r
@@ -725,12 +737,13 @@ class WOBSAnalyzer:
                         normal_case_refresh = True
                         last_palette_id = None
                     elif flags[z] == -1:
+                        logger.debug(f"Skipped discarded event at PTS={self.events[z].tc_in}.")
                         continue
 
                     p_write = (pals[0][z-i] | pals[1][z-i])
                     #Skip empty palette updates
                     if len(p_write) == 0:
-                        logger.debug("Skipped an empty palette.")
+                        logger.debug(f"Skipped an empty palette at PTS={self.events[z].tc_in}.")
                         continue
 
                     p_id, p_vn = get_palette_data(palette_manager, nodes[z])
@@ -914,16 +927,19 @@ class WOBAnalyzer:
         #if the images have the exact same alpha channel, this measure is equal to 1
         overlap = (inters_area > 0) * (inters_area + np.sum(inters_inv))/inters.size
 
-        if overlap > 0: #and overlap < self.overlap_threshold:
+        if overlap > 0 and overlap < self.overlap_threshold:
             #score = compare_ssim(bitmap.convert('L'), current.convert('L'))
             #Broadcast transparency mask of current on all channels of ref
             mask = 255*(np.logical_and((a_bitmap[:, :, 3] > 0), (a_current[:, :, 3] > 0)).astype(np.uint8))
             score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), current.convert('L'))
             cross_percentage = np.sum(mask > 0)/mask.size
         else:
-            #Perfect overlap or zero overlap, the current bitmap fits perfectly on the previous
-            score = 1.0
             cross_percentage = 1.0
+            if overlap > (1-self.overlap_threshold) and overlap < self.overlap_threshold:
+                #Perfect overlap or zero overlap, the current bitmap fits perfectly on the previous
+                score = compare_ssim(bitmap.convert('L'), current.convert('L'))
+            else:
+                score = 1.0
         return score, cross_percentage
 
     @staticmethod
@@ -997,6 +1013,7 @@ class WOBAnalyzer:
 
                 rgba_i = Image.fromarray(rgba)
                 score, cross_percentage = self.compare(alpha_compo, rgba_i)
+                logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333)}")
                 if score >= min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333):
                     bitmaps.append(rgba)
                     alpha_compo.alpha_composite(rgba_i)

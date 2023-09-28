@@ -145,7 +145,7 @@ class Preprocess:
             pil_failed = pil_failed or compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.95
 
             if pil_failed:
-                logger.debug("Pillow failed to palettize image, falling back to K-Means.")
+                logger.ldebug("Pillow failed to palettize image, falling back to K-Means.")
                 return cls.quantize(img, colors, quantize_lib=Quantizer.Libs.CV2KM, **kwargs)
 
             return npimg, nppal
