@@ -98,6 +98,7 @@ class BDNRender:
                 self._epochs[-1].ds.append(final_ds)
 
             subgroups = []
+            areas = []
             offset = len(group)
             max_area = 0
 
@@ -108,20 +109,24 @@ class BDNRender:
                 delay = TC.tc2s(group[len(group)-k].tc_in, bdn.fps) - TC.tc2s(event.tc_out, bdn.fps)
 
                 if delay > epochstart_dd_fnr(max_area):
+                    areas.append(max_area)
                     max_area = 0
                     subgroups.append(group[len(group)-k:offset])
                     offset -= len(subgroups[-1])
             if len(group[:offset]) > 0:
+                areas.append(max_area)
                 subgroups.append(group[:offset])
             else:
                 assert offset == 0
             assert sum(map(len, subgroups)) == len(group)
+            assert len(areas) == len(subgroups)
 
             #Epoch generation (each subgroup will be its own epoch)
-            for subgroup in reversed(subgroups):
+            for ksub, subgroup in enumerate(reversed(subgroups), 1):
                 logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)} event(s):")
 
-                wob, box = GroupingEngine(n_groups=2, **kwargs).group(subgroup)
+                n_groups = 2 if (len(subgroup) > 1 or areas[-ksub]/screen_area > 0.1) else 1
+                wob, box = GroupingEngine(n_groups=n_groups, **kwargs).group(subgroup)
                 if debug_enabled:
                     for w_id, wb in enumerate(wob):
                         wb = wb.get_window()
