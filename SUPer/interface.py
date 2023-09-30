@@ -92,10 +92,15 @@ class BDNRender:
 
         final_ds = None
         last_pts_out = None
+        pcs_id = 0
         for group in bdn.groups(epochstart_dd_fn(screen_area)):
-            if final_ds is not None and TC.tc2s(group[0].tc_in, bdn.fps) - last_pts_out > 1.1:
-                logger.debug("Adding screen wipe since there was enough time between two epochs.")
-                self._epochs[-1].ds.append(final_ds)
+            if final_ds is not None:
+                if TC.tc2s(group[0].tc_in, bdn.fps) - last_pts_out > 1.1:
+                    logger.debug("Adding screen wipe since there was enough time between two epochs.")
+                    self._epochs[-1].ds.append(final_ds)
+                else:
+                    #did not use an optional display set, subtract 1 to PCS id to have continuity
+                    pcs_id -= 1
 
             subgroups = []
             areas = []
@@ -134,8 +139,8 @@ class BDNRender:
                 else:
                     logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
 
-                wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, **kwargs)
-                new_epoch, final_ds = wobz.analyze()
+                wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, pcs_id=pcs_id, **kwargs)
+                new_epoch, final_ds, pcs_id = wobz.analyze()
                 self._epochs.append(new_epoch)
                 logger.info(f" => optimised as {len(self._epochs[-1])} display sets.")
             gc.collect()

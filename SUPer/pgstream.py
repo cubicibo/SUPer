@@ -162,6 +162,7 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
     warnings = 0
     pal_id = 0
     cumulated_ods_size = 0
+    prev_pcs_id = 0xFFFF
 
     coded_bw_ra_pts = [-1] * round(fps)
     coded_bw_ra = [0] * round(fps)
@@ -172,7 +173,6 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
         to_tc = lambda pts: TC.s2tc(pts, fps)
 
     for ke, epoch in enumerate(epochs):
-        prev_pcs_id = -1
         windows = {}
         window_area = {}
         objects_sizes = {}
@@ -202,9 +202,9 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
 
                 if isinstance(seg, PCS):
                     pal_id = seg.pal_id
-                    compliant &= (ks == 0) #PCS is not first in DisplaySet
-                    if seg.composition_n == prev_pcs_id:
-                        logger.warning(f"Displayset does not increment composition number. Composition will be ignored by HW decoder at {to_tc(seg.pts)}.")
+                    compliant &= (ks == 0) #PCS is first in DisplaySet
+                    if seg.composition_n != (prev_pcs_id + 1) & 0xFFFF and seg.composition_state != PCS.CompositionState.EPOCH_START:
+                        logger.warning(f"Displayset does not increment composition number normally at {to_tc(seg.pts)}.")
                     prev_pcs_id = seg.composition_n
                     if int(seg.composition_state) != 0:
                         # On acquisition, the object buffer is flushed

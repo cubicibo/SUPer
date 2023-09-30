@@ -199,6 +199,7 @@ class WOBSAnalyzer:
         self.bdn = bdn
         self.kwargs = kwargs
         self.buffer = PGObjectBuffer()
+        self.pcs_id = kwargs.pop('pcs_id', 0)
 
     def mask_event(self, window, event) -> Optional[npt.NDArray[np.uint8]]:
         if event is not None:
@@ -612,7 +613,7 @@ class WOBSAnalyzer:
         i = 0
         double_buffering = [0]*2
         ods_reg = [0]*4
-        pcs_id = 0
+        pcs_id = self.pcs_id
         c_pts = 0
         last_cobjs = []
         last_palette_id = -1
@@ -795,7 +796,7 @@ class WOBSAnalyzer:
         if perform_wds_end:
             displaysets.append(final_ds)
             final_ds = None
-        return Epoch(displaysets), final_ds
+        return Epoch(displaysets), final_ds, pcs_id
     ####
 
     def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows: list[Box]):
