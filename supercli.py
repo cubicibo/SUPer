@@ -97,7 +97,7 @@ if __name__ == '__main__':
         logger.warning("Max bitrate is beyond total BDAV video limits.")
     elif 10 < args.max_kbps < 500:
         logger.warning("Max bitrate is low. Buffer underflow errors may be spammed.")
-    elif args.max_kbps < 10:
+    elif args.max_kbps < 10 and args.max_kbps != 0:
         exit_msg("Meaningless max bitrate, aborting.")
 
     if args.log_to_file < 0:

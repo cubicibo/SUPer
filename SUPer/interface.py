@@ -39,6 +39,7 @@ class BDNRender:
         self.kwargs = kwargs
 
         self._epochs = []
+        self._first_pts = 0
         self.setup()
 
     def setup(self) -> None:
@@ -76,6 +77,8 @@ class BDNRender:
             bdn.fps = round(bdn.fps)
             self.kwargs['adjust_dropframe'] = True
             logger.info(f"NDF NTSC detected: scaling all timestamps by 1.001.")
+
+        self._first_pts = max(TC.tc2s(bdn.events[0].tc_in, bdn.fps) - (1/3)/PGDecoder.FREQ, 0) * (1.001 if self.kwargs['adjust_dropframe'] else 1.0)
 
         logger.info("Finding epochs...")
 
@@ -198,7 +201,10 @@ class BDNRender:
             if is_pes:
                 logger.info(f"Writing output file {fp_pes}")
 
-                writer = EsMuiStream.segment_writer(fp_pes)
+                decode_duration = (self._epochs[0][0].pcs.tpts - self._epochs[0][0].pcs.tdts) & ((1<<32) - 1)
+                decode_duration /= PGDecoder.FREQ
+
+                writer = EsMuiStream.segment_writer(fp_pes, first_dts=self._first_pts - decode_duration)
                 next(writer) #init writer
                 for epoch in self._epochs:
                     for ds in epoch:

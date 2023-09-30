@@ -218,7 +218,7 @@ if __name__ == '__main__':
 
     lib_paths = init_extra_libs()
     opts_quant = Quantizer.get_options()
-    opts_log = {'Disabled':  0, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30}
+    opts_log = {'Disabled':  0, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30, 'Debug': 10}
 
     pos_v = 0
 
@@ -301,8 +301,8 @@ if __name__ == '__main__':
     max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="16000", align='left')
     max_kbps_txt = Text(bmax_kbps, "Max bitrate test [Kbps]: ", grid=[0,0], align='left', size=11)
     Hovertip(bmax_kbps.tk, "Test the stream against the given bitrate. This value does not shape the output.\n"\
-                           "Change the quantizer and compression value to effectively lower the bitrate.\n"\
-                           "Set to zero to disable the test. Missused low values can spam thousands of errors.")
+                           "Change the quantizer, compression and acquisition value to lower the bitrate.\n"\
+                           "Set to zero to disable the test. Unrealistic values will lead to a spam of errors.")
 
     blog = Box(app, layout="grid", grid=[1, pos_v], align='left')
     Text(blog, "Log to file: ", grid=[0,0], align='left', size=11)
