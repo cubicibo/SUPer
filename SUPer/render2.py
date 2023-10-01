@@ -225,10 +225,13 @@ class WOBSAnalyzer:
         woba = []
         pm = PaletteManager()
 
+        #Adjust slightly SSIM threshold depending of res
+        ssim_score = 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480)
+
         #Init
         gens, windows = [], []
         for k, swob in enumerate(self.wobs):
-            woba.append(WOBAnalyzer(swob))
+            woba.append(WOBAnalyzer(swob, ssim_threshold=ssim_score))
             windows.append(swob.get_window())
             gens.append(woba[k].analyze())
             next(gens[-1])
@@ -236,6 +239,8 @@ class WOBSAnalyzer:
         #get all windowed bitmaps
         pgobjs = [[] for k in range(len(windows))]
         for event in chain(self.events, [None]*2):
+            if event is not None:
+                logger.hdebug(f"Event TCin={event.tc_in}")
             for wid, (window, gen) in enumerate(zip(windows, gens)):
                 try:
                     pgobj = gen.send(self.mask_event(window,  event))
@@ -928,7 +933,7 @@ class WOBAnalyzer:
         #if the images have the exact same alpha channel, this measure is equal to 1
         overlap = (inters_area > 0) * (inters_area + np.sum(inters_inv))/inters.size
 
-        if overlap > 0 and overlap < self.overlap_threshold:
+        if overlap > 0:
             #score = compare_ssim(bitmap.convert('L'), current.convert('L'))
             #Broadcast transparency mask of current on all channels of ref
             mask = 255*(np.logical_and((a_bitmap[:, :, 3] > 0), (a_current[:, :, 3] > 0)).astype(np.uint8))
@@ -936,11 +941,7 @@ class WOBAnalyzer:
             cross_percentage = np.sum(mask > 0)/mask.size
         else:
             cross_percentage = 1.0
-            if overlap > (1-self.overlap_threshold) and overlap < self.overlap_threshold:
-                #Perfect overlap or zero overlap, the current bitmap fits perfectly on the previous
-                score = compare_ssim(bitmap.convert('L'), current.convert('L'))
-            else:
-                score = 1.0
+            score = 1.0
         return score, cross_percentage
 
     @staticmethod
