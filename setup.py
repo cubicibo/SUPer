@@ -37,7 +37,7 @@ setup(
     name=NAME,
     version=meta['__version__'],
     author=meta['__author__'],
-    description='Blu-Ray SUP editor and optimiser.',
+    description='Blu-ray SUP editor and optimiser.',
     long_description=long_description,
     long_description_content_type='text/markdown',
     packages=[NAME,],
@@ -51,6 +51,6 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Operating System :: OS Independent',
     ],
-    python_requires='>=3.9',
+    python_requires='>=3.10',
     install_requires=install_requires,
 )

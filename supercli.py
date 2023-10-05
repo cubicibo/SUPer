@@ -129,16 +129,25 @@ if __name__ == '__main__':
         config_file = Path('config.ini')
         exepath = None
         if config_file.exists():
+            import configparser
+            def get_value_key(config, key: str):
+                try: return config[key]
+                except KeyError: return None
+            config = configparser.ConfigParser()
+            config.read(config_file)
             try:
-                import configparser
-                config = configparser.ConfigParser()
-                config.read(config_file)
-                exepath = get_value_key(config['PILIQ'], 'quantizer')
-                if not os.path.isabs(exepath):
-                    exepath = str(CWD.joinpath(exepath))
+                piq_sect = config['PILIQ']
             except:
                 ...
-        if Quantizer.init_piliq(exepath):
+            else:
+                exepath = get_value_key(piq_sect, 'quantizer')
+                if exepath is not None and not os.path.isabs(exepath):
+                    CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
+                    exepath = str(CWD.joinpath(exepath))
+                piq_quality = get_value_key(piq_sect, 'quality')
+                if piq_quality is not None:
+                    piq_quality = int(piq_quality)
+        if Quantizer.init_piliq(exepath, piq_quality):
             logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
         else:
             exit_msg("Could not initialise advanced image quantizer, aborting.", True)

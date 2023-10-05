@@ -240,7 +240,6 @@ class BaseEvent:
         if self._custom:
             return
 
-        self._open = True
         if fp is None:
             self._img = Image.open(self.gfxfile).convert('RGBA')
         else:
@@ -250,11 +249,9 @@ class BaseEvent:
         self._height = self._img.height
 
     def unload(self) -> None:
-        if not self._custom:
-            self._open = False
-            if self._img is not None:
-                self._img.close()
-                self._img = None
+        if not self._custom and self._img is not None:
+            self._img.close()
+            self._img = None
 
     @property
     def tc_in(self) -> str:

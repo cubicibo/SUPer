@@ -26,6 +26,7 @@ import sys
 import time
 import signal
 from pathlib import Path
+from typing import Optional
 
 from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
@@ -187,26 +188,31 @@ def from_bdnxml(queue: ...) -> None:
     logger.info("Finished, exiting...")
 
 def init_extra_libs():
-    def get_value_key(config, key: str):
-        try:
-            return config[key]
-        except KeyError:
-            return None
+    def get_value_key(config, key: str) -> Optional[...]:
+        try: return config[key]
+        except KeyError: return None
     ####
 
-    try:
+    CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
+    ini_file = CWD.joinpath('config.ini')
+
+    if ini_file.exists():
+        exepath, piq_quality = None, None
         import configparser
         config = configparser.ConfigParser()
-        CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
-        config.read(CWD.joinpath('config.ini'))
-        exepath = get_value_key(config['PILIQ'], 'quantizer')
-        if not os.path.isabs(exepath):
-            exepath = str(CWD.joinpath(exepath))
-    except:
-        exepath = None
-    if Quantizer.init_piliq(exepath):
-        logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
-        return {'quant': exepath}
+        try:
+            config.read(ini_file)
+            piq_params = config['PILIQ']
+        except:
+            ...
+        else:
+            if (exepath := get_value_key(piq_params, 'quantizer')) is not None and not os.path.isabs(exepath):
+                exepath = str(CWD.joinpath(exepath))
+            if (piq_quality := get_value_key(piq_params, 'quality')) is not None:
+                piq_quality = int(piq_quality)
+        if Quantizer.init_piliq(exepath):
+            logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
+            return {'quant': (exepath, piq_quality)}
     return {}
 
 if __name__ == '__main__':

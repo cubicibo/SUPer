@@ -74,7 +74,7 @@ class Quantizer:
         #cls._opts[cls.Libs.PILLOW]    = ('PIL', '(average, fast)')
 
     @classmethod
-    def init_piliq(cls, fpath: Optional[Union[str, 'Path']] = None) -> bool:
+    def init_piliq(cls, fpath: Optional[Union[str, 'Path']] = None, quality: Optional[int] = None) -> bool:
         try:
             piliq = PILIQ(fpath)
         except (FileNotFoundError, AssertionError):
@@ -88,9 +88,13 @@ class Quantizer:
                 piliq = None
                 logger.debug("Failed to load advanced quantizer with auto look-up.")
         cls._piliq = piliq
-        if cls._piliq is not None:
+        if cls._piliq is not None and cls._piliq.is_ready():
+            #Configure PILIQ
             cls._piliq.return_pil = False
-        return cls._piliq is not None and cls._piliq.is_ready()
+            if quality is not None:
+                cls._piliq.set_quality(quality)
+            return True
+        return False
 
     @classmethod
     def get_piliq(cls) -> Optional[PILIQ]:
