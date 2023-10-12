@@ -45,7 +45,7 @@ class BDNRender:
     def setup(self) -> None:
         libs_params = self.kwargs.pop('libs_path', {})
         if libs_params:
-            logger.info("Library parameters: {libs_params}")
+            logger.info(f"Library parameters: {libs_params}")
             if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) == Quantizer.Libs.PILIQ:
                 if (piq_params := libs_params.get('quant', None)) is not None:
                     if not Quantizer.init_piliq(*piq_params):

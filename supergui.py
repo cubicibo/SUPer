@@ -26,7 +26,7 @@ import sys
 import time
 import signal
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
@@ -188,7 +188,7 @@ def from_bdnxml(queue: ...) -> None:
     logger.info("Finished, exiting...")
 
 def init_extra_libs():
-    def get_value_key(config, key: str) -> Optional[...]:
+    def get_value_key(config, key: str) -> Optional[Any]:
         try: return config[key]
         except KeyError: return None
     ####
