@@ -1,27 +1,25 @@
 # SUPer
 SUPer is a tool to convert BDN XML + PNG assets to Blu-ray SUP subtitles.
-Unlike any other SUP conversion tools, SUPer analyzes and re-renders the subtitles graphics internally to make full use of the the PGS format. Caption files generated with SUPer can feature softsub karaokes, masking, fades, basic moves, and are guaranteed to work nicely on your favorite Blu-ray player.
+Unlike existing free and professionnal SUP converters, SUPer analyzes and re-renders the caption graphics internally to fully exploit the PGS format. Caption files generated with SUPer can feature softsub karaokes, masking, fades, basic moves, and are guaranteed to work nicely on your favorite Blu-ray player.
 
-Two output formats are supported: SUP and PES+MUI. The later is commonly used in authoring softwares like Scenarist BD and DVDLogic suites.
+Two output formats are supported: SUP and PES+MUI. The later is commonly used in disc authoring softwares like Scenarist or DVDLogic suites.
 
 ## Usage
-SUPer is distributed as stand-alone executables (GUI) or as an installable Python package with gui/cli scripts. SUPer expects as an input a BDN XML file with PNG assets in the same folder.
+SUPer is distributed as stand-alone executable with a GUI, or as an installable Python package with gui/cli user scripts.
 
-The common usage is the following:
+To convert ASSA files to SUP, one must:
 - Generate a BDN XML+PNG assets using [ass2bdnxml](https://github.com/cubicibo/ass2bdnxml) or avs2bdnxml.
-- Use SUPer to convert the assets to a Blu-ray SUP or a PES+MUI project; load the BDN.XML file, set an output file and format, and have an espresso while the fan spins.
+- Use SUPer to convert the assets to a Blu-ray SUP or a PES+MUI project; load the BDN.XML file, set an output file and format, and optionally have an espresso while the fan spins.
 
 ### GUI client
-Both the standalone executable and the python script `python3 supergui.py` will display the graphical user interface. The window lets you choose your input BDNXML, the output file name and some options to tune the quality and shape the data stream. The GUI always executes aside of a command-line window providing progress and logging information.
+Both the standalone executable and `python3 supergui.py` will display the graphical user interface. The window let one select the input BDNXML, the output file name and tune some options that affect the quality and the stream structure. The GUI always executes aside of a command-line window providing progress and logging information.
 
 - Select the input BDN XML file. The file must resides in the same directory as the PNG assets.
 - Select the desired output file and extension using the Windows explorer.
-- "Make it SUPer" starts the conversion process. The actual conversion progress is printed in the command line window.
+- "Make it SUPer" starts the conversion process. The actual progress is printed in the command line window.
 
 #### GUI config.ini
-The config.ini file can be used to specify the relative or absolute path to a quantizer binary (either pngquant[.exe] or libimagequant[.dll, .so]). If the program is in PATH, the name is sufficient. An external quantizer will offer higher quality than the common Python ones (Pillow or a K-Means clustering) and be, in general, faster.
-
-On UNIX systems, pngquant is fairly easily to get in your PATH via brew, apt-get and so on.
+The config.ini file can be used to specify the relative or absolute path to a quantizer binary (either pngquant[.exe] or libimagequant[.dll, .so]). If the program is in PATH, the name is sufficient. An external quantizer will offer higher quality than the internal one. 
 
 ### Command line client
 `supercli.py` is essentially the command line equivalent to `supergui.py`.
@@ -48,7 +46,7 @@ On UNIX systems, pngquant is fairly easily to get in your PATH via brew, apt-get
 ```
 - Image quantization mode 3 ("PILIQ") is either libimagequant or pngquant, whichever specified in config.ini or available in your system.
 - The output file extension is used to infer the desired output type (SUP or PES).
-- If `--allow-normal`  is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Scenarist BD does not implement normal case object redefinition and may destroy the stream. You do not need to do those operation to mux the assets in any case.
+- If `--allow-normal`  is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Scenarist BD does not implement normal case object redefinition and may destroy the stream. However, building or rebuilding are not mendatory to mux the project.
 - `--max-kbps` does not shape the stream, it is just a limit to compare it to. Only `--compression` and `--qmode` may be used to reduce the filesize.
 
 Additionally, one flag is available to generate SUPs that are not subject to decoding constraints. This flag is unmaintained code and its operability not guaranteed.
@@ -63,20 +61,19 @@ Where SUPer is the actual base directory. You should then be able to execute `py
 
 ## Misc
 ### GUI/CLI options
-Here are some additional info on some of the options available, especially those that shape the datastream and affect the output
+Here are some additional informations on selected options, especially those that shape the datastream and affect the output:
 - Compression rate: minimum time margin (in %) between two events to perform an acquisition.
 - Acquisition rate: lower values reduces the number of acquisition and leads to longer drought
 - Quantization: image quantizer to use. PIL+K-Means is low quality but fast. K-Means and pngquant/libimagequant are high quality but slower.
-- Allow normal case object redefinition: When two objects are on screen, one object can be updated while the other is kept. This can greatly helps animations.
-- Subsampled BDN.XML: Use a 25 or 29.97 fps BDN.XML and generate the SUP as if it was for 50 or 59.94 fps.
-- Conservative PTS/DTS strategy: doubles the graphic plane access time.
+- Allow normal case object redefinition: whenever possible, update a single object out of two. The requirements are hard to meet so this option may have no effect. Also, objects gets a 50/50 palette split whenever this happen.
+- Subsampled BDN XML: Use a 25 or 29.97 fps BDN and generate the SUP as if it was for a 50 or 59.94 fps transport stream.
+- Conservative PTS/DTS strategy: doubles the graphic plane access time whenever an object is defined.
 
 ### TL;DR Options
-First of all, leave the acquisition rate untouched at 100%, unless you really want to compress the PGS.
+First of all, one should leave the acquisition rate untouched at 100%, unless the stream is highly compressible (i.e includes solely a karaoke).
 
-- You don't trust SUPer: Use a low compression rate (< 50%), use the conservative PTS/DTS strategy.
-You may then import the resulting PES+MUI in Scenarist BD and use the Encode->Build/Rebuild functionality. Scenarist BD will re-encode the SUP according to their compliancy rules and check nicely.
-- You trust SUPer: Do not use the conservative PTS/DTS strategy, set to allow normal case object redefinition, and use an appropriate compression rate (50-70% typ.). Then, in Scenarist BD, do <b>NOT</b> Encode->Build/Rebuild the project. You can still mux your project without re-encoding the files. This is mandatory because Scenarist BD does not know how to handle normal case object redefinition.
+- No faith in SUPer: Use a low compression rate (< 50%), use the conservative PTS/DTS strategy. Import the resulting PES+MUI in Scenarist BD and use the Encode->Rebuild functionality. Scenarist BD will re-write the SUP according to their logic without compromising integrity.
+- Have faith in SUPer: Do not use the conservative PTS/DTS strategy, set to allow normal case object redefinition, and use an appropriate compression rate (50-85% typ.). Then, in Scenarist BD, mux your project without ever attempting to Encode->Build/Rebuild the PES project.
 
 ### How SUPer works
 SUPer implements a conversion engine that uses the entirety of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities that includes palette updates, object redefinition, object cropping and events buffering.
