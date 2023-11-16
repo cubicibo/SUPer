@@ -295,7 +295,7 @@ class Optimise:
                 transparent_id = int(transparent_id[0])
                 tsp_mask = (bitmap == transparent_id)
                 bitmap[bitmap < transparent_id] += first_index
-                bitmap[bitmap > transparent_id] += first_index - 1
+                bitmap[bitmap > transparent_id] += (first_index - 1)
                 bitmap[tsp_mask] = 0xFF
 
             cluts = np.delete(cluts, [transparent_id], axis=0)

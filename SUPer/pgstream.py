@@ -267,9 +267,10 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
                         else:
                             logger.warning("ODS at {to_tc(seg.pts)} has too long RLE line(s). Oldest decoders may have issues.")
                             warnings += 1
+                        
                         for pe in np.unique(PGraphics.decode_rle(ods_data, width=ods_width, height=ods_height)):
                             if pe != 0xFF and pe not in pals[pal_id].palette:
-                                logger.warning(f"ODS at {to_tc(seg.pts)} uses undefined palette entries. Some pixels will not display.")
+                                logger.warning(f"ODS at {to_tc(seg.pts)} uses undefined palette entries (first: {pe:02X}). Some pixels will not display.")
                                 warnings += 1
                                 break
                         cumulated_ods_size = 0
@@ -296,7 +297,7 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
                 last_dbbw = decoded_buffer_pts
                 coded_buffer_bandwidth, decoded_buffer_bandwidth = 0, 0
 
-            # This is probably the hardest constraint to meet: ts_packet are read at Rx=16Mbps
+            # This is an arbitrary constraint: ts_packet are read at Rx=16Mbps
             if coded_buffer_bandwidth > (max_rate := PGDecoder.RX) and not has_dts:
                 if coded_buffer_bandwidth/max_rate >= 2:
                     logger.warning(f"High instantaneous coded bandwidth at {to_tc(seg.pts)} (not critical - fair warning)")

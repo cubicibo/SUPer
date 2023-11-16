@@ -457,7 +457,7 @@ class WOBSAnalyzer:
                     oid = wid + double_buffering[wid]
                     double_buffering[wid] = abs(2 - double_buffering[wid])
                     #get bitmap
-                    window_bitmap = np.zeros((windows[wid].dy, windows[wid].dx), np.uint8)
+                    window_bitmap = 0xFF*np.ones((windows[wid].dy, windows[wid].dx), np.uint8)
                     nx, ny = coords
                     window_bitmap[pgo.box.slice] = bitmap[ny:ny+pgo.box.dy, nx:nx+pgo.box.dx]
 
@@ -511,9 +511,9 @@ class WOBSAnalyzer:
                 cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
                                                           cropped=True, **cparams))
 
-                n_colors = 127 if has_two_objs else 254
+                n_colors = 128 if has_two_objs else 255
                 clut_offset = 1 + (127*(wid == 1 and has_two_objs))
-                wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors+1, clut_offset, **self.kwargs)
+                wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors, clut_offset, **self.kwargs)
 
                 pals.append(wd_pal)
                 ods_data = PGraphics.encode_rle(wd_bitmap)
