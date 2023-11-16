@@ -259,6 +259,54 @@ class Optimise:
         return bitmap, np.asarray(list(seq_sorted.values()), dtype=np.uint8)[:colors]
 
 
+    @classmethod
+    def solve_and_remap(cls, events: list[Image.Image], colors: int = 255, first_index: int = 1, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+        """
+        This function solves the input event sequence and perform ID remapping
+        to optimise the distribution of colour indices wrt PGS constraints
+        :param events: list of PIL images to optimise.
+        :param colors: max number of colours to use.
+        :param first_index: CLUT offset for given bitmap, must be a positive number.
+        :return: bitmap and chain of palettes.
+        """
+        assert 0 < first_index + colors <= 256, "8-bit ID out of range."
+        assert first_index > 0, "Usage of palette ID zero."
+
+        bitmap, cluts = cls.solve_sequence_fast(events, colors, **kwargs)
+        transparent_id = np.nonzero(np.all(cluts[:,:,-1] == 0, axis=1))[0]
+
+        kwargs_diff = {'matrix': kwargs.get('bt_colorspace', 'bt709')}
+
+        if 0 == len(transparent_id):
+            # No transparency at all in this bitmap, reduce colour count by one
+            # and do not perform any remapping (useless)
+            logger.ldebug("Too many colours used, lowering count.")
+            bitmap, cluts = cls.solve_sequence_fast(events, colors-1, **kwargs)
+            palettes = cls.diff_cluts(cluts, **kwargs_diff)
+            bitmap += first_index
+        else:
+            logger.ldebug("Remapping fully transparent ID {transparent_id:02X} to FF.")
+            # Transparent ID is the last one and will be mapped to 0xFF by the first_index shift.
+            if (0xFF - first_index) in transparent_id:
+                transparent_id = 0xFF - first_index
+                bitmap += first_index
+            else:
+                #Shift only IDs
+                transparent_id = int(transparent_id[0])
+                tsp_mask = (bitmap == transparent_id)
+                bitmap[bitmap < transparent_id] += first_index
+                bitmap[bitmap > transparent_id] += first_index - 1
+                bitmap[tsp_mask] = 0xFF
+
+            cluts = np.delete(cluts, [transparent_id], axis=0)
+            palettes = cls.diff_cluts(cluts, **kwargs_diff)
+
+        for pal in palettes:
+            pal.offset(first_index)
+        assert len(palettes[0]) < colors
+        return bitmap, palettes
+    ####
+
     @staticmethod
     def diff_cluts(cluts: npt.NDArray[np.uint8], to_ycbcr: bool = True, /, *,
                    matrix: str = 'bt709', s_range: str = 'limited') -> list[Palette]:

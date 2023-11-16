@@ -447,18 +447,11 @@ class WOBSAnalyzer:
                     coords += offset
                 imgs_chain.append(a_img)
             ####
-            #We have the "packed" object, let's optimise it
-            # 254 colors because 0x00 encoding is annoying and 0xFF is reserved for Scenarist
-            bitmap, palettes = Optimise.solve_sequence_fast(imgs_chain, 254, **self.kwargs)
-            pals.append(Optimise.diff_cluts(palettes, matrix=self.kwargs.get('bt_colorspace', 'bt709')))
-
-            #Discard palette entry 0
-            for pal in pals[-1]:
-                pal.offset(1)
-            bitmap += 1
+            #We have the "packed" object, let's optimise it, use 255 colours if there's transparency else 254
+            bitmap, palettes = Optimise.solve_and_remap(imgs_chain, 255, 1, **self.kwargs)
+            pals.append(palettes)
 
             coords = np.zeros((2,), np.int32)
-
             for wid, pgo in pgobs_items:
                 if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f])):
                     oid = wid + double_buffering[wid]
@@ -497,7 +490,6 @@ class WOBSAnalyzer:
                             assert isinstance(normal_case_refresh, list)
                     if optional_skip:
                         continue
-                n_colors = 127 if has_two_objs else 254
 
                 if isinstance(normal_case_refresh, list) and not normal_case_refresh[wid]:
                     assert sum(normal_case_refresh) == 1
@@ -519,24 +511,17 @@ class WOBSAnalyzer:
                 cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
                                                           cropped=True, **cparams))
 
-                wd_bitmap, wd_pal = Optimise.solve_sequence_fast(imgs_chain, n_colors, **self.kwargs)
-                wd_bitmap += 1 + (127*(wid == 1 and has_two_objs))
+                n_colors = 127 if has_two_objs else 254
+                clut_offset = 1 + (127*(wid == 1 and has_two_objs))
+                wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors+1, clut_offset, **self.kwargs)
 
-                pals.append(Optimise.diff_cluts(wd_pal, matrix=self.kwargs.get('bt_colorspace', 'bt709')))
+                pals.append(wd_pal)
                 ods_data = PGraphics.encode_rle(wd_bitmap)
-
-                if wid == 1 and has_two_objs:
-                    assert len(pals) == 2
-                    for p in pals[-1]:
-                        p.offset(128)
-                elif wid == 0 or not has_two_objs:
-                    for p in pals[-1]:
-                        p.offset(1)
 
                 #On normal case, we generate one chain of palette update and
                 #add in a screen wipe if necessary. This is not used if the object is changed.
                 if normal_case_refresh and len(pals[-1]) < k-i:
-                    mibm, mabm = np.min(wd_bitmap), np.max(wd_bitmap)
+                    mibm, mabm = min(wd_pal[0].palette), max(wd_pal[0].palette)
                     pals[-1].append(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(mibm, mabm+1)}))
                     pals[-1].extend([Palette()] * ((k-i)-len(pals[-1])))
 
@@ -562,9 +547,6 @@ class WOBSAnalyzer:
                 cobjs_cropped = sorted(cobjs_cropped, key=f_is_first_cobj)
                 cobjs = sorted(cobjs, key=f_is_first_cobj)
 
-
-        #Set the 0x00 entry once. It should never change during the epoch anyway.
-        pals[0][0][0] = PaletteEntry(16, 128, 128, 0)
         pal = pals[0][0]
         if has_two_objs:
             pal |= pals[1][0]
@@ -732,10 +714,10 @@ class WOBSAnalyzer:
                         durs[z] = (durs[z][0], 0)
 
                     if flags[z] == 1:
-                        logger.debug(f"NORMAL CASE: PTS={self.events[z].tc_in}={c_pts}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
                         normal_case_refresh = nodes[z].new_mask
                         r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), windows, double_buffering, has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
                         cobjs, n_pals, o_ods, new_pal = r
+                        logger.debug(f"NORMAL CASE: PTS={self.events[z].tc_in}={c_pts:.03f}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
                         pal |= new_pal
                         for nz, (new_p1, new_p2) in enumerate(zip_longest(n_pals[0], n_pals[1], fillvalue=Palette()), z):
                             pals[0][nz-i] |= new_p1

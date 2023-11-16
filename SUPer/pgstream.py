@@ -268,8 +268,8 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
                             logger.warning("ODS at {to_tc(seg.pts)} has too long RLE line(s). Oldest decoders may have issues.")
                             warnings += 1
                         for pe in np.unique(PGraphics.decode_rle(ods_data, width=ods_width, height=ods_height)):
-                            if pe not in pals[pal_id].palette:
-                                logger.warning("ODS at {to_tc(seg.pts)} uses undefined palette entries. Some pixels will not display.")
+                            if pe != 0xFF and pe not in pals[pal_id].palette:
+                                logger.warning(f"ODS at {to_tc(seg.pts)} uses undefined palette entries. Some pixels will not display.")
                                 warnings += 1
                                 break
                         cumulated_ods_size = 0

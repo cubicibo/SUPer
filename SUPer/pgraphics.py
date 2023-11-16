@@ -322,7 +322,10 @@ class PGraphics:
                 palette = palette.to_palette()
             elif isinstance(palette, dict):
                 palette = Palette(palette)
+
             if isinstance(palette, Palette):
+                if palette.get(255, None) is None:
+                    palette[255] = PaletteEntry(16, 128, 128, 0)
                 palette = palette.get_rgba_array(keep_indexes=True)
         try:
             from matplotlib import pyplot as plt
