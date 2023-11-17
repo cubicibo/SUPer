@@ -182,6 +182,11 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
         buffer = PGObjectBuffer()
 
         compliant &= bool(epoch[0].pcs.composition_state & epoch[0].pcs.CompositionState.EPOCH_START)
+        
+        if epoch[0].wds:
+            for wd in epoch[0].wds.windows:
+                if wd.h_pos + wd.width > epoch[0].pcs.width or wd.v_pos + wd.height > epoch[0].pcs.height:
+                    logger.error(f"Window {wd.window_id} out of screen in epoch starting at {to_tc(epoch[0].pcs.pts)}.")
 
         for kd, ds in enumerate(epoch.ds):
             compliant &= test_diplayset(ds)
@@ -224,7 +229,8 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
                                 logger.error(f"Window change mid-epoch at {to_tc(current_pts)}, this is prohibited.")
                                 compliant = False
                     for w in seg.windows:
-                        window_area[w.window_id] = w.width*w.height
+                        window_area[w.window_id] = w.width*w.height                        
+                        
                 elif isinstance(seg, PDS):
                     if (pds_vn[seg.p_id] + 1) & 0xFF != seg.p_vn:
                         logger.warning(f"Palette version not incremented by one, may be discarded by decoder. Palette {seg.p_id} at DTS {to_tc(seg.pts)}.")
@@ -276,6 +282,35 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
                         cumulated_ods_size = 0
                 elif isinstance(seg, ENDS):
                     compliant &= ks == len(ds)-1 # END segment is not last or not alone
+                    
+                    # Control the spatial values of the composition w.r.t. object
+                    if ds.wds:
+                        for cobj in ds.pcs.cobjects:
+                            obj_dims = buffer.get(cobj.o_id)
+                            if obj_dims == None:
+                                logger.error(f"Trying to use object {cobj.o_id} not stored in buffer at {to_tc(current_pts)}.")
+                                compliant = False
+                            else:
+                                h, w = obj_dims
+                                if cobj.cropped:
+                                    if h < cobj.c_h or w < cobj.c_w or h < cobj.c_h + cobj.vc_pos or w < cobj.c_w + cobj.hc_pos:
+                                        logger.error(f"Cropped dimension exceeed object {cobj.o_id} size at {to_tc(current_pts)}.")
+                                        compliant = False
+                                    else:
+                                        w, h = cobj.c_w, cobj.c_h
+                                        if w == 0 or h == 0:
+                                            logger.warning("Zero cropping width or height at {to_tc(current_pts)}.")
+                                            warnings += 1
+                                ####if cropped
+                            wd = ds.wds.windows[cobj.window_id]
+                            if cobj.h_pos < wd.h_pos or cobj.h_pos + w > wd.h_pos + wd.width or\
+                               cobj.v_pos < wd.v_pos or cobj.v_pos + h > wd.v_pos + wd.height:
+                                logger.error(f"Composition object {cobj.o_id} misplaced outside of window {wd.window_id} at {to_tc(current_pts)}.")
+                                compliant = False
+                        ####for cobj
+                    ####if wds
+                ####elif END
+                        
                 ####elif
             ####for
             if ds.pcs.pal_flag or ds.wds is not None:
