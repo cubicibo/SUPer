@@ -26,7 +26,7 @@ from itertools import starmap
 
 from .palette import Palette, PaletteEntry
 from .segments import WDS, ODS, DisplaySet, PDS
-from .utils import Shape
+from .utils import Shape, Box
 
 from dataclasses import dataclass
 #%%
@@ -427,35 +427,28 @@ class PGDecoder:
             gp_duration += cls.copy_gp_duration(c_area)
         return gp_duration
 ####
-#%%
 
+#%%
 @dataclass
 class PGObject:
     gfx: npt.NDArray[np.uint8]
-    box: Type['Box']
+    box: Box
     mask: list[bool]
     f:  int
 
     def __post_init__(self) -> None:
-        self._effects = {}
+        #gfx may have empty bitmaps trailing
+        assert len(self.mask) <= len(self.gfx)
+        assert self.box.area > 0
 
     @property
     def area(self) -> int:
         return self.gfx.shape[1]*self.gfx.shape[2]
 
-    @property
-    def still_bitmap(self) -> npt.NDArray[bool]:
-        """
-        Return a mask that gives timing when a bitmap is still and
-        only requires alpha updates (or none at all)
-        """
-        mask = np.zeros((len(self.mask),), dtype=np.bool_)
-        for k, eff in enumerate(self.effects.get('fade', [])):
-            #Fade effect defines alpha-ONLY effect applied on a given bitmap
-            # so if alpha does not vary, it IS classified as a fade effect
-            # color effect are special as they are encoded within the bitmap
-            mask[eff.t:eff.t+eff.dt] = True
-        return len(mask) == sum(mask) + np.sum(np.asarray(self.mask, np.bool_) == 0)
+    def get_bbox_at(self, frame: int) -> Optional[Box]:
+        if self.is_active(frame):
+            return self.__class__._bbox(self.gfx[frame-self.f])
+        return None
 
     def is_active(self, frame) -> bool:
         return frame in range(self.f, self.f+len(self.mask))
@@ -464,7 +457,14 @@ class PGObject:
         if self.is_active(frame):
             return self.mask[frame-self.f]
         return False
+
+    @staticmethod
+    def _bbox(img: npt.NDArray[np.uint8]) -> Box:
+        rmin, rmax = np.where(np.any(img, axis=1))[0][[0, -1]]
+        cmin, cmax = np.where(np.any(img, axis=0))[0][[0, -1]]
+        return Box.from_coords(cmin, rmin, cmax+1, rmax+1)
 ####
+
 #%%
 class PGObjectBuffer:
     """

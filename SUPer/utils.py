@@ -148,6 +148,12 @@ class Box:
     @classmethod
     def from_coords(cls, x1: int, y1: int, x2 : int, y2: int) -> 'Box':
         return cls(min(y1, y2), abs(y2-y1), min(x1, x2), abs(x2-x1))
+
+    def __eq__(self, other: 'Box') -> bool:
+        if isinstance(other, __class__):
+            return self.coords == other.coords
+        return NotImplemented
+
 ####
 
 #%%
