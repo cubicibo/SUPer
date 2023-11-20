@@ -1,6 +1,21 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Fri Sep 22 14:01:06 2023
+Copyright (C) 2023 cibo
+This file is part of SUPer <https://github.com/cubicibo/SUPer>.
+
+SUPer is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+SUPer is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from typing import Type, Optional
@@ -267,7 +282,9 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
                             logger.warning(f"Object size >1 MiB at {to_tc(seg.pts)} is unsupported by oldest decoders. UHD BD will be OK.")
                             warnings += 1
                         try:
-                            next(filter(lambda x: len(x) >= ods_width + 16, PGraphics.get_rle_lines(ods_data, ods_width)))
+                            #Hypothesis: the graphic controller processes one RLE command (byte) per Rd tick
+                            # To avoid decode time > object write time, RLE line must be smaller or equal to width + marker.
+                            next(filter(lambda x: len(x) > ods_width + 2, PGraphics.get_rle_lines(ods_data, ods_width)))
                         except StopIteration:
                             ...
                         else:
