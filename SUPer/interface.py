@@ -24,9 +24,9 @@ from os import path
 
 from scenaristream import EsMuiStream
 
-from .utils import TimeConv as TC, LogFacility
+from .utils import TimeConv as TC, LogFacility, Box
 from .pgraphics import PGDecoder
-from .filestreams import BDNXML, SUPFile
+from .filestreams import BDNXML, SUPFile, filter_events
 from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate
 
@@ -132,10 +132,14 @@ class BDNRender:
 
             #Epoch generation (each subgroup will be its own epoch)
             for ksub, subgroup in enumerate(reversed(subgroups), 1):
-                logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)} event(s):")
+                r_subgroup = filter_events(subgroup)
+                logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(r_subgroup)} event(s):")
+                
+                subgroup = r_subgroup
+                box = Box.from_events(subgroup)
 
                 n_groups = 2 if (len(subgroup) > 1 or areas[-ksub]/screen_area > 0.1) else 1
-                wob, box = GroupingEngine(n_groups=n_groups, **kwargs).group(subgroup)
+                wob = GroupingEngine(box, n_groups=n_groups, **kwargs).group(subgroup)
                 if debug_enabled:
                     for w_id, wb in enumerate(wob):
                         wb = wb.get_window()

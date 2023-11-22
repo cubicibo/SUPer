@@ -47,10 +47,11 @@ logger = LogFacility.get_logger('SUPer')
 
 #%%
 class GroupingEngine:
-    def __init__(self, n_groups: int = 2, **kwargs) -> None:
+    def __init__(self, box: Box, n_groups: int = 2, **kwargs) -> None:
         if n_groups not in range(1, 3):
             raise AssertionError(f"GroupingEngine expects 1 or 2 groups, not '{n_groups}'.")
-
+        
+        self.box = box
         self.n_groups = n_groups
         self.candidates = kwargs.pop('candidates', 25)
 
@@ -60,7 +61,7 @@ class GroupingEngine:
 
         self.kwargs = kwargs
 
-    def coarse_grouping(self, group: list[Type[BaseEvent]]) -> tuple[RegionType, npt.NDArray[np.uint8], Box]:
+    def coarse_grouping(self, group: list[Type[BaseEvent]], box: Box) -> tuple[RegionType, npt.NDArray[np.uint8]]:
         # SD content should be blurred with lower coeffs. Remove constant.
         blur_mul = self.blur_mul
         blur_c = self.blur_c
@@ -68,7 +69,6 @@ class GroupingEngine:
             blur_c = self.kwargs.get('noblur_bc_c', 0.0)
             blur_mul = self.kwargs.get('noblur_bm_c', 1.0)
 
-        box = Box.from_events(group)
         (pxtl, pytl), (w, h) = box.posdim
         ratio_woh = abs(w/h)
         ratio_how = 1/ratio_woh if 1/ratio_woh <= 1 else 1
@@ -88,7 +88,7 @@ class GroupingEngine:
             alpha[alpha > 0] = 1
             gs_blur[0, slice_y, slice_x] |= (blurred > 0)
             gs_orig[0, slice_y, slice_x] |= (alpha > 0)
-        return regionprops(label(gs_blur)), gs_orig, box
+        return regionprops(label(gs_blur)), gs_orig
 
     @staticmethod
     def _get_combinations(n_regions: int) -> map:
@@ -127,14 +127,14 @@ class GroupingEngine:
                 output.append(windows[k])
         return output if len(output) else None
 
-    def group(self, subgroup: list[Type[BaseEvent]]) -> tuple[list[tuple[WindowOnBuffer]], Box]:
+    def group(self, subgroup: list[Type[BaseEvent]]) -> list[tuple[WindowOnBuffer]]:
         cls = self.__class__
 
         trials = 15
         wobs = None
         while trials > 0 and wobs is None:
             trials -= 1
-            regions, gs_origs, box = self.coarse_grouping(subgroup)
+            regions, gs_origs = self.coarse_grouping(subgroup, self.box)
 
             tbox = []
             for region in regions:
@@ -151,7 +151,7 @@ class GroupingEngine:
         if wobs is None:
             logger.warning("Grouping Engine giving up optimising layout. Using a single window.")
             wobs = [(WindowOnBuffer(tbox, duration=len(subgroup)),)]
-        return tuple(sorted(wobs[0], key=lambda x: x.srs[0].t)), box
+        return tuple(sorted(wobs[0], key=lambda x: x.srs[0].t))
 
     @staticmethod
     def crop_region(region: RegionType, gs_origs: npt.NDArray[np.uint8]) -> RegionType:

@@ -31,6 +31,13 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from typing import Union, Optional, Type, Any, Callable
 
+try:
+    from numba import njit, prange
+    from numba.typed import List
+    _has_numba = True
+except ModuleNotFoundError:
+    _has_numba = False
+
 from .segments import PGSegment, PCS, DisplaySet, Epoch
 from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Pos, Dim)
 
@@ -260,6 +267,10 @@ class BaseEvent:
     @property
     def tc_out(self) -> str:
         return self._outtc
+    
+    @tc_out.setter
+    def tc_out(self, tc_out: str) -> None:
+        self._outtc = tc_out
 ####
 
 def min_enclosing_square(group: list[BaseEvent]) -> npt.NDArray[np.uint8]:
@@ -327,7 +338,50 @@ class BDNXMLEvent(BaseEvent):
                     raise ValueError(f"Unknown fade type {e.attrib['FadeType']}")
             # Do you notice how the implementers of BDNXML thought that people would
             #  consider to anchor fade-in at the end????
+    
+    def set_tc_out(self, tc_out: str) -> None:
+        self.tc_out = tc_out
+        self.__te['OutTC'] = tc_out
 ####BDNXMLEvent
+
+if _has_numba:    
+    @njit(fastmath=True, parallel=True)
+    def _compare_images(images: list[npt.NDArray[np.uint8]]) -> list[np.bool_]:
+        diff_list = [np.bool_(1) for x in range(len(images)-1)]
+        for i in prange(0, len(images)-1):
+            if images[i+1].shape != images[i].shape:
+                diff_list[i] = np.bool_(True)
+            else:
+                diff_list[i] = np.bool_(np.any(images[i+1] - images[i]))
+        return diff_list
+else:
+    def _compare_images(images: list[npt.NDArray[np.uint8]]) -> list[np.bool_]:
+        diff_list = []
+        for i in range(0, len(images)-1):
+            if images[i+1].shape != images[i].shape:
+                diff_list[i] = True
+            else:
+                diff_list.append(np.any(images[i+1] - images[i]))
+        return diff_list
+
+def filter_events(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
+    if _has_numba:
+        imgs = List()
+        for event in events:
+            imgs.append(np.asarray(event.img))
+        flags = _compare_images(imgs)
+    else:
+        flags = _compare_images([event.img for event in events])
+        
+    output_events = [events[0]]
+    for event, flag in zip(events[1:], flags):
+        if flag or output_events[-1].tc_out != event.tc_in:
+            output_events.append(event)
+        else:
+            output_events[-1].set_tc_out(event.tc_out)
+    assert output_events[0].tc_in == events[0].tc_in and output_events[-1].tc_out == events[-1].tc_out
+    logging.debug(f"Removed {len(events) - len(output_events)} duplicate event(s).")
+    return output_events
 
 class SeqIO(ABC):
     """
@@ -441,7 +495,6 @@ class SeqIO(ABC):
         if not os.path.exists(newf):
             raise OSError("Folder not found.")
         self._folder = newf
-
 
 class BDNXML(SeqIO):
     def __init__(self,
