@@ -380,8 +380,8 @@ class WOBSAnalyzer:
         return np.array([0, heights[0]], np.int32), (max(widths), sum(heights))
 
     def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, windows: list[Box], node: 'DSNode', 
-                                    double_buffering: int, has_two_objs: bool, is_compat_mode: bool,
-                                    ods_reg: list[int], c_pts: float, normal_case_refresh: bool) -> ...:
+                                 double_buffering: int, has_two_objs: bool, is_compat_mode: bool,
+                                 ods_reg: list[int], c_pts: float, normal_case_refresh: bool, flags: list[int]) -> ...:
         box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
         cobjs, cobjs_cropped = [], []
         pals, o_ods = [], []
@@ -399,14 +399,15 @@ class WOBSAnalyzer:
             for j in range(i, k):
                 coords = np.zeros((2,), np.int32)
                 a_img = Image.new('RGBA', dims, (0, 0, 0, 0))
+                multiplier = int(flags[j] >= 0)
                 for pgo in compositions:
                     if len(pgo.mask[j-pgo.f:j+1-pgo.f]) == 1:
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
-                        a_img.paste(Image.fromarray(pgo.gfx[j-pgo.f, :, : ,:], 'RGBA').crop(pgo.box.coords), paste_box)
+                        a_img.paste(Image.fromarray(multiplier*pgo.gfx[j-pgo.f, :, : ,:], 'RGBA').crop(pgo.box.coords), paste_box)
                     coords += offset
                 imgs_chain.append(a_img)
             ####
-            #We have the "packed" object, let's optimise it, use 255 colours if there's transparency else 254
+            #We have the "packed" object, the entire palette is usable
             bitmap, palettes = Optimise.solve_and_remap(imgs_chain, 255, 1, **self.kwargs)
             pals.append(palettes)
 
@@ -474,9 +475,11 @@ class WOBSAnalyzer:
                     continue
                 oid = wid + double_buffering[wid]
                 double_buffering[wid] = abs(2 - double_buffering[wid])
-                imgs_chain = [Image.fromarray(img) for img in pgo.gfx[i-pgo.f:k-pgo.f]]
-                cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
 
+                assert len(flags[i:k]) >= len(pgo.gfx[i-pgo.f:k-pgo.f])
+                imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
+                
+                cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                 # cparams = box_to_crop(pgo.box)
                 # cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
                 #                                           cropped=True, **cparams))
@@ -595,7 +598,6 @@ class WOBSAnalyzer:
 
             if flags[i] == -1:
                 logger.debug(f"Skipping discarded event at PTS={self.events[i].tc_in}")
-
                 i+=1
                 continue
 
@@ -627,7 +629,7 @@ class WOBSAnalyzer:
             has_two_objs = has_two_objs > 1 or normal_case_refresh
 
             r = self._generate_acquisition_ds(i, k, pgobs_items, windows, nodes[i], double_buffering,
-                                              has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
+                                              has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh, flags)
             cobjs, pals, o_ods, pal = r
 
             wds = wds_base.copy(pts=c_pts, in_ticks=False)
@@ -676,7 +678,7 @@ class WOBSAnalyzer:
                     if flags[z] == 1:
                         normal_case_refresh = nodes[z].new_mask
                         r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), windows, nodes[z], double_buffering,
-                                                          has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh)
+                                                          has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh, flags)
                         cobjs, n_pals, o_ods, new_pal = r
                         logger.debug(f"NORMAL CASE: PTS={self.events[z].tc_in}={c_pts:.03f}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
                         pal |= new_pal

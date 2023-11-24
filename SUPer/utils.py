@@ -25,8 +25,6 @@ from typing import Optional, Callable, TypeVar, Union
 from collections import namedtuple
 from enum import Enum, IntEnum
 from numpy import (typing as npt)
-from numba import njit
-from PIL import Image
 from timecode import Timecode
 from dataclasses import dataclass
 
