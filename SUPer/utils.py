@@ -204,9 +204,8 @@ class ScreenRegion(Box):
 ####
 
 class WindowOnBuffer:
-    def __init__(self, screen_regions: list[ScreenRegion], duration: int) -> None:
+    def __init__(self, screen_regions: list[ScreenRegion]) -> None:
         self.srs = screen_regions
-        self.duration = duration
 
     def get_window(self) -> Box:
         mxy = np.asarray([np.inf, np.inf])

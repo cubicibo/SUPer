@@ -25,7 +25,7 @@ import numpy as np
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, Epoch, DisplaySet
 from .pgraphics import PGDecoder, PGraphics, PGObjectBuffer
 from .palette import Palette
-from .utils import LogFacility, TimeConv as TC
+from .utils import LogFacility, TimeConv as TC, Box
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -238,10 +238,14 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
                     if len(windows) == 0:
                         for w in seg.windows:
                             windows[w.window_id] = (w.h_pos, w.v_pos, w.width, w.height)
+                        lwdb = list(map(lambda w: Box(w[1], w[3], w[0], w[2]), windows.values()))
+                        if len(windows) == 2 and Box.intersect(*lwdb).area > 0:
+                            logger.error(f"Overlapping windows in epoch starting at {to_tc(current_pts)}.")
+                            compliant = False
                     else:
                         for w in seg.windows:
                             if windows[w.window_id] != (w.h_pos, w.v_pos, w.width, w.height):
-                                logger.error(f"Window change mid-epoch at {to_tc(current_pts)}, this is prohibited.")
+                                logger.error(f"Window change mid-epoch at {to_tc(current_pts)}, this is strictly prohibited.")
                                 compliant = False
                     for w in seg.windows:
                         window_area[w.window_id] = w.width*w.height                        
