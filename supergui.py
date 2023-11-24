@@ -51,6 +51,7 @@ def get_kwargs() -> dict[str, int]:
         'full_palette': bool(scenarist_fullpal.value),
         'output_all_formats': bool(all_formats.value),
         'normal_case_ok': bool(normal_case_ok.value),
+        'insert_acquisitions': int(biacqs_val.value),
         'libs_path': lib_paths,
         'ts_long': bool(soft_dts.value),
         'max_kbps': int(max_kbps.value),
@@ -67,6 +68,7 @@ def wrapper_mp() -> None:
         return
     else:
         invalid = False
+        invalid |= not (0 <= kwargs['insert_acquisitions'])
         invalid |= not (0 <= kwargs['quality_factor'] <= 1)
         invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
         invalid |= kwargs['max_kbps'] <= 0
@@ -303,9 +305,16 @@ if __name__ == '__main__':
     Hovertip(soft_dts.tk, "When new objects are defined, the DTS-PTS delta includes an additional (unecessary) margin.\n"\
                           "This reduces the ability to perform acquisitions.")
 
+    biacqs = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
+    biacqs_val = TextBox(biacqs, width=2, height=1, grid=[0,0], text="0")
+    Text(biacqs, "Insert acquisition after N palette updates. [0: off, 3: recommended].", grid=[1,0], align='left')
+    Hovertip(biacqs.tk, "Long palette effects can alter the bitmap quality and be visible to the viewer if the end\n"\
+                        "bitmap remains on screen. To improve psychovisual quality, an acquisition can be added after\n"\
+                        "to hide small artifacts originating from the palette animation encoding.")
+
     bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
     max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="16000", align='left')
-    max_kbps_txt = Text(bmax_kbps, "Max bitrate test [Kbps]: ", grid=[0,0], align='left', size=11)
+    Text(bmax_kbps, "Max bitrate test [Kbps]: ", grid=[0,0], align='left', size=11)
     Hovertip(bmax_kbps.tk, "Test the stream against the given bitrate. This value does not shape the output.\n"\
                            "Change the quantizer, compression and acquisition value to lower the bitrate.\n"\
                            "Set to zero to disable the test. Unrealistic values will lead to a spam of errors.")

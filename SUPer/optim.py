@@ -277,7 +277,7 @@ class Optimise:
 
         kwargs_diff = {'matrix': kwargs.get('bt_colorspace', 'bt709')}
 
-        if 0 == len(transparent_id):
+        if 0 == len(transparent_id) and np.max(bitmap) == colors - 1:
             # No transparency at all in this bitmap, reduce colour count by one
             # and do not perform any remapping (useless)
             logger.ldebug("Too many colours used, lowering count.")

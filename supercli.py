@@ -70,6 +70,7 @@ if __name__ == '__main__':
     parser.add_argument('-y', '--yes', help="Flag to overwrite output file", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Flag to write both SUP and PES+MUI files.", action='store_true', default=False, required=False)
     parser.add_argument('-t', '--tslong', help="Flag to use PTS/DTS strategy with additional margins.", action='store_true', default=False, required=False)
+    parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: Disabled]", type=int, default=0, required=False)
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=-1, required=False)
 
@@ -92,6 +93,10 @@ if __name__ == '__main__':
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown BT ITU target, using bt709.")
         args.bt = 709
+        
+    if args.extra_acq < 0:
+        logger.warning("Got invalid extra-acq, disabling option.")
+        args.extra_acq = 0
 
     if args.max_kbps > 40000:
         logger.warning("Max bitrate is beyond total BDAV video limits.")
@@ -166,6 +171,7 @@ if __name__ == '__main__':
         'ts_long': args.tslong,
         'max_kbps': args.max_kbps,
         'log_to_file': args.log_to_file,
+        'insert_acquisitions': args.extra_acq,
     }
 
     bdnr = BDNRender(args.input, parameters, args.output)

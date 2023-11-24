@@ -538,6 +538,7 @@ class WOBSAnalyzer:
         wds_base = WDS.from_scratch(wd_base, pts=0.0)
         n_actions = len(durs)
         is_compat_mode = True #self.kwargs.get('pgs_compatibility', True)
+        insert_acqs = self.kwargs.get('insert_acquisitions', 0)
         displaysets = []
         time_scale = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
         use_full_pal = self.kwargs.get('full_palette', False)
@@ -716,6 +717,31 @@ class WOBSAnalyzer:
                     if z+1 == k:
                         break
                 assert z+1 == k
+            
+            if insert_acqs > 0 and len(pals[0]) >= insert_acqs and flags[k-1] != -1:
+                t_diff = TC.tc2s(self.events[k-1].tc_out, self.bdn.fps) - TC.tc2s(self.events[k-1].tc_in, self.bdn.fps)
+                if t_diff > 0.5:
+                    dts_end = nodes[k-1].dts_end() + 5/PGDecoder.FREQ
+                    nodes[k-1].nc_refresh = False
+                    while nodes[k-1].dts() < dts_end:
+                        nodes[k-1].tc_pts = TC.add_framestc(nodes[k-1].tc_pts, self.bdn.fps, 1)
+                    if nodes[k-1].dts() - dts_end < 0.25:
+                        logger.info(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
+                        c_pts = get_pts(TC.tc2s(nodes[k-1].tc_pts, self.bdn.fps))
+                        
+                        r = self._generate_acquisition_ds(k-1, k, pgobs_items, windows, nodes[k-1], double_buffering,
+                                                          has_two_objs, is_compat_mode, ods_reg, c_pts, False, flags)
+                        cobjs, _, o_ods, pal = r
+                        wds = wds_base.copy(pts=c_pts, in_ticks=False)
+                        p_id, p_vn = get_palette_data(palette_manager, nodes[k-1])
+                        pds = PDS.from_scratch(pal, p_vn=p_vn, p_id=p_id, pts=c_pts)
+                        pcs = pcs_fn(pcs_id, PCS.CompositionState.ACQUISITION, False, p_id, cobjs, c_pts)
+                        pcs_id += 1
+                        nds = DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)])
+                        DSNode.apply_pts_dts(nds, DSNode.set_pts_dts_sc(nds, self.buffer, wds, nodes[k-1]))
+                        displaysets.append(nds)
+                    else:
+                        logger.error(f"Tried to insert an acquisition at {nodes[k-1].tc_pts} but required shift beyond 0.25 s: ACQ dropped.")   
             i = k
             last_cobjs = cobjs
             if use_pbar:
