@@ -20,15 +20,12 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 from typing import TypeVar, Optional, Type, Union, Callable
 from dataclasses import dataclass
-from itertools import combinations, chain, zip_longest
+from itertools import chain, zip_longest
 
 from PIL import Image
 from SSIM_PIL import compare_ssim
 from numpy import typing as npt
 import numpy as np
-
-from skimage.filters import gaussian
-from skimage.measure import regionprops, label
 
 try:
     from tqdm import tqdm
@@ -47,37 +44,15 @@ logger = LogFacility.get_logger('SUPer')
 
 #%%
 class GroupingEngine:
-    def __init__(self, box: Box, n_groups: int = 2, **kwargs) -> None:
+    def __init__(self, box: Box, n_groups: int = 2) -> None:
         if n_groups not in range(1, 3):
             raise AssertionError(f"GroupingEngine expects 1 or 2 groups, not '{n_groups}'.")
-        
         self.box = box
         self.n_groups = n_groups
-        self.candidates = kwargs.pop('candidates', 25)
 
-        self.no_blur = True
-        self.blur_mul = kwargs.pop('blur_mul', 1.1)
-        self.blur_c = kwargs.pop('blur_const', 1.5)
-
-        self.kwargs = kwargs
-
-    def coarse_grouping(self, group: list[Type[BaseEvent]], box: Box, use_blur: bool = True) -> tuple[RegionType, npt.NDArray[np.uint8]]:
+    def coarse_grouping(self, group: list[Type[BaseEvent]], box: Box) -> tuple[npt.NDArray[np.uint8]]:
         (pxtl, pytl), (w, h) = box.posdim
         gs_orig = np.zeros((1, h, w), dtype=np.uint8)
-
-        if use_blur:
-            # SD content should be blurred with lower coeffs. Remove constant.
-            blur_mul = self.blur_mul
-            blur_c = self.blur_c
-            if self.no_blur:
-                blur_c = self.kwargs.get('noblur_bc_c', 0.0)
-                blur_mul = self.kwargs.get('noblur_bm_c', 1.0)
-    
-            ratio_woh = abs(w/h)
-            ratio_how = 1/ratio_woh if 1/ratio_woh <= 1 else 1
-            ratio_woh = ratio_woh if ratio_woh <= 1.3 else 1.3
-
-            gs_blur = np.zeros_like(gs_orig)
 
         for k, event in enumerate(group):
             slice_x = slice(event.x-pxtl, event.x-pxtl+event.width)
@@ -87,53 +62,7 @@ class GroupingEngine:
             
             alpha[alpha > 0] = 1
             gs_orig[0, slice_y, slice_x] |= (alpha > 0)
-            
-            if use_blur:
-                blurred = (255*gaussian(alpha, (blur_c + blur_mul*ratio_how, blur_c + blur_mul*ratio_woh)))
-                blurred[blurred <= 0.25] = 0
-                blurred[blurred > 0.25] = 1
-                gs_blur[0, slice_y, slice_x] |= (blurred > 0)
-        
-        if use_blur:
-            return regionprops(label(gs_blur)), gs_orig
-        return None, gs_orig
-
-    @staticmethod
-    def _get_combinations(n_regions: int) -> map:
-        #If we have two composition objects, we want to find out the smallest 2 areas
-        # that englobes all the screen regions. We generate all possible arrangement
-        region_ids = range(n_regions)
-        arrangements = map(lambda combination: set(filter(lambda region_id: region_id >= 0, combination)),
-                                   set(combinations(list(region_ids) + [-1]*(n_regions-2), n_regions-1)))
-        return arrangements
-
-    def group_and_sort(self, srs: list[ScreenRegion]) -> list[tuple[WindowOnBuffer]]:
-        """
-        Seek for minimum areas from the regions, sort them and return them sorted,
-        ascending area size. The caller will then choose the best area.
-        """
-        windows, areas = {}, {}
-        n_regions = len(srs)
-
-        if n_regions == 1 or self.n_groups == 1:
-            return [(WindowOnBuffer(srs),)]
-        elif n_regions > 16:
-            return None
-
-        for key, arrangement in enumerate(__class__._get_combinations(n_regions)):
-            arr_sr, other_sr = [], []
-            for k, sr in enumerate(srs):
-                (arr_sr if k in arrangement else other_sr).append(sr)
-            windows[key] = (WindowOnBuffer(arr_sr), WindowOnBuffer(other_sr))
-            areas[key] = sum(map(lambda wb: wb.area(), windows[key]))
-
-        output = []
-        #Here, we can sort by ascending area – first has the smallest windows
-        # we also discard overlapping windows
-        for k, _ in sorted(areas.items(), key=lambda x: x[1]):
-            if len(windows[k]) == 1 or 0 == windows[k][0].get_window().overlap_with(windows[k][1].get_window()):
-                output.append(windows[k])
-        return output if len(output) else None
+        return gs_orig
     
     def find_layout(self, gs_origs: npt.NDArray[np.uint8]) -> tuple[WindowOnBuffer]:
         xl, yl, xr, yr = Image.fromarray(gs_origs[0, :, :], 'L').getbbox(alpha_only=False)
@@ -177,8 +106,10 @@ class GroupingEngine:
             right_wd = Box.from_coords(xt0+xj, yt0, xt1+xj, yt1)
             best_area, best_wob = check_best(best_area, left_wd, right_wd, best_wob)
     
-        if best_wob is None or sum(map(lambda x: x.get_window().area, best_wob)) >= (yr - yl)*(xr - xl) - 177:
-            logger.debug("No layout or not worthwile in comparison to a single window.")
+        # 356 = 32e6/90e3: number of pixels we can output in a tick. If area diff is smaller,
+        # the tick overhead for dual windows/objects may not be worthwile. 
+        if best_wob is None or sum(map(lambda x: x.get_window().area, best_wob)) >= (yr - yl)*(xr - xl) - 356:
+            logger.debug("No layout found or a single window is as efficient.")
             return (WindowOnBuffer([ScreenRegion(yl, yr-yl, xl, xr-xl, 0, 1, None)]),)
     
         for wd in best_wob:
@@ -188,70 +119,9 @@ class GroupingEngine:
         return best_wob
 
     def group(self, subgroup: list[Type[BaseEvent]]) -> tuple[WindowOnBuffer]:
-        _, gs_origs = self.coarse_grouping(subgroup, self.box, use_blur=False)
+        gs_origs = self.coarse_grouping(subgroup, self.box)
         return self.find_layout(gs_origs)
-        
-    def group_v1(self, subgroup: list[Type[BaseEvent]]) -> tuple[WindowOnBuffer]:
-        cls = self.__class__
-
-        trials = 15
-        wobs = None
-        while trials > 0 and wobs is None:
-            trials -= 1
-            regions, gs_origs = self.coarse_grouping(subgroup, self.box)
-
-            tbox = []
-            for region in regions:
-                region.slice = cls.crop_region(region, gs_origs)
-                tbox.append(ScreenRegion.from_region(region))
-
-            wobs = self.group_and_sort(tbox)
-            if wobs is None:
-                if self.no_blur:
-                    self.no_blur = False
-                else:
-                    self.blur_mul += 0.33
-                    self.blur_c += 0.33
-        if wobs is None:
-            logger.warning("Grouping Engine giving up optimising layout. Using a single window.")
-            wobs = [(WindowOnBuffer(tbox),)]
-        return tuple(sorted(wobs[0], key=lambda x: x.srs[0].t))
-
-    @staticmethod
-    def crop_region(region: RegionType, gs_origs: npt.NDArray[np.uint8]) -> RegionType:
-        #Mask out object outside of the active region.
-        gs_origs = gs_origs.copy()
-        #Apply blurred mask  so we don't catch nearby graphics by working with just rectangles
-        gs_origs[region.slice] &= region.image
-
-        cntXl = 0
-        while np.all(gs_origs[region.slice[0], region.slice[1],
-                              region.slice[2].start+cntXl:region.slice[2].start+1+cntXl] == 0):
-            cntXl += 1
-        cntXr = -1
-        while np.all(gs_origs[region.slice[0], region.slice[1],
-                              region.slice[2].stop+cntXr:region.slice[2].stop+1+cntXr] == 0):
-            cntXr -= 1
-        cntXr += 1
-        cntYt = 0
-        while np.all(gs_origs[region.slice[0], region.slice[1].start+cntYt:region.slice[1].start+cntYt+1,
-                              region.slice[2]] == 0):
-            cntYt += 1
-
-        cntYb = -1
-        while np.all(gs_origs[region.slice[0], region.slice[1].stop+cntYb:region.slice[1].stop+cntYb+1,
-                              region.slice[2]] == 0):
-            cntYb -= 1
-        cntYb += 1
-
-        f_region = tuple([region.slice[0],
-                      slice(region.slice[1].start+cntYt, region.slice[1].stop+cntYb),
-                      slice(region.slice[2].start+cntXl, region.slice[2].stop+cntXr)])
-
-        # Refine image mask, this is a bit hacky as we modify the internal variable
-        #(but it is what is returned by the .image property so we're good)
-        region._cache['image'] = gs_origs[f_region] != 0
-        return f_region
+####
 
 #%%
 class WOBSAnalyzer:

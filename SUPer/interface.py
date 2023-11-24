@@ -139,7 +139,7 @@ class BDNRender:
                 box = Box.from_events(subgroup)
 
                 n_groups = 2 if (len(subgroup) > 1 or areas[-ksub]/screen_area > 0.1) else 1
-                wob = GroupingEngine(box, n_groups=n_groups, **kwargs).group(subgroup)
+                wob = GroupingEngine(box, n_groups=n_groups).group(subgroup)
                 if debug_enabled:
                     for w_id, wb in enumerate(wob):
                         wb = wb.get_window()

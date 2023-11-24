@@ -1,12 +1,12 @@
 Pillow
 numpy
-scikit-image
-guizero
 opencv-python
 pyopencl
 SSIM-PIL
 timecode
-numba
-tqdm
 scenaristream @ git+https://github.com/cubicibo/ScenariStream.git
 piliq @ git+https://github.com/cubicibo/piliq.git
+# The following dependencies are optional:
+numba   # Used to compile selected numpy functions and improve perfs
+guizero # Used by supergui.py
+tqdm    # Used to display conversion progress.
