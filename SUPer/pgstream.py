@@ -396,7 +396,6 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float, ndf_ntsc: bool = False
     is_compliant = True
     prev_pts = prev_dts = -99999999
     min_dts_delta = 99999999
-    faults_pts = []
 
     if ndf_ntsc:
         to_tc = lambda pts: TC.s2tc(pts/1.001, fps)
@@ -412,30 +411,29 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float, ndf_ntsc: bool = False
         is_compliant &= diff > 0 and diff < PTS_DIFF_BOUND
 
         for l, ds in enumerate(epoch):
+            ds_comply = True
             #Check for minimum DTS delta between DS, ideally this should be bigger than 0
             min_dts_delta = min((ds.pcs.tdts - prev_dts) & PTS_MASK, min_dts_delta)
-            if ds.pcs.tdts - prev_dts == 0:
-                faults_pts.append(ds.pcs.pts)
             if ds.wds:
                 # WDS action requires pts_delta margin from previous DS
                 diff = (ds.pcs.tpts - prev_pts) & PTS_MASK
-                is_compliant &= diff > pts_delta and diff < PTS_DIFF_BOUND
-                is_compliant &= (ds.pcs.tpts - ds.wds.tpts) & PTS_MASK <= pts_delta
-                is_compliant &= (ds.wds.tpts - ds.wds.tdts) & PTS_MASK <= wipe_duration*2
+                ds_comply &= diff > pts_delta and diff < PTS_DIFF_BOUND
+                ds_comply &= (ds.pcs.tpts - ds.wds.tpts) & PTS_MASK <= pts_delta
+                ds_comply &= (ds.wds.tpts - ds.wds.tdts) & PTS_MASK <= wipe_duration*2
             else:
                 # Palette update and others requires one frame duration as margin
-                is_compliant &= round(PGDecoder.FREQ*(ds.pcs.tpts - prev_pts + 4/PGDecoder.FREQ)) & PTS_MASK > np.ceil(PGDecoder.FREQ/fps)
+                ds_comply &= round(PGDecoder.FREQ*(ds.pcs.tpts - prev_pts + 4/PGDecoder.FREQ)) & PTS_MASK > np.ceil(PGDecoder.FREQ/fps)
             for pds in ds.pds:
-                is_compliant &= pds.tpts == pds.tdts
+                ds_comply &= pds.tpts == pds.tdts
             for seg in ds:
                 diff = (seg.tdts - prev_dts) & PTS_MASK
-                is_compliant &= diff >= 0 and diff < PTS_DIFF_BOUND
+                ds_comply &= diff >= 0 and diff < PTS_DIFF_BOUND
                 prev_dts = seg.tdts
             prev_pts = ds.pcs.tpts
+            if not ds_comply:
+                logger.error(f"Incorrect PTS-DTS intervals at {to_tc(ds.pcs.pts)}, stream is out of spec.")
+            is_compliant &= ds_comply
         ####ds
     ####epochs
-
     is_compliant &= min_dts_delta >= 0
-    for fault_pts in faults_pts:
-        logger.warning(f"Found DTS(PCS(DSn)) == DTS(END(DSn-1)) @ {to_tc(fault_pts)}, decoder has no margin left !!")
     return is_compliant

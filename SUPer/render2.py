@@ -586,9 +586,10 @@ class WOBSAnalyzer:
                 assert i > 0
                 assert nodes[i].parent is not None
                 w_pts = get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps))
-                if np.ceil(((nodes[i].parent.write_duration() + 10)/PGDecoder.FREQ)*self.target_fps) <= durs[i][1] and not nodes[i].parent.is_custom_dts():
+                wds_doable = (nodes[i].parent.write_duration() + 3)/PGDecoder.FREQ < 1/self.target_fps
+                if wds_doable and not nodes[i].parent.is_custom_dts():
                     uds, pcs_id = self._get_undisplay(w_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
-                    logger.debug(f"Writing screen clear with WDS before an acquisition at PTS={self.events[i-1].tc_out}")
+                    logger.debug(f"Writing screen clear with WDS at PTS={self.events[i-1].tc_out} before an acquisition.")
                 else:
                     p_id, p_vn = get_palette_data(palette_manager, nodes[i].parent)
                     nodes[i].parent.palette_id = p_id
@@ -721,12 +722,13 @@ class WOBSAnalyzer:
             if insert_acqs > 0 and len(pals[0]) > insert_acqs and flags[k-1] != -1:
                 t_diff = TC.tc2s(self.events[k-1].tc_out, self.bdn.fps) - TC.tc2s(self.events[k-1].tc_in, self.bdn.fps)
                 if t_diff > 0.5:
-                    dts_end = nodes[k-1].dts_end() + 5/PGDecoder.FREQ
+                    dts_end = nodes[k-1].dts_end() + 2/PGDecoder.FREQ
+                    npts = nodes[k-1].pts() + 2/PGDecoder.FREQ
                     nodes[k-1].nc_refresh = False
-                    while nodes[k-1].dts() < dts_end:
+                    while nodes[k-1].dts() < dts_end or nodes[k-1].pts() < nodes[k-1].write_duration()/PGDecoder.FREQ + npts:
                         nodes[k-1].tc_pts = TC.add_framestc(nodes[k-1].tc_pts, self.bdn.fps, 1)
                     if nodes[k-1].dts() - dts_end < 0.25:
-                        logger.info(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
+                        logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
                         c_pts = get_pts(TC.tc2s(nodes[k-1].tc_pts, self.bdn.fps))
                         
                         r = self._generate_acquisition_ds(k-1, k, pgobs_items, windows, nodes[k-1], double_buffering,
