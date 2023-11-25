@@ -718,7 +718,7 @@ class WOBSAnalyzer:
                         break
                 assert z+1 == k
             
-            if insert_acqs > 0 and len(pals[0]) >= insert_acqs and flags[k-1] != -1:
+            if insert_acqs > 0 and len(pals[0]) > insert_acqs and flags[k-1] != -1:
                 t_diff = TC.tc2s(self.events[k-1].tc_out, self.bdn.fps) - TC.tc2s(self.events[k-1].tc_in, self.bdn.fps)
                 if t_diff > 0.5:
                     dts_end = nodes[k-1].dts_end() + 5/PGDecoder.FREQ
