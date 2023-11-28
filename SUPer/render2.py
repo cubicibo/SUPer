@@ -793,6 +793,8 @@ class WOBSAnalyzer:
         write_duration = nodes[0].write_duration()/PGDecoder.FREQ
 
         k_offset = 0
+        running_bbox = [None, None]
+
         for k, node in enumerate(nodes):
             is_new = [False]*len(windows)
             boxes = [None] * len(windows)
@@ -810,9 +812,17 @@ class WOBSAnalyzer:
                             is_new[wid] = True
                         else:
                             assert not pgobjs_proc[wid][0].is_active(k-k_offset)
-                    if objs[wid] is not None and objs[wid].is_visible(k-k_offset):
-                        ob = objs[wid].get_bbox_at(k-k_offset)
-                        min_boxes[wid] = np.max((min_boxes[wid], (ob.dy, ob.dx)), axis=0)
+                    if objs[wid] is not None:
+                        if objs[wid].is_visible(k-k_offset):
+                            ob = objs[wid].get_bbox_at(k-k_offset)
+                            min_boxes[wid] = np.max((min_boxes[wid], (ob.dy, ob.dx)), axis=0)
+                            running_bbox[wid] = ob
+                        elif objs[wid].is_active(k-k_offset):
+                            assert k > 0
+                            assert None != running_bbox[wid] 
+                            ob = running_bbox[wid]
+                        else:
+                            raise RuntimeError("Rendering error, getting bbox of object that is neither visible or active.")
                         boxes[wid] = ob
                 node.objects = objs.copy()
             else:
