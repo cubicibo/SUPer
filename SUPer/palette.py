@@ -52,7 +52,7 @@ def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
         ycbcra = ycbcra.T
 
     if 'full' not in s_range:
-        logger.ldebug("Clipping values to limited range.")
+        #logger.ldebug("Clipping values to limited range.")
         ycbcra[:, :3][ycbcra[:, :3] <  16] = 16
         ycbcra[:,  0][ycbcra[:,  0] > 235] = 235
         ycbcra[:,1:3][ycbcra[:,1:3] > 240] = 240

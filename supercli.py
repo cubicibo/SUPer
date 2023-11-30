@@ -73,6 +73,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: Disabled]", type=int, default=0, required=False)
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=-1, required=False)
+    parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
     parser.add_argument('--nodts', help="Flag to not set DTS in stream (NOT COMPLIANT)", action='store_true', default=False, required=False)
     #parser.add_argument('--aheadoftime', help="Flag to allow ahead of time decoding. (NOT COMPLIANT)", action='store_true', default=False, required=False)
@@ -85,6 +86,7 @@ if __name__ == '__main__':
     #### Sanity checks and conversion
     args.output, ext = check_output(args.output, args.yes)
 
+    assert abs(args.ssim_tol) <= 100
     assert 0 <= args.compression <= 100
     assert 0 <= args.acqrate <= 100
     if args.qmode not in range(1, 4):
@@ -172,6 +174,7 @@ if __name__ == '__main__':
         'max_kbps': args.max_kbps,
         'log_to_file': args.log_to_file,
         'insert_acquisitions': args.extra_acq,
+        'ssim_tol': args.ssim_tol/100,
     }
 
     bdnr = BDNRender(args.input, parameters, args.output)

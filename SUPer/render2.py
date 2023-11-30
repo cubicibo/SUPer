@@ -153,6 +153,7 @@ class WOBSAnalyzer:
         scale_pts = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
         dts_strat = self.kwargs.get('ts_long', False)
         enforce_dts = self.kwargs.get('enforce_dts', True)
+        ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
 
         DSNode.configure(scale_pts, self.bdn.fps, dts_strat, enforce_dts)
 
@@ -160,7 +161,7 @@ class WOBSAnalyzer:
         pm = PaletteManager()
 
         #Adjust slightly SSIM threshold depending of res
-        ssim_score = 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480)
+        ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480) + ssim_offset)
 
         #Init
         gens, windows = [], []
@@ -181,7 +182,7 @@ class WOBSAnalyzer:
                 except StopIteration:
                     pgobj = None
                 if pgobj is not None:
-                    logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
+                    logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}, PTS={event.tc_in if event else '...'}")
                     pgobjs[wid].append(pgobj)
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 

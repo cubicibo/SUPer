@@ -277,10 +277,10 @@ class Optimise:
 
         kwargs_diff = {'matrix': kwargs.get('bt_colorspace', 'bt709')}
 
+        #No transparency at all in this bitmap
         if 0 == len(transparent_id):
+            #All colours used incl reserved transparent index. This is incorrect, requantize with colors-1
             if np.max(bitmap) == colors - 1:
-                # No transparency at all in this bitmap, reduce colour count by one
-                # and do not perform any remapping (useless)
                 logger.ldebug("Too many colours used, lowering count.")
                 bitmap, cluts = cls.solve_sequence_fast(events, colors-1, **kwargs)
             palettes = cls.diff_cluts(cluts, **kwargs_diff)
@@ -300,7 +300,7 @@ class Optimise:
                 bitmap[tsp_mask] = 0xFF
 
             cluts = np.delete(cluts, [transparent_id], axis=0)
-            palettes = cls.diff_cluts(cluts, **kwargs_diff)            
+            palettes = cls.diff_cluts(cluts, **kwargs_diff)
 
         for pal in palettes:
             pal.offset(first_index)

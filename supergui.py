@@ -56,6 +56,7 @@ def get_kwargs() -> dict[str, int]:
         'ts_long': bool(soft_dts.value),
         'max_kbps': int(max_kbps.value),
         'log_to_file': opts_log[logcombo.value],
+        'ssim_tol': int(ssim_tolb.value)/100,
     }
 
 def wrapper_mp() -> None:
@@ -68,6 +69,7 @@ def wrapper_mp() -> None:
         return
     else:
         invalid = False
+        invalid |= not (abs(kwargs['ssim_tol']) <= 1)
         invalid |= not (0 <= kwargs['insert_acquisitions'])
         invalid |= not (0 <= kwargs['quality_factor'] <= 1)
         invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
@@ -226,7 +228,7 @@ if __name__ == '__main__':
 
     lib_paths = init_extra_libs()
     opts_quant = Quantizer.get_options()
-    opts_log = {'Disabled':  0, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30, 'Debug': 10}
+    opts_log = {'Disabled':  0, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30, 'Debug': 10, 'Max debug': 5}
 
     pos_v = 0
 
@@ -311,6 +313,13 @@ if __name__ == '__main__':
     Hovertip(biacqs.tk, "Long palette effects can alter the bitmap quality and be visible to the viewer if the end\n"\
                         "bitmap remains on screen. To improve psychovisual quality, an acquisition can be added after\n"\
                         "to hide small artifacts originating from the palette animation encoding.")
+
+    bssimtol = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
+    ssim_tolb = TextBox(bssimtol, width=3, height=1, grid=[0,0], text="0")
+    Text(bssimtol, "SSIM tolerance offset [-100;100]", grid=[1,0], align='left')
+    Hovertip(bssimtol.tk, "Higher sensitivity increases the needed structural similarity to classify two images as similar.\n"\
+                        "similar images can be encoded as palette updates, while dissimilar ones require an acquisition.")
+
 
     bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
     max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="16000", align='left')
