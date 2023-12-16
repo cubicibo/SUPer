@@ -41,9 +41,10 @@ The config.ini file can be used to specify the relative or absolute path to a qu
  -w, --withsup       Flag to write both SUP and PES+MUI files.
  -t, --tslong        Flag to use a conservative PTS/DTS strategy (more events may be filtered out on complex animations).
  -m, --max-kbps      Set the maximum bitrate to test the output against. Recommended range: [500-16000].
- -e, --extra-acq     Set the min count of palette update after which acquisitions should be inserted [0: Disabled, default]
+ -e, --extra-acq     Set the min count of palette update after which acquisitions should be inserted [0: off, default: 2]
  -l, --log-to-file   Set (enable) logging to file and set logging level: [10: debug, 20: info, 25: iinf, 30: warnings]
  -v, --version       Print the version and exit.
+ --ssim-tol          Adjust the SSIM tolerance threshold. This threshold is used for bitmaps classification in effects [-100; 100, def: 0] 
 ```
 - Image quantization mode 3 ("PILIQ") is either libimagequant or pngquant, whichever specified in config.ini or available in your system.
 - The output file extension is used to infer the desired output type (SUP or PES).
@@ -69,7 +70,7 @@ Here are some additional informations on selected options, especially those that
 - Allow normal case object redefinition: whenever possible, update a single object out of two. The requirements are hard to meet so this option may have no effect. Also, objects gets a 50/50 palette split whenever this happen.
 - Subsampled BDN XML: Use a 25 or 29.97 fps BDN and generate the SUP as if it was for a 50 or 59.94 fps transport stream.
 - Conservative PTS/DTS strategy: doubles the graphic plane access time whenever an object is defined.
-- Insert acquisition: Palette effects are encoded in a single bitmap and the output of the last palette update may remain on screen for sufficiently long. Artifacts may come to the viewer attention if they remain visible long enough on the screen. Refreshing the screen will hide potential side effects and improve the perceived quality.
+- Insert acquisition: Palette effects are encoded in a single bitmap and the output of the last palette update may remain on screen for sufficiently long. Artifacts may come to the viewer attention if they remain visible long enough on the screen. Refreshing the screen will hide potential side effects and improve the perceived quality. You may lower the value if you feel like the filesize increases too significantly, or disable this behavior altogether.
 
 ### TL;DR Options
 First of all, one should leave the acquisition rate untouched at 100%, unless the stream is highly compressible (i.e includes solely a karaoke).
