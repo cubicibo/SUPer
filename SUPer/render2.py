@@ -26,6 +26,7 @@ from PIL import Image
 from SSIM_PIL import compare_ssim
 from numpy import typing as npt
 import numpy as np
+import cv2
 
 try:
     from tqdm import tqdm
@@ -565,7 +566,7 @@ class WOBSAnalyzer:
 
         i = 0
         double_buffering = [0]*len(windows)
-        ods_reg = [0]*4
+        ods_reg = [0]*(2*len(windows))
         pcs_id = self.pcs_id
         c_pts = 0
         last_cobjs = []
@@ -724,18 +725,30 @@ class WOBSAnalyzer:
             
             if insert_acqs > 0 and len(pals[0]) > insert_acqs and flags[k-1] != -1:
                 t_diff = TC.tc2s(self.events[k-1].tc_out, self.bdn.fps) - TC.tc2s(self.events[k-1].tc_in, self.bdn.fps)
-                if t_diff > 0.5:
+                #Worst decoding time is twice the write duration. The next display set should also have as much margin.
+                if t_diff > 4.5*nodes[k-1].write_duration()/PGDecoder.FREQ:
                     dts_end = nodes[k-1].dts_end() + 2/PGDecoder.FREQ
                     npts = nodes[k-1].pts() + 2/PGDecoder.FREQ
                     nodes[k-1].nc_refresh = False
-                    while nodes[k-1].dts() < dts_end or nodes[k-1].pts() < nodes[k-1].write_duration()/PGDecoder.FREQ + npts:
+                    frame_added = 0
+                    original_tc = nodes[k-1].tc_pts
+                    while nodes[k-1].dts() < dts_end or nodes[k-1].pts() < npts + nodes[k-1].write_duration()/PGDecoder.FREQ:
                         nodes[k-1].tc_pts = TC.add_framestc(nodes[k-1].tc_pts, self.bdn.fps, 1)
-                    if nodes[k-1].dts() - dts_end < 0.25:
+                        frame_added += 1
+                    # Subtract one frame to durs to ensure we have enough time for the next real acquisition.
+                    if nodes[k-1].dts() - dts_end < 0.25 and frame_added <= (durs[k-1][0]-1) >> 1:
+                        pgobs_items = get_obj(k-1, pgobjs).items()
+                        has_two_objs = 0
+                        for wid, pgo in pgobs_items:
+                            if pgo is None or not np.any(pgo.mask[k-1-pgo.f:k-pgo.f]):
+                                continue
+                            has_two_objs += 1
+
                         logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
                         c_pts = get_pts(TC.tc2s(nodes[k-1].tc_pts, self.bdn.fps))
                         
                         r = self._generate_acquisition_ds(k-1, k, pgobs_items, windows, nodes[k-1], double_buffering,
-                                                          has_two_objs, is_compat_mode, ods_reg, c_pts, False, flags)
+                                                          has_two_objs > 1, is_compat_mode, ods_reg, c_pts, False, flags)
                         cobjs, _, o_ods, pal = r
                         wds = wds_base.copy(pts=c_pts, in_ticks=False)
                         p_id, p_vn = get_palette_data(palette_manager, nodes[k-1])
@@ -746,7 +759,7 @@ class WOBSAnalyzer:
                         DSNode.apply_pts_dts(nds, DSNode.set_pts_dts_sc(nds, self.buffer, wds, nodes[k-1]))
                         displaysets.append(nds)
                     else:
-                        logger.error(f"Tried to insert an acquisition at {nodes[k-1].tc_pts} but required shift beyond 0.25 s: ACQ dropped.")   
+                        logger.debug(f"Failed to insert an acquisition at {original_tc}: event shift was excessive.")   
             i = k
             last_cobjs = cobjs
             if use_pbar:
@@ -937,6 +950,15 @@ class WOBAnalyzer:
             mask = 255*(np.logical_and((a_bitmap[:, :, 3] > 0), (a_current[:, :, 3] > 0)).astype(np.uint8))
             score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), current.convert('L'))
             cross_percentage = np.sum(mask > 0)/mask.size
+            
+            img_comp = cv2.GaussianBlur(np.array(bitmap.convert('L')), (3,3), 0)
+            img_curr = cv2.GaussianBlur(np.array(current.convert('L')), (3,3), 0)
+
+            sobel_compo = cv2.Sobel(src=img_comp, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=7)
+            sobel_curr = cv2.Sobel(src=img_curr, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=7)
+
+            score_edge = compare_ssim(Image.fromarray(sobel_compo & mask), Image.fromarray(sobel_curr))
+            score = min(score, score_edge)
         else:
             cross_percentage = 1.0
             score = 1.0
