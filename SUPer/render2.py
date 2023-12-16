@@ -182,7 +182,7 @@ class WOBSAnalyzer:
                 except StopIteration:
                     pgobj = None
                 if pgobj is not None:
-                    logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}, PTS={event.tc_in if event else '...'}")
+                    logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
                     pgobjs[wid].append(pgobj)
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
@@ -280,14 +280,16 @@ class WOBSAnalyzer:
 
             #Normal case is not possible (collision with epoch start)
             nc_not_ok = normal_case_possible and j_nc == 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts())
-            #
+            #Impossible normal case (could be disabled) or Not a normal case and collide with epoch start
             if nc_not_ok or (not normal_case_possible and j == 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts())):
+                t_diff = durs[k]/self.bdn.fps
                 #If this event is long enough, we shift it forward in time.
                 wipe_area = nodes[j].wipe_duration()
+                #worst possible decode duration + small margin
                 worst_dur = (np.ceil(wipe_area*2) + 3)
 
-                #K-node are always a mandatory acquisition
-                if durs[k]/self.bdn.fps > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
+                #K-node are always a mandatory acquisition: do we have time to decode and compose this (worst case)?
+                if t_diff > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
                     nodes[k].tc_shift = int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps))
                     logger.warning(f"Shifted event at {nodes[k].tc_pts} by +{nodes[k].tc_shift} frames to account for epoch start and compliancy.")
                     #wipe all events in between epoch start and this point
@@ -416,7 +418,7 @@ class WOBSAnalyzer:
             for wid, pgo in pgobs_items:
                 if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f])):
                     oid = wid + double_buffering[wid]
-                    double_buffering[wid] = abs(2 - double_buffering[wid])
+                    double_buffering[wid] = abs(len(windows) - double_buffering[wid])
                     #get bitmap
                     window_bitmap = 0xFF*np.ones((windows[wid].dy, windows[wid].dx), np.uint8)
                     nx, ny = coords
@@ -466,7 +468,7 @@ class WOBSAnalyzer:
                 if isinstance(normal_case_refresh, list) and not normal_case_refresh[wid]:
                     assert sum(normal_case_refresh) == 1
                     #Take latest used object id
-                    oid = wid + abs(2 - double_buffering[wid])
+                    oid = wid + abs(len(windows) - double_buffering[wid])
                     cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                     # cparams = box_to_crop(pgo.box)
                     # cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'],
@@ -475,7 +477,7 @@ class WOBSAnalyzer:
                     id_skipped = oid
                     continue
                 oid = wid + double_buffering[wid]
-                double_buffering[wid] = abs(2 - double_buffering[wid])
+                double_buffering[wid] = abs(len(windows) - double_buffering[wid])
 
                 assert len(flags[i:k]) >= len(pgo.gfx[i-pgo.f:k-pgo.f])
                 imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
@@ -562,7 +564,7 @@ class WOBSAnalyzer:
         ####
 
         i = 0
-        double_buffering = [0]*2
+        double_buffering = [0]*len(windows)
         ods_reg = [0]*4
         pcs_id = self.pcs_id
         c_pts = 0
@@ -976,7 +978,6 @@ class WOBAnalyzer:
         return (score1, p1), (score2, p2)
 
     def analyze(self):
-        cls = self.__class__
         window = self.wob.get_window()
 
         bitmaps = []

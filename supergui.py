@@ -308,10 +308,10 @@ if __name__ == '__main__':
                           "This reduces the ability to perform acquisitions.")
 
     biacqs = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
-    biacqs_val = TextBox(biacqs, width=2, height=1, grid=[0,0], text="0")
+    biacqs_val = TextBox(biacqs, width=2, height=1, grid=[0,0], text="2")
     Text(biacqs, "Insert acquisition after N palette updates. [0: off, 3: recommended].", grid=[1,0], align='left')
     Hovertip(biacqs.tk, "Long palette effects can alter the bitmap quality and be visible to the viewer if the end\n"\
-                        "bitmap remains on screen. To improve psychovisual quality, an acquisition can be added after\n"\
+                        "result remains on screen. To improve psychovisual quality, an acquisition can be added after\n"\
                         "to hide small artifacts originating from the palette animation encoding.")
 
     bssimtol = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')

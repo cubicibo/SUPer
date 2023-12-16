@@ -81,6 +81,8 @@ class BDNRender:
             bdn.fps = round(bdn.fps)
             self.kwargs['adjust_dropframe'] = True
             logger.info(f"NDF NTSC detected: scaling all timestamps by 1.001.")
+        else:
+            self.kwargs['adjust_dropframe'] = False
 
         self._first_pts = max(TC.tc2s(bdn.events[0].tc_in, bdn.fps) - (1/3)/PGDecoder.FREQ, 0) * (1.001 if self.kwargs['adjust_dropframe'] else 1.0)
 
