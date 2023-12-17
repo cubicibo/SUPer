@@ -7,6 +7,9 @@ Two output formats are supported: SUP and PES+MUI. The later is commonly used in
 ## Usage
 SUPer is distributed as stand-alone executable with a GUI, or as an installable Python package with gui/cli user scripts.
 
+Users who wish to execute SUPer as a Python package with their local Python environment must first install the package:<br/>
+`python3 -m pip install SUPer`,  where `SUPer` is the cloned repository folder.
+
 To convert ASSA files to SUP, one must:
 - Generate a BDN XML+PNG assets using [ass2bdnxml](https://github.com/cubicibo/ass2bdnxml) or avs2bdnxml.
 - Use SUPer to convert the assets to a Blu-ray SUP or a PES+MUI project; load the BDN.XML file, set an output file and format, and optionally have an espresso while the fan spins.
@@ -56,20 +59,15 @@ Additionally, one flag is available to generate SUPs that are not subject to dec
  --nodts         Flag to not set the DTS in stream (NOT compliant).
 ```
 
-### Python package installation
-If you plan to execute SUPer with your own Python environment, you must first install the package:<br/>
-`python3 -m pip install SUPer`<br/>
-Where SUPer is the actual base directory. You should then be able to execute `python3 supergui.py`, `python3 supercli.py [...]`, or use the internal libraries in your own Python scripts by calling `import SUPer` or `from SUPer import [...]`.
-
 ## Misc
 ### GUI/CLI options
 Here are some additional informations on selected options, especially those that shape the datastream and affect the output:
 - Compression rate: minimum time margin (in %) between two events to perform an acquisition.
-- Acquisition rate: lower values reduces the number of acquisition and leads to longer drought
+- Acquisition rate: Additional compression parameter, should be left at default (100 - no compression).
 - Quantization: image quantizer to use. PIL+K-Means is low quality but fast. K-Means and pngquant/libimagequant are high quality but slower.
-- Allow normal case object redefinition: whenever possible, update a single object out of two. The requirements are hard to meet so this option may have no effect. Also, objects gets a 50/50 palette split whenever this happen.
-- Subsampled BDN XML: Use a 25 or 29.97 fps BDN and generate the SUP as if it was for a 50 or 59.94 fps transport stream.
-- Conservative PTS/DTS strategy: doubles the graphic plane access time whenever an object is defined.
+- Allow normal case object redefinition: whenever possible, update a single object out of two. The requirements are complex so this option may have no effect for some files. Also, the palette is split 50/50 in the vicinity of these events in the stream.
+- Subsampled BDN XML: Generate a 50/59.94 fps SUP for a 25/29.97 fps BDN input.
+- Conservative PTS/DTS strategy: doubles the graphic plane access time whenever a drawing operation is performed.
 - Insert acquisition: Palette effects are encoded in a single bitmap and the output of the last palette update may remain on screen for sufficiently long. Artifacts may come to the viewer attention if they remain visible long enough on the screen. Refreshing the screen will hide potential side effects and improve the perceived quality. You may lower the value if you feel like the filesize increases too significantly, or disable this behavior altogether.
 
 ### TL;DR Options
@@ -85,8 +83,8 @@ SUPer analyzes each input images and encodes a sequence of similar images togeth
 
 ### PGS Limitations to keep in mind
 - There are only two PGS objects on screen at a time. SUPer puts as many subtitles lines as it can to a single PGS object and minimizes the windows areas in which the said objects are displayed. Palette updates are then used to eventually display/undisplay specific lines associated to a given object.
-- A hardware PG decoder has a limited bandwidth and can refresh an object ever so often. SUPer distributes the object definitions in the stream and uses double buffering to ease the work of the decoder. However, the bigger the objects (= windows), the longer they will take to decode. SUPer may be obligated to drop events every now and then if an event can't be decoded and displayed in due time. This will happen frequently if the graphics differ excessively between successive events.
-- Moves, within a reasonable area, are doable at lower framerates like 23.976, 24 or 25. The ability to perform moves lowers if the epoch is complex or if the PG windows within which the object is displayed are large.
+- A hardware PG decoder has a limited bandwidth and can refresh the display ever so often. SUPer distributes the object definitions in the stream and uses double buffering to ease the work of the decoder. However, the size of the object sets its decoding time: SUPer may be obligated to drop events every now and then if an event can't be decoded and displayed in due time or can't be encoded as a palette update.
+- Moves, within a reasonable area, are doable at lower framerates like 23.976, 24 or 25. The ability to perform moves lowers if the epoch is complex or if the objects are large.
 
 ## Special Thanks
 - Masstock for advanced testing
