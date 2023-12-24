@@ -162,7 +162,7 @@ class WOBSAnalyzer:
         pm = PaletteManager()
 
         #Adjust slightly SSIM threshold depending of res
-        ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480) + ssim_offset)
+        ssim_score = min(0.9999, 0.9558 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480) + ssim_offset)
 
         #Init
         gens, windows = [], []
@@ -308,10 +308,14 @@ class WOBSAnalyzer:
                         #Screen wipes do not define any composition
                         if nodes[ze].objects == [] and nodes[ze].nc_refresh:
                             continue
-                        nodes[ze].nc_refresh = False
+                        #Cancels a possible past NORMAL CASE promotion
+                        nodes[ze].nc_refresh = nodes[ze].partial = False
+
                         if flags[ze] != -1 and (nodes[ze].dts() > dts_start and nodes[ze].pts() - pts_delta > nodes[0].pts()):
                             logger.info(f"Epoch start collision: promoted normal case to acquisition at {nodes[ze].tc_pts}.")
                             states[ze] = PCS.CompositionState.ACQUISITION
+                            flags[ze] = 0
+
                             for zek in range(k+1, ze):
                                 if nodes[zek].dts_end() >= nodes[ze].dts() or nodes[zek].pts() + pts_delta >= nodes[ze].pts():
                                     flags[zek] = -1
@@ -729,7 +733,7 @@ class WOBSAnalyzer:
                 if t_diff > 4.5*nodes[k-1].write_duration()/PGDecoder.FREQ:
                     dts_end = nodes[k-1].dts_end() + 2/PGDecoder.FREQ
                     npts = nodes[k-1].pts() + 2/PGDecoder.FREQ
-                    nodes[k-1].nc_refresh = False
+                    nodes[k-1].nc_refresh = nodes[k-1].partial = False
                     frame_added = 0
                     original_tc = nodes[k-1].tc_pts
                     while nodes[k-1].dts() < dts_end or nodes[k-1].pts() < npts + nodes[k-1].write_duration()/PGDecoder.FREQ:
@@ -951,11 +955,14 @@ class WOBAnalyzer:
             score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), current.convert('L'))
             cross_percentage = np.sum(mask > 0)/mask.size
             
-            img_comp = cv2.GaussianBlur(np.array(bitmap.convert('L')), (3,3), 0)
-            img_curr = cv2.GaussianBlur(np.array(current.convert('L')), (3,3), 0)
+            ksize = 3
+            kernel = (ksize, ksize)
+            img_comp = cv2.GaussianBlur(np.array(bitmap.convert('L')), kernel, 0)
+            img_curr = cv2.GaussianBlur(np.array(current.convert('L')), kernel, 0)
 
-            sobel_compo = cv2.Sobel(src=img_comp, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=7)
-            sobel_curr = cv2.Sobel(src=img_curr, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=7)
+            ksize = 5
+            sobel_compo = cv2.Sobel(src=img_comp, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=ksize)
+            sobel_curr = cv2.Sobel(src=img_curr, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=ksize)
 
             score_edge = compare_ssim(Image.fromarray(sobel_compo & mask), Image.fromarray(sobel_curr))
             score = min(score, score_edge)
