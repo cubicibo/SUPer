@@ -248,17 +248,14 @@ class WOBSAnalyzer:
             #If the acquisition is not a mandatory one or was already discarded
             if not absolutes[k] or acqs[k] or flags[k] == -1:
                 if flags[k] == -1:
-                    logger.debug(f"Not analyzing event at {nodes[k].tc_pts} due to filtering (f={absolutes[k]}, a={flags[k]}).")
+                    logger.ldebug(f"Not analyzing event at {nodes[k].tc_pts} due to filtering (f={absolutes[k]}, a={flags[k]}).")
                 k -= 1
                 continue
 
             assert states[k] == PCS.CompositionState.ACQUISITION
             dts_start_nc = dts_start = nodes[k].dts()
-            dropped_nc = dropped = 0
             j = j_nc = k - 1
             while j > 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts()):
-                if absolutes[j]:
-                    dropped += 1
                 j -= 1
 
             #Normal case is only possible if we discard past acquisitions that redefined the same object
@@ -273,7 +270,6 @@ class WOBSAnalyzer:
                     if absolutes[j_nc]:
                         for km, mask_v in enumerate(nodes[j_nc].new_mask):
                             mask[km] |= mask_v
-                        dropped_nc += 1
                     j_nc -= 1
                 # Normal case
                 normal_case_possible &= sum(mask) == 1
@@ -325,7 +321,7 @@ class WOBSAnalyzer:
                 ###event shift
             else:
                 #Filter the events
-                is_normal_case = dts_start_nc > dts_start and normal_case_possible and j_nc > j
+                is_normal_case = normal_case_possible and dts_start_nc > dts_start and j_nc > j
                 j_iter = j_nc if is_normal_case else j
                 dts_iter = dts_start_nc if is_normal_case else dts_start
 
@@ -372,7 +368,7 @@ class WOBSAnalyzer:
                 flags[k] = -1
             else:
                 node.pal_vn = pm.get_palette_version(node.palette_id)
-            logger.debug(f"{state:02X} {flag} - {node.partial} DTS={node.dts():.05f}->{node.dts_end():.05f} PTS={node.pts():.05f} {node.palette_id} {node.pal_vn}")
+            logger.debug(f"{state:02X} {flag} - {node.partial} DTS={node.dts():.05f}->{node.dts_end():.05f} PTS={node.pts():.05f} OM={node.new_mask} {node.palette_id} {node.pal_vn}")
         ####
         r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
         return self._convert(r_states, pgobjs, windows, r_durs, r_flags, r_nodes)
@@ -400,7 +396,6 @@ class WOBSAnalyzer:
         # to redefine an object in the middle.
         if has_two_objs and normal_case_refresh is False:
             compositions = [pgo for _, pgo in pgobs_items if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]))]
-
             offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x.box, compositions)))
             imgs_chain = []
 
@@ -776,7 +771,7 @@ class WOBSAnalyzer:
         final_ds = None
         #We can't undraw the screen due to delta PTS constraint, we clear it with a palette update and will undraw optionally at +N frames
         if not perform_wds_end:
-            logger.debug("Performing palette wipe (delta PTS too short) at end of epoch.")
+            logger.debug(f"Performing palette wipe (delta PTS too short) at {self.events[-1].tc_out} (end of epoch).")
             p_id, p_vn = get_palette_data(palette_manager, final_node)
             last_palette_id = final_node.palette_id = p_id
             final_node.pal_vn = p_vn
@@ -784,10 +779,11 @@ class WOBSAnalyzer:
             displaysets.append(uds)
 
             #Prepare an additional display set to undraw the screen. Will be added by parent if there's enough time before the next epoch.
-            final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, max(1, int(np.ceil(((final_node.write_duration()+10)*self.target_fps)/PGDecoder.FREQ))))
-            logger.debug(f"final screen clear PTS: {final_pts} vs palette wipe: {self.events[-1].tc_out}, sf={get_pts(final_pts)}, so={get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps))}")
+            nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self.target_fps)/PGDecoder.FREQ)))
+            final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, nf_shift)
+            logger.debug(f"Optional epoch end screen wipe PTS: {TC.add_framestc(self.events[-1].tc_out, self.bdn.fps, nf_shift)}={get_pts(final_pts)}.")
         else:
-            logger.debug("Performing standard screen clear at end of epoch.")
+            logger.debug("Performing standard screen wipe at end of epoch.")
             final_pts = TC.tc2s(self.events[-1].tc_out, self.bdn.fps)
         final_ds, pcs_id = self._get_undisplay(get_pts(final_pts), pcs_id, wds_base, last_palette_id, pcs_fn)
 
@@ -812,9 +808,7 @@ class WOBSAnalyzer:
         objs = [None for objs in pgobjs_proc]
         write_duration = nodes[0].write_duration()/PGDecoder.FREQ
 
-        k_offset = 0
         running_bbox = [None, None]
-
         for k, node in enumerate(nodes):
             is_new = [False]*len(windows)
             boxes = [None] * len(windows)
@@ -823,21 +817,21 @@ class WOBSAnalyzer:
             if not node.nc_refresh:
                 for wid, wd in enumerate(windows):
                     is_new[wid] = False
-                    if objs[wid] and not objs[wid].is_active(k-k_offset):
+                    if objs[wid] and not objs[wid].is_active(node.idx):
                         objs[wid] = None
                     if len(pgobjs_proc[wid]):
-                        if not objs[wid] and pgobjs_proc[wid][0].is_active(k-k_offset):
+                        if not objs[wid] and pgobjs_proc[wid][0].is_active(node.idx):
                             objs[wid] = pgobjs_proc[wid].pop(0)
                             force_acq = True
                             is_new[wid] = True
                         else:
-                            assert not pgobjs_proc[wid][0].is_active(k-k_offset)
+                            assert not pgobjs_proc[wid][0].is_active(node.idx)
                     if objs[wid] is not None:
-                        if objs[wid].is_visible(k-k_offset):
-                            ob = objs[wid].get_bbox_at(k-k_offset)
+                        if objs[wid].is_visible(node.idx):
+                            ob = objs[wid].get_bbox_at(node.idx)
                             min_boxes[wid] = np.max((min_boxes[wid], (ob.dy, ob.dx)), axis=0)
                             running_bbox[wid] = ob
-                        elif objs[wid].is_active(k-k_offset):
+                        elif objs[wid].is_active(node.idx):
                             assert k > 0
                             assert None != running_bbox[wid] 
                             ob = running_bbox[wid]
@@ -845,8 +839,6 @@ class WOBSAnalyzer:
                             raise RuntimeError("Rendering error, getting bbox of object that is neither visible or active.")
                         boxes[wid] = ob
                 node.objects = objs.copy()
-            else:
-                k_offset += 1
             ####!nc_refresh
             node.new_mask = is_new
             chain_boxes.append(boxes)
@@ -886,7 +878,9 @@ class WOBSAnalyzer:
             if clear_duration > 0:
                 delays += [clear_duration]
                 nodes.append(DSNode([], windows, self.events[ne-1].tc_out, nc_refresh=True))
+                nodes[-1].idx = -1
             nodes.append(DSNode([], windows, event.tc_in))
+            nodes[-1].idx = ne
             top = toc
         return delays, nodes
     ####
@@ -954,7 +948,7 @@ class WOBAnalyzer:
             mask = 255*(np.logical_and((a_bitmap[:, :, 3] > 0), (a_current[:, :, 3] > 0)).astype(np.uint8))
             score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), current.convert('L'))
             cross_percentage = np.sum(mask > 0)/mask.size
-            
+
             ksize = 3
             kernel = (ksize, ksize)
             img_comp = cv2.GaussianBlur(np.array(bitmap.convert('L')), kernel, 0)
@@ -1088,6 +1082,7 @@ class DSNode:
         self.new_mask = []
         self.partial = False
         self.tc_shift = 0
+        self.idx = 0
 
         self.parent = None
         self.palette_id = None
@@ -1130,7 +1125,7 @@ class DSNode:
     def is_custom_dts(self) -> bool:
         return not (self._dts is None)
 
-    def get_dts_markers(self) -> float:
+    def get_decode_duration(self) -> tuple[int, int]:
         t_decoding = 0
 
         if not self.nc_refresh:
@@ -1166,6 +1161,20 @@ class DSNode:
             decode_duration += t_other_copy
         else:
             decode_duration = self.write_duration() + 1
+        return (decode_duration, t_decoding)
+
+    def copy(self) -> 'DSNode':
+        new_node = self.__class__(self.objects.copy(), self.windows, self.tc_pts, self.nc_refresh)
+        new_node.slots = self.slots.copy()
+        new_node.pos = self.pos.copy()
+        new_node.new_mask = self.new_mask.copy()
+        new_node.tc_shift = self.tc_shift
+        new_node.partial = self.partial
+        new_node.idx = self.idx
+        return new_node
+
+    def get_dts_markers(self) -> tuple[int, int]:
+        decode_duration, t_decoding = self.get_decode_duration()
         return (round(self.pts()*PGDecoder.FREQ) - decode_duration, t_decoding)
     ####
 

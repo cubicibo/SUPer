@@ -286,7 +286,6 @@ class Optimise:
             palettes = cls.diff_cluts(cluts, **kwargs_diff)
             bitmap += first_index
         else:
-            logger.ldebug("Remapping fully transparent ID {transparent_id:02X} to FF.")
             # Transparent ID is the last one and will be mapped to 0xFF by the first_index shift.
             if (0xFF - first_index) in transparent_id:
                 transparent_id = 0xFF - first_index
@@ -298,7 +297,7 @@ class Optimise:
                 bitmap[bitmap < transparent_id] += first_index
                 bitmap[bitmap > transparent_id] += (first_index - 1)
                 bitmap[tsp_mask] = 0xFF
-
+            logger.ldebug(f"Remapped fully transparent ID {transparent_id:02X} to FF.")
             cluts = np.delete(cluts, [transparent_id], axis=0)
             palettes = cls.diff_cluts(cluts, **kwargs_diff)
 
