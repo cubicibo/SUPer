@@ -458,6 +458,12 @@ class PGObject:
             return self.mask[frame-self.f]
         return False
 
+    def pad_left(self, padding: int) -> None:
+        assert padding > 0
+        self.f -= padding
+        self.mask[0:0] = [False] * padding
+        self.gfx = np.concatenate((np.zeros((padding, *self.gfx.shape[1:]), np.uint8), self.gfx), axis=0, dtype=np.uint8)
+
     @staticmethod
     def _bbox(img: npt.NDArray[np.uint8]) -> Box:
         rmin, rmax = np.where(np.any(img, axis=1))[0][[0, -1]]
