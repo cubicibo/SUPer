@@ -162,7 +162,7 @@ class WOBSAnalyzer:
         pm = PaletteManager()
 
         #Adjust slightly SSIM threshold depending of res
-        ssim_score = min(0.9999, 0.9558 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480) + ssim_offset)
+        ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480) + ssim_offset)
 
         #Init
         gens, windows = [], []
@@ -943,10 +943,11 @@ class WOBAnalyzer:
         overlap = (inters_area > 0) * (inters_area + np.sum(inters_inv))/inters.size
 
         if overlap > 0:
-            #score = compare_ssim(bitmap.convert('L'), current.convert('L'))
-            #Broadcast transparency mask of current on all channels of ref
             mask = 255*(np.logical_and((a_bitmap[:, :, 3] > 0), (a_current[:, :, 3] > 0)).astype(np.uint8))
-            score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), current.convert('L'))
+            mask = cv2.GaussianBlur(mask, (3,3), 0)
+            mask[mask > 0] = 255
+
+            score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), Image.fromarray(a_current & mask[: , :, None]).convert('L'))
             cross_percentage = np.sum(mask > 0)/mask.size
 
             ksize = 3
@@ -957,8 +958,8 @@ class WOBAnalyzer:
             ksize = 5
             sobel_compo = cv2.Sobel(src=img_comp, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=ksize)
             sobel_curr = cv2.Sobel(src=img_curr, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=ksize)
+            score_edge = compare_ssim(Image.fromarray(sobel_compo & mask), Image.fromarray(sobel_curr & mask))
 
-            score_edge = compare_ssim(Image.fromarray(sobel_compo & mask), Image.fromarray(sobel_curr))
             score = min(score, score_edge)
         else:
             cross_percentage = 1.0
