@@ -135,7 +135,7 @@ class BDNRender:
             #Epoch generation (each subgroup will be its own epoch)
             for ksub, subgroup in enumerate(reversed(subgroups), 1):
                 r_subgroup = filter_events(subgroup)
-                logger.info(f"Identified epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(r_subgroup)} event(s):")
+                logger.info(f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(r_subgroup)} event(s):")
                 
                 subgroup = r_subgroup
                 box = Box.from_events(subgroup)
@@ -147,7 +147,7 @@ class BDNRender:
                         wb = wb.get_window()
                         logger.debug(f"Window {w_id}: X={wb.x+box.x}, Y={wb.y+box.y}, W={wb.dx}, H={wb.dy}")
                 else:
-                    logger.info(f" => Screen layout: {len(wob)} window(s), analyzing objects...")
+                    logger.info(f" => Screen layout: {len(wob)} window(s), processing...")
 
                 wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, pcs_id=pcs_id, **kwargs)
                 new_epoch, final_ds, pcs_id = wobz.analyze()

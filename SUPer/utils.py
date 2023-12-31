@@ -27,6 +27,12 @@ from enum import Enum, IntEnum
 from numpy import (typing as npt)
 from timecode import Timecode
 from dataclasses import dataclass
+from contextlib import nullcontext
+
+try:
+    from tqdm import tqdm
+except ModuleNotFoundError:
+    from contextlib import nullcontext as tqdm
 
 RegionType = TypeVar('Region')
 _BaseEvent = TypeVar('BaseEvent')
@@ -441,6 +447,7 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
 
 class LogFacility:
     _logger = dict()
+    _logpbar = dict()
 
     @classmethod
     def set_file_log(cls, logger: logging.Logger, fp: str, level: Optional[int] = None) -> None:
@@ -470,16 +477,15 @@ class LogFacility:
         cls._logger[name].handlers[0].setLevel(level)
 
     @classmethod
-    def get_logger(cls, name: str, level: int = logging.INFO):
-        """ Example of a custom logger.
+    def get_logger(cls, name: str, level: int = logging.INFO) -> logging.Logger:
+        """
+        This function takes in two parameters: name and level and logs to console.
+        The place to log in this case is defined by the handler which we set
+        to logging.StreamHandler().
 
-          This function takes in two parameters: name and level and logs to console.
-          The place to log in this case is defined by the handler which we set
-          to logging.StreamHandler().
-
-          Args:
-            name: Name for the logger.
-            level: Minimum level for messages to be logged
+        Args:
+          name: Name for the logger.
+          level: Minimum level for messages to be logged
         """
         if cls._logger.get(name, None) is None:
             cls._init_logger(name)
@@ -507,5 +513,26 @@ class LogFacility:
             self._log(HIGH_DEBUG, message, args, **kws)
         logging.Logger.hdebug = high_debug
 
+    @classmethod
+    def close_progress_bar(cls, logger: logging.Logger):
+        if cls._logger.get(logger.name, None) != None and cls._logpbar.get(logger.name, None) is not None:
+            cls._logpbar[logger.name].close()
+            cls._logpbar[logger.name] = None
+
+    @classmethod
+    def get_progress_bar(cls, logger: logging.Logger, tot: ...) -> Optional[tqdm]:
+        if cls._logger.get(logger.name, None) is None:
+            return None
+        if cls._logpbar.get(logger.name, None) is not None:
+            return cls._logpbar[logger.name]
+        if logger.getEffectiveLevel() >= logging.INFO:
+            pbar = tqdm(tot)
+        else:
+            pbar = nullcontext()
+            pbar.n = 0
+        if getattr(pbar, 'update', None) is None:
+            pbar.update = pbar.close = pbar.set_description = pbar.reset = pbar.refresh = lambda *args, **kwargs: None
+        cls._logpbar[logger.name] = pbar
+        return pbar
     ####
 ####

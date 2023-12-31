@@ -28,11 +28,6 @@ from numpy import typing as npt
 import numpy as np
 import cv2
 
-try:
-    from tqdm import tqdm
-except ModuleNotFoundError:
-    from contextlib import nullcontext as tqdm
-
 #%%
 from .utils import LogFacility, Pos, Dim, BDVideo, TimeConv as TC, Box, ScreenRegion, RegionType, WindowOnBuffer
 from .filestreams import BDNXMLEvent, BaseEvent
@@ -172,11 +167,16 @@ class WOBSAnalyzer:
             gens.append(woba[k].analyze())
             next(gens[-1])
 
+        pbar = LogFacility.get_progress_bar(logger, range(len(self.events)))
+        pbar.set_description("Analyzing", False)
         #get all windowed bitmaps
         pgobjs = [[] for k in range(len(windows))]
         for event in chain(self.events, [None]*2):
             if event is not None:
                 logger.hdebug(f"Event TCin={event.tc_in}")
+                pbar.n += 1
+                if pbar.n & 0xF == 0 or pbar.n == len(self.events):
+                    pbar.refresh()
             for wid, (window, gen) in enumerate(zip(windows, gens)):
                 try:
                     pgobj = gen.send(self.mask_event(window,  event))
@@ -185,6 +185,7 @@ class WOBSAnalyzer:
                 if pgobj is not None:
                     logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
                     pgobjs[wid].append(pgobj)
+        pbar.clear()
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
         acqs, absolutes, margins, durs, nodes, flags, bslots, cboxes = self.find_acqs(pgobjs_proc, windows)
@@ -579,10 +580,9 @@ class WOBSAnalyzer:
         #Do we have time to redraw the window (with some margin)?
         perform_wds_end = durs[-1][0] >= np.ceil(((final_node.write_duration() + 10)/PGDecoder.FREQ)*self.target_fps)
 
-        if (use_pbar := logger.getEffectiveLevel() >= 20):
-            pbar = tqdm(range(n_actions))
-            if getattr(pbar, 'update', None) is None:
-                pbar.update = pbar.close = lambda *args, **kwargs: None
+        pbar = LogFacility.get_progress_bar(logger, range(n_actions))
+        pbar.set_description("Encoding", False)
+        pbar.reset(n_actions)
         #Main conversion loop, using all assets
         while i < n_actions:
             if durs[i][1] != 0:
@@ -761,11 +761,9 @@ class WOBSAnalyzer:
                         logger.debug(f"Failed to insert an acquisition at {original_tc}: event shift was excessive.")   
             i = k
             last_cobjs = cobjs
-            if use_pbar:
-                pbar.n = i
-                pbar.update()
-        if use_pbar:
-            pbar.close()
+            pbar.n = i
+            pbar.update()
+        LogFacility.close_progress_bar(logger)
         ####while
 
         final_ds = None
