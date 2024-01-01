@@ -260,9 +260,10 @@ class WOBSAnalyzer:
                 for pk, pnode in enumerate(reversed(nodes[:k]), 1):
                     if pnode.objects == []:
                         continue
-                    mask = list(map(sum, zip(node.new_mask, pnode.new_mask)))
+                    redefine_same_object = next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) != None
+                    overlap_in_window = sum(map(lambda x: x is not None, [node.objects[future_obj_idx], pnode.objects[future_obj_idx]])) > 1
                     #Same object is redefined in the previous DS, give up
-                    if None != next(filter(lambda x: x > 1, mask), None):
+                    if redefine_same_object or overlap_in_window:
                         break
                     new_node = pnode.copy()
                     new_node.new_mask[future_obj_idx] = True
@@ -275,7 +276,7 @@ class WOBSAnalyzer:
                     j = k - pk
                     while (j := j-1) and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()):
                         drop_abs_acq |= absolutes[j]
-                        drop_pal_ups += int(not allow_overlaps)
+                        drop_pal_ups += int(not allow_overlaps and nodes[j].nc_refresh)
 
                     #Shifting up to epoch start and acquisition at j=1 is not possible?
                     if not drop_abs_acq and j == 0 and (nodes[j].dts_end() >= new_node.dts() or\
@@ -285,21 +286,22 @@ class WOBSAnalyzer:
                         break #Hit epoch start, can't go any closer
 
                     elif not drop_abs_acq and (nodes[j].dts_end() < new_node.dts() and nodes[j].pts() + pts_delta < new_node.pts()):
-                        scores.append((k - pk, drop_pal_ups, new_node, j))
+                        scores.append((k - pk, drop_pal_ups, new_node, j+1))
                         
                     #quick exit
-                    if 0 == drop_pal_ups or (allow_overlaps and len(scores)):
+                    if not drop_abs_acq and (0 == drop_pal_ups or (allow_overlaps and len(scores))):
                         break
                 ####for pk, node
                 if scores:
                     best_pk, drop_palups, new_node, jk = min(scores, key=lambda x: x[1] + 0.25*(k - x[0]))
                     #Only do the shift if worthwile
                     if drop_pal_ups_def > drop_palups or drop_abs_acq_def:
+                        prev_f = new_node.objects[future_obj_idx].f
                         new_node.objects[future_obj_idx].pad_left(node.idx - new_node.idx)
                         
                         if best_pk > 0:
                             states[best_pk] = PCS.CompositionState.ACQUISITION
-                        logger.debug(f"Merged acquisition at {nodes[best_pk].tc_pts} from {node.tc_pts}, NM={new_node.new_mask}")
+                        logger.debug(f"Merged acquisition at {nodes[best_pk].tc_pts} from {node.tc_pts}, NM={new_node.new_mask}, shift={node.idx - new_node.idx}")
                         
                         absolutes[best_pk]   =   True
                         node.new_mask[future_obj_idx] = False
@@ -333,7 +335,7 @@ class WOBSAnalyzer:
                 k -= 1
                 continue
 
-            assert states[k] == PCS.CompositionState.ACQUISITION
+            assert states[k] == PCS.CompositionState.ACQUISITION, f"Filtering error: {nodes[k].tc_pts} k={nodes[k].idx} is not an acquisition. NM={nodes[k].new_mask} OM={list(map(lambda x: x is not None, nodes[k].objects))}."
             dts_start_nc = dts_start = nodes[k].dts()
             j = j_nc = k - 1
             while j > 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts()):
@@ -427,7 +429,7 @@ class WOBSAnalyzer:
                 nodes[k].partial = is_normal_case
                 flags[k] = int(is_normal_case)
                 if is_normal_case:
-                    logger.info(f"Object refreshed with a NORMAL CASE at {nodes[k].tc_pts} (tight timing).")
+                    logger.info(f"Object refreshed with a Normal Case at {nodes[k].tc_pts} (tight timing).")
             k -= 1
         ####while k > 0
 
