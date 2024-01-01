@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Copyright (C) 2023 cibo
+Copyright (C) 2024 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 
 SUPer is free software: you can redistribute it and/or modify
@@ -531,7 +531,7 @@ class LogFacility:
             pbar = nullcontext()
             pbar.n = 0
         if getattr(pbar, 'update', None) is None:
-            pbar.update = pbar.close = pbar.set_description = pbar.reset = pbar.refresh = lambda *args, **kwargs: None
+            pbar.update = pbar.close = pbar.set_description = pbar.reset = pbar.refresh = pbar.clear = lambda *args, **kwargs: None
         cls._logpbar[logger.name] = pbar
         return pbar
     ####
