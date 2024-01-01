@@ -293,7 +293,7 @@ class WOBSAnalyzer:
                         break
                 ####for pk, node
                 if scores:
-                    best_pk, drop_palups, new_node, jk = min(scores, key=lambda x: x[1] + 0.25*(k - x[0]))
+                    best_pk, drop_palups, new_node, jk = min(scores, key=lambda x: x[1] + 0.1249*(k - x[0]))
                     #Only do the shift if worthwile
                     if drop_pal_ups_def > drop_palups or drop_abs_acq_def:
                         prev_f = new_node.objects[future_obj_idx].f

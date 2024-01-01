@@ -260,6 +260,9 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
                         ods_data = bytearray()
                         ods_width = seg.width
                         ods_height = seg.height
+                        if 8 > min(ods_width, ods_height) or 4096 < max(ods_width, ods_height):
+                            logger.error(f"Illegal object dimensions at {to_tc(current_pts)}, object id={seg.o_id}: {ods_width}x{ods_height}.")
+                            compliant = False
                         if (slot := buffer.get(seg.o_id)) is None:
                             if not buffer.allocate_id(seg.o_id, seg.height, seg.width):
                                 logger.error("Object buffer overflow (not enough memory for all object slots).")
