@@ -294,10 +294,6 @@ class BDVideo:
         HD720     = (1280, 720)
         SD576_43  = (720,  576)
         SD480_43  = (720,  480)
-        HD1080_43 = (1440, 1080) #Probably illegal
-        SD576_169 = (1024, 576)  #Probably illegal
-        SD480_169 = (856,  480)  #Probably illegal
-
 
     class PCSFPS(IntEnum):
         FILM_NTSC_P = 0x10
@@ -306,6 +302,7 @@ class BDVideo:
         NTSC_P      = 0x40
         PAL_I       = 0x60
         NTSC_I      = 0x70
+        FPS_60      = 0x80
 
         @classmethod
         def from_fps(cls, other: float):

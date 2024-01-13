@@ -26,7 +26,6 @@ from SSIM_PIL import compare_ssim
 
 from typing import Optional, Union
 from collections.abc import Iterable
-from importlib.util import find_spec
 from enum import IntEnum, auto
 from piliq import PILIQ
 import cv2

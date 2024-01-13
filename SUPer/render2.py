@@ -55,24 +55,24 @@ class GroupingEngine:
             slice_y = slice(event.y-pytl, event.y-pytl+event.height)
             alpha = np.array(event.img.getchannel('A'), dtype=np.uint8)
             event.unload()
-            
+
             alpha[alpha > 0] = 1
             gs_orig[0, slice_y, slice_x] |= (alpha > 0)
         return gs_orig
-    
+
     def find_layout(self, gs_origs: npt.NDArray[np.uint8]) -> tuple[WindowOnBuffer]:
         xl, yl, xr, yr = Image.fromarray(gs_origs[0, :, :], 'L').getbbox(alpha_only=False)
         if self.n_groups == 1 or (gs_origs.shape[1] < 8 and gs_origs.shape[2] < 8):
             logger.debug("Single window due to shape or n_groups")
             return (WindowOnBuffer([ScreenRegion(yl, yr-yl, xl, xr-xl, 0, 1, None)]),)
-        
+
         def check_best(best_area: int, wd1: Box, wd2: Box, prev_wob: tuple[WindowOnBuffer]) -> tuple[int, tuple[WindowOnBuffer]]:
             #Clean up this mess. WOB and ScreenRegion are outdated containers.
             wd1 = WindowOnBuffer([ScreenRegion(wd1.y, wd1.dy, wd1.x, wd1.dx, 0, 1, None)])
             wd1b = wd1.get_window()
             wd2 = WindowOnBuffer([ScreenRegion(wd2.y, wd2.dy, wd2.x, wd2.dx, 0, 1, None)])
             wd2b = wd2.get_window()
-    
+
             if Box.intersect(wd1b, wd2b).area > 0:
                 wd = WindowOnBuffer(wd1.srs + wd2.srs)
                 new_area = wd.get_window().area
@@ -80,14 +80,14 @@ class GroupingEngine:
             else:
                 new_area = wd1b.area + wd2b.area
                 lwobs = (wd1, wd2)
-    
+
             if new_area < best_area:
                 best_area = new_area
                 best_wob = lwobs
             else:
                 best_wob = prev_wob
             return best_area, best_wob
-    
+
         best_wob = None
         best_area = np.inf
         for yj in range(yl+8, yr-8):
@@ -95,19 +95,19 @@ class GroupingEngine:
             xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[0, yj:, :]).getbbox(alpha_only=False)
             bottom_wd = Box.from_coords(xt0, yt0+yj, xt1, yt1+yj)
             best_area, best_wob = check_best(best_area, top_wd, bottom_wd, best_wob)
-    
+
         for xj in range(xl+8, xr-8):
             left_wd = Box.from_coords(*Image.fromarray(gs_origs[0, :, :xj]).getbbox(alpha_only=False))
             xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[0, :, xj:]).getbbox(alpha_only=False)
             right_wd = Box.from_coords(xt0+xj, yt0, xt1+xj, yt1)
             best_area, best_wob = check_best(best_area, left_wd, right_wd, best_wob)
-    
+
         # 356 = 32e6/90e3: number of pixels we can output in a tick. If area diff is smaller,
-        # the tick overhead for dual windows/objects may not be worthwile. 
+        # the tick overhead for dual windows/objects may not be worthwile.
         if best_wob is None or sum(map(lambda x: x.get_window().area, best_wob)) >= (yr - yl)*(xr - xl) - 356:
             logger.debug("No layout found or a single window is as efficient.")
             return (WindowOnBuffer([ScreenRegion(yl, yr-yl, xl, xr-xl, 0, 1, None)]),)
-    
+
         for wd in best_wob:
             wd = wd.get_window()
             assert wd.dx >= 8 and wd.dy >= 8, "Incorrect window or object size."
@@ -208,7 +208,7 @@ class WOBSAnalyzer:
                     box_assets = list(filter(lambda x: x != None, [positions[wid], cboxes[k][wid]]))
                     if len(box_assets) > 0:
                         cont = Box.union(*box_assets)
-                        
+
                         if cont.dx > bslots[wid][1] or cont.dy > bslots[wid][0]:
                             assert cboxes[k][wid] is not None
                             states[k] = PCS.CompositionState.ACQUISITION
@@ -216,7 +216,7 @@ class WOBSAnalyzer:
                             node.new_mask[wid] = True #For possible Normal case update
                             drought = 0
                         else:
-                            positions[wid] = cont                    
+                            positions[wid] = cont
                 #### for wid
             #### if not nc
             if thresh == 0 and not node.nc_refresh:
@@ -256,7 +256,7 @@ class WOBSAnalyzer:
                 while (j := j-1) and (nodes[j].dts_end() >= node.dts() or nodes[j].pts() + pts_delta >= node.pts()):
                     drop_abs_acq_def |= absolutes[j]
                     drop_pal_ups_def += int(not allow_overlaps)
-                
+
                 for pk, pnode in enumerate(reversed(nodes[:k]), 1):
                     if pnode.objects == []:
                         continue
@@ -270,7 +270,7 @@ class WOBSAnalyzer:
                     new_node.objects[future_obj_idx] = node.objects[future_obj_idx]
                     new_node.pos[future_obj_idx] = node.pos[future_obj_idx]
                     new_node.nc_refresh = False
-                    
+
                     drop_abs_acq = False
                     drop_pal_ups = 0
                     j = k - pk
@@ -287,7 +287,7 @@ class WOBSAnalyzer:
 
                     elif not drop_abs_acq and (nodes[j].dts_end() < new_node.dts() and nodes[j].pts() + pts_delta < new_node.pts()):
                         scores.append((k - pk, drop_pal_ups, new_node, j+1))
-                        
+
                     #quick exit
                     if not drop_abs_acq and (0 == drop_pal_ups or (allow_overlaps and len(scores))):
                         break
@@ -298,17 +298,17 @@ class WOBSAnalyzer:
                     if drop_pal_ups_def > drop_palups or drop_abs_acq_def:
                         prev_f = new_node.objects[future_obj_idx].f
                         new_node.objects[future_obj_idx].pad_left(node.idx - new_node.idx)
-                        
+
                         if best_pk > 0:
                             states[best_pk] = PCS.CompositionState.ACQUISITION
                         logger.debug(f"Merged acquisition at {nodes[best_pk].tc_pts} from {node.tc_pts}, NM={new_node.new_mask}, shift={node.idx - new_node.idx}")
-                        
+
                         absolutes[best_pk]   =   True
                         node.new_mask[future_obj_idx] = False
-    
+
                         for j in range(jk, best_pk):
                             states[j] = PCS.CompositionState.NORMAL
-                            nodes[j].nc_refresh = True   
+                            nodes[j].nc_refresh = True
                         for j in range(best_pk+1, k+1):
                             states[j] = PCS.CompositionState.NORMAL
                             nodes[j].nc_refresh = True
@@ -472,7 +472,7 @@ class WOBSAnalyzer:
             return np.array([widths[0], 0], np.int32), (sum(widths), max(heights))
         return np.array([0, heights[0]], np.int32), (max(widths), sum(heights))
 
-    def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, windows: list[Box], node: 'DSNode', 
+    def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, windows: list[Box], node: 'DSNode',
                                  double_buffering: int, has_two_objs: bool, is_compat_mode: bool,
                                  ods_reg: list[int], c_pts: float, normal_case_refresh: bool, flags: list[int]) -> ...:
         box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
@@ -570,7 +570,7 @@ class WOBSAnalyzer:
 
                 assert len(flags[i:k]) >= len(pgo.gfx[i-pgo.f:k-pgo.f])
                 imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
-                
+
                 cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                 # cparams = box_to_crop(pgo.box)
                 # cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
@@ -589,7 +589,7 @@ class WOBSAnalyzer:
                     mibm, mabm = min(wd_pal[0].palette), max(wd_pal[0].palette)
                     pals[-1].append(Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(mibm, mabm+1)}))
                     pals[-1].extend([Palette()] * ((k-i)-len(pals[-1])))
-                
+
                 o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, wd_bitmap.shape[1], wd_bitmap.shape[0], ods_data, pts=c_pts)
                 ods_reg[oid] += 1
             if id_skipped is not None:
@@ -711,6 +711,8 @@ class WOBSAnalyzer:
                 c_pts = get_pts(TC.tc2s(nodes[i].tc_pts, self.bdn.fps))
                 logger.debug(f"Shifted event: {self.events[i].tc_in} -> {nodes[i].tc_pts}, {get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))} -> c_pts={c_pts}")
 
+            assert c_pts == get_pts(TC.tc2s(nodes[i].tc_pts, self.target_fps))
+
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
@@ -809,7 +811,7 @@ class WOBSAnalyzer:
                     if z+1 == k:
                         break
                 assert z+1 == k
-            
+
             if insert_acqs > 0 and len(pals[0]) > insert_acqs and flags[k-1] != -1:
                 t_diff = TC.tc2s(self.events[k-1].tc_out, self.bdn.fps) - TC.tc2s(self.events[k-1].tc_in, self.bdn.fps)
                 #Worst decoding time is twice the write duration. The next display set should also have as much margin.
@@ -833,7 +835,7 @@ class WOBSAnalyzer:
 
                         logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
                         c_pts = get_pts(TC.tc2s(nodes[k-1].tc_pts, self.bdn.fps))
-                        
+
                         r = self._generate_acquisition_ds(k-1, k, pgobs_items, windows, nodes[k-1], double_buffering,
                                                           has_two_objs > 1, is_compat_mode, ods_reg, c_pts, False, flags)
                         cobjs, _, o_ods, pal = r
@@ -846,7 +848,7 @@ class WOBSAnalyzer:
                         DSNode.apply_pts_dts(nds, DSNode.set_pts_dts_sc(nds, self.buffer, wds, nodes[k-1]))
                         displaysets.append(nds)
                     else:
-                        logger.debug(f"Failed to insert an acquisition at {original_tc}: event shift was excessive.")   
+                        logger.debug(f"Failed to insert an acquisition at {original_tc}: event shift was excessive.")
             i = k
             last_cobjs = cobjs
             pbar.n = i
@@ -919,7 +921,7 @@ class WOBSAnalyzer:
                             running_bbox[wid] = ob
                         elif objs[wid].is_active(node.idx):
                             assert k > 0
-                            assert None != running_bbox[wid] 
+                            assert None != running_bbox[wid]
                             ob = running_bbox[wid]
                         else:
                             raise RuntimeError("Rendering error, getting bbox of object that is neither visible or active.")
