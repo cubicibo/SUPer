@@ -79,6 +79,7 @@ def wrapper_mp() -> None:
             return
 
     do_super.enabled = False
+    do_abort.enabled = True
     logger.info("Starting optimiser process.")
     do_super.text = "Generating (check console)..."
     while True:
@@ -113,6 +114,7 @@ def monitor_mp() -> None:
                 do_super.proc = Process(target=from_bdnxml, args=(do_super.queue,), daemon=True, name="SUPinternal")
                 do_super.ts = time.time()
                 do_reset = True
+                do_abort.enabled = False
     if do_reset and bdnname.value and supout.value:
         do_super.enabled = True
         do_super.text = SUPER_STRING
@@ -166,17 +168,28 @@ def set_outputsup() -> None:
 def terminate(frame = None, sig = None):
     global app
     global do_super
+    proc, do_super.proc = do_super.proc, None
+
     app.cancel(monitor_mp)
     app.destroy()
 
-    if do_super.proc is not None:
-        proc, do_super.proc = do_super.proc, None
+    if proc is not None:
         try:
             proc.kill()
         except:
             ...
         else:
             proc.join(0.1)
+
+def abort() -> None:
+    proc = do_super.proc
+    if proc is not None:
+        try:
+            proc.terminate()
+        except:
+            ...
+        else:
+            proc.join(0.25)
 
 def from_bdnxml(queue: ...) -> None:
     #### This function runs in MP context, not main.
@@ -248,6 +261,8 @@ if __name__ == '__main__':
     supout = Text(app, grid=[1,pos_v], align='left', size=10)
 
     do_super = PushButton(app, command=wrapper_mp, text=SUPER_STRING, grid=[0,pos_v:=pos_v+1,2,1], align='left', enabled=False)
+    do_abort = PushButton(app, command=abort, text="Abort", grid=[1,pos_v], align='left', enabled=False)
+
     do_super.queue = mp.Queue(10)
     do_super.proc = mp.Process(target=from_bdnxml, args=(do_super.queue,), daemon=True, name="SUPinternal")
     do_super.ts = time.time()
