@@ -389,7 +389,10 @@ class TimeConv:
     @classmethod
     def add_framestc(cls, tc: str, fps: float, nf: int) -> str:
         fps = round(fps, 2)
-        return str(Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF) + nf)
+        tc_udf = Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF) + nf
+        if cls.FORCE_NDF:
+            tc_udf.drop_frame = False
+        return str(tc_udf)
 
     @classmethod
     def add_frames(cls, tc: str, fps: float, nf: int) -> float:

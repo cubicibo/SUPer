@@ -405,6 +405,8 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float, ndf_ntsc: bool = False
     else:
         to_tc = lambda pts: TC.s2tc(pts, fps)
 
+    frame_duration = np.floor(PGDecoder.FREQ/fps)
+
     for k, epoch in enumerate(epochs):
         pts_delta = int(sum(map(lambda w: np.ceil(w.width*w.height*PGDecoder.FREQ/PGDecoder.RC), epoch[0].wds)))
         wipe_duration = int(np.ceil(epoch[0].pcs.width*epoch[0].pcs.height*PGDecoder.FREQ/PGDecoder.RC))
@@ -421,11 +423,13 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float, ndf_ntsc: bool = False
                 # WDS action requires pts_delta margin from previous DS
                 diff = (ds.pcs.tpts - prev_pts) & PTS_MASK
                 ds_comply &= diff > pts_delta and diff < PTS_DIFF_BOUND
+                #WDS deadline is pts_delta close to final pts
                 ds_comply &= (ds.pcs.tpts - ds.wds.tpts) & PTS_MASK <= pts_delta
+                #WDS decoding should be realistic (epoch start is worst case)
                 ds_comply &= (ds.wds.tpts - ds.wds.tdts) & PTS_MASK <= wipe_duration*2
             else:
                 # Palette update and others requires one frame duration as margin
-                ds_comply &= round(PGDecoder.FREQ*(ds.pcs.tpts - prev_pts + 4/PGDecoder.FREQ)) & PTS_MASK > np.ceil(PGDecoder.FREQ/fps)
+                ds_comply &= (ds.pcs.tpts - prev_pts) & PTS_MASK >= frame_duration
             for pds in ds.pds:
                 ds_comply &= pds.tpts == pds.tdts
             for seg in ds:
@@ -434,7 +438,7 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float, ndf_ntsc: bool = False
                 prev_dts = seg.tdts
             prev_pts = ds.pcs.tpts
             if not ds_comply:
-                logger.error(f"Incorrect PTS-DTS intervals at {to_tc(ds.pcs.pts)}, stream is out of spec.")
+                logger.error(f"Incorrect PTS-DTS at {to_tc(ds.pcs.pts)}, DS:S={ds.pcs.composition_state:02X}:PU={ds.pcs.pal_flag > 0}, stream is out of spec.")
             is_compliant &= ds_comply
         ####ds
     ####epochs

@@ -121,11 +121,10 @@ class GroupingEngine:
 
 #%%
 class WOBSAnalyzer:
-    def __init__(self, wobs: tuple[WindowOnBuffer], events: list[BDNXMLEvent], box: Box, fps: Union[float, int], bdn: ..., **kwargs):
+    def __init__(self, wobs: tuple[WindowOnBuffer], events: list[BDNXMLEvent], box: Box, bdn: ..., **kwargs):
         self.wobs = wobs
         self.events = events
         self.box = box
-        self.target_fps = fps
         self.bdn = bdn
         self.kwargs = kwargs
         self.buffer = PGObjectBuffer()
@@ -146,7 +145,7 @@ class WOBSAnalyzer:
 
     def analyze(self):
         allow_normal_case = self.kwargs.get('normal_case_ok', False)
-        scale_pts = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
+        scale_pts = 1.001 if self.kwargs.get('adjust_ntsc', False) else 1
         dts_strat = self.kwargs.get('ts_long', False)
         enforce_dts = self.kwargs.get('enforce_dts', True)
         ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
@@ -157,12 +156,12 @@ class WOBSAnalyzer:
         pm = PaletteManager()
 
         #Adjust slightly SSIM threshold depending of res
-        ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480) + ssim_offset)
+        ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480))
 
         #Init
         gens, windows = [], []
         for k, swob in enumerate(self.wobs):
-            woba.append(WOBAnalyzer(swob, ssim_threshold=ssim_score))
+            woba.append(WOBAnalyzer(swob, ssim_threshold=ssim_score, ssim_offset=ssim_offset))
             windows.append(swob.get_window())
             gens.append(woba[k].analyze())
             next(gens[-1])
@@ -632,7 +631,7 @@ class WOBSAnalyzer:
         is_compat_mode = True #self.kwargs.get('pgs_compatibility', True)
         insert_acqs = self.kwargs.get('insert_acquisitions', 0)
         displaysets = []
-        time_scale = 1.001 if self.kwargs.get('adjust_dropframe', False) else 1
+        time_scale = 1.001 if self.kwargs.get('adjust_ntsc', False) else 1
         use_full_pal = self.kwargs.get('full_palette', False)
         palette_manager = PaletteManager()
 
@@ -662,11 +661,11 @@ class WOBSAnalyzer:
 
         get_pts: Callable[[float], float] = lambda c_pts: max(c_pts - (1/3)/PGDecoder.FREQ, 0) * time_scale
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
-                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.target_fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
+                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.bdn.fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
         final_node = DSNode([], windows, self.events[-1].tc_out, nc_refresh=True)
         #Do we have time to redraw the window (with some margin)?
-        perform_wds_end = durs[-1][0] >= np.ceil(((final_node.write_duration() + 10)/PGDecoder.FREQ)*self.target_fps)
+        perform_wds_end = durs[-1][0] >= np.ceil(((final_node.write_duration() + 10)/PGDecoder.FREQ)*self.bdn.fps)
 
         pbar = LogFacility.get_progress_bar(logger, range(n_actions))
         pbar.set_description("Encoding", False)
@@ -677,7 +676,7 @@ class WOBSAnalyzer:
                 assert i > 0
                 assert nodes[i].parent is not None
                 w_pts = get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps))
-                wds_doable = (nodes[i].parent.write_duration() + 3)/PGDecoder.FREQ < 1/self.target_fps
+                wds_doable = (nodes[i].parent.write_duration() + 3)/PGDecoder.FREQ < 1/self.bdn.fps
                 if wds_doable and not nodes[i].parent.is_custom_dts():
                     uds, pcs_id = self._get_undisplay(w_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
                     logger.debug(f"Writing screen clear with WDS at PTS={self.events[i-1].tc_out} before an acquisition.")
@@ -711,7 +710,7 @@ class WOBSAnalyzer:
                 c_pts = get_pts(TC.tc2s(nodes[i].tc_pts, self.bdn.fps))
                 logger.debug(f"Shifted event: {self.events[i].tc_in} -> {nodes[i].tc_pts}, {get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))} -> c_pts={c_pts}")
 
-            assert c_pts == get_pts(TC.tc2s(nodes[i].tc_pts, self.target_fps))
+            assert c_pts == get_pts(TC.tc2s(nodes[i].tc_pts, self.bdn.fps))
 
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
@@ -759,7 +758,7 @@ class WOBSAnalyzer:
                     #Is there a know screen clear in the chain? then use palette screen clear here
                     if durs[z][1] != 0:
                         assert nodes[z].parent is not None
-                        logger.debug(f"Writing screen wipe in palette update chain at PTS={self.events[z-1].tc_out}")
+                        logger.debug(f"Writing screen wipe in palette update chain at PTS={self.events[z-1].tc_out}={c_pts:.03f}")
                         p_id, p_vn = get_palette_data(palette_manager, nodes[z].parent)
                         nodes[z].parent.palette_id = p_id
                         nodes[z].parent.pal_vn = p_vn
@@ -775,7 +774,7 @@ class WOBSAnalyzer:
                         r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), windows, nodes[z], double_buffering,
                                                           has_two_objs, is_compat_mode, ods_reg, c_pts, normal_case_refresh, flags)
                         cobjs, n_pals, o_ods, new_pal = r
-                        logger.debug(f"NORMAL CASE: PTS={self.events[z].tc_in}={c_pts:.03f}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
+                        logger.debug(f"Normal Case: PTS={self.events[z].tc_in}={c_pts:.03f}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
                         pal |= new_pal
                         for nz, (new_p1, new_p2) in enumerate(zip_longest(n_pals[0], n_pals[1], fillvalue=Palette()), z):
                             pals[0][nz-i] |= new_p1
@@ -783,13 +782,13 @@ class WOBSAnalyzer:
                         normal_case_refresh = True
                         last_palette_id = None
                     elif flags[z] == -1:
-                        logger.debug(f"Skipped discarded event at PTS={self.events[z].tc_in}.")
+                        logger.debug(f"Skipped discarded event at PTS={self.events[z].tc_in}={c_pts:.03f}.")
                         continue
 
                     p_write = (pals[0][z-i] | pals[1][z-i])
                     #Skip empty palette updates
                     if len(p_write) == 0:
-                        logger.debug(f"Skipped an empty palette at PTS={self.events[z].tc_in}.")
+                        logger.debug(f"Skipped an empty palette at PTS={self.events[z].tc_in}={c_pts:.03f}.")
                         continue
 
                     p_id, p_vn = get_palette_data(palette_manager, nodes[z])
@@ -847,8 +846,8 @@ class WOBSAnalyzer:
                         nds = DisplaySet([pcs, wds, pds] + o_ods + [ENDS.from_scratch(pts=c_pts)])
                         DSNode.apply_pts_dts(nds, DSNode.set_pts_dts_sc(nds, self.buffer, wds, nodes[k-1]))
                         displaysets.append(nds)
-                    else:
-                        logger.debug(f"Failed to insert an acquisition at {original_tc}: event shift was excessive.")
+                    ####if nodes[k-1
+                ####if t_diff >
             i = k
             last_cobjs = cobjs
             pbar.n = i
@@ -867,7 +866,7 @@ class WOBSAnalyzer:
             displaysets.append(uds)
 
             #Prepare an additional display set to undraw the screen. Will be added by parent if there's enough time before the next epoch.
-            nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self.target_fps)/PGDecoder.FREQ)))
+            nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self.bdn.fps)/PGDecoder.FREQ)))
             final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, nf_shift)
             logger.debug(f"Optional epoch end screen wipe PTS: {TC.add_framestc(self.events[-1].tc_out, self.bdn.fps, nf_shift)}={get_pts(final_pts)}.")
         else:
@@ -1000,12 +999,18 @@ class WOBSAnalyzer:
 #%%
 
 class WOBAnalyzer:
-    def __init__(self, wob, ssim_threshold: float = 0.986, overlap_threshold: float = 0.995) -> None:
+    def __init__(self,
+        wob, ssim_threshold: float = 0.986,
+        ssim_offset: float = 0.0,
+        overlap_threshold: float = 0.995
+    ) -> None:
         self.wob = wob
         assert ssim_threshold < 1.0, "Not a valid SSIM threshold"
         self.ssim_threshold = ssim_threshold
         assert 0 < overlap_threshold < 1.0, "Not a valid overlap threshold."
         self.overlap_threshold = overlap_threshold
+        assert abs(ssim_offset) <= 1.0
+        self.ssim_offset = ssim_offset
 
     @staticmethod
     def get_grayscale(rgba: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -1123,8 +1128,9 @@ class WOBAnalyzer:
 
                 rgba_i = Image.fromarray(rgba)
                 score, cross_percentage = self.compare(alpha_compo, rgba_i)
-                logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333)}")
-                if score >= min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333):
+                thr_score = min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333*(1.0-self.ssim_offset))
+                logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}")
+                if score >= thr_score:
                     bitmaps.append(rgba)
                     alpha_compo.alpha_composite(rgba_i)
                     mask.append(has_content)
