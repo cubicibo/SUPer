@@ -146,11 +146,10 @@ class WOBSAnalyzer:
     def analyze(self):
         allow_normal_case = self.kwargs.get('normal_case_ok', False)
         scale_pts = 1.001 if self.kwargs.get('adjust_ntsc', False) else 1
-        dts_strat = self.kwargs.get('ts_long', False)
         enforce_dts = self.kwargs.get('enforce_dts', True)
         ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
 
-        DSNode.configure(scale_pts, self.bdn.fps, dts_strat, enforce_dts)
+        DSNode.configure(scale_pts, self.bdn.fps, enforce_dts)
 
         woba = []
         pm = PaletteManager()
@@ -204,7 +203,7 @@ class WOBSAnalyzer:
         for k, (acq, forced, margin, node) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:], nodes[1:]), 1):
             if not node.nc_refresh:
                 for wid in range(len(windows)):
-                    box_assets = list(filter(lambda x: x != None, [positions[wid], cboxes[k][wid]]))
+                    box_assets = list(filter(lambda x: x is not None, [positions[wid], cboxes[k][wid]]))
                     if len(box_assets) > 0:
                         cont = Box.union(*box_assets)
 
@@ -259,7 +258,7 @@ class WOBSAnalyzer:
                 for pk, pnode in enumerate(reversed(nodes[:k]), 1):
                     if pnode.objects == []:
                         continue
-                    redefine_same_object = next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) != None
+                    redefine_same_object = next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is not None
                     overlap_in_window = sum(map(lambda x: x is not None, [node.objects[future_obj_idx], pnode.objects[future_obj_idx]])) > 1
                     #Same object is redefined in the previous DS, give up
                     if redefine_same_object or overlap_in_window:
@@ -280,7 +279,7 @@ class WOBSAnalyzer:
                     #Shifting up to epoch start and acquisition at j=1 is not possible?
                     if not drop_abs_acq and j == 0 and (nodes[j].dts_end() >= new_node.dts() or\
                        nodes[j].pts() + pts_delta >= new_node.pts()) and\
-                       None == next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None):
+                       next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is None:
                         scores.append((0, drop_pal_ups, new_node, 0))
                         break #Hit epoch start, can't go any closer
 
@@ -1159,7 +1158,6 @@ def get_wipe_duration(wds: WDS) -> int:
 class DSNode:
     scale_pts = 1.0
     bdn_fps = None
-    conservative_dts = False
 
     def __init__(self,
             objects: list[Optional[PGObject]],
@@ -1185,10 +1183,9 @@ class DSNode:
         self._dts = None
 
     @classmethod
-    def configure(cls, scale_pts: float, fps: BDVideo.FPS, conservative_dts: bool = False, enforce_dts: bool = True) -> None:
+    def configure(cls, scale_pts: float, fps: BDVideo.FPS, enforce_dts: bool = True) -> None:
         cls.scale_pts = scale_pts
         cls.bdn_fps = fps
-        cls.conservative_dts = conservative_dts
         cls.enforce_dts = enforce_dts
 
     def wipe_duration(self) -> int:
@@ -1226,9 +1223,6 @@ class DSNode:
         if not self.nc_refresh:
             assigned_wd = list(map(lambda x: x is not None, self.objects))
             decode_duration = sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*PGDecoder.FREQ/PGDecoder.RC) for wid, flag in enumerate(assigned_wd) if not flag])
-
-            if self.__class__.conservative_dts:
-                decode_duration = self.wipe_duration()
 
             t_other_copy = 0
             for wid, obj in enumerate(self.objects):
@@ -1306,9 +1300,6 @@ class DSNode:
             assigned_windows = list(map(lambda x: x.window_id, ds.pcs.cobjects))
             unassigned_windows = [wd for wd in windows if wd not in assigned_windows]
             decode_duration = sum([np.ceil(windows[wid][0]*windows[wid][1]*PGDecoder.FREQ/PGDecoder.RC) for wid in unassigned_windows])
-
-            if cls.conservative_dts:
-                decode_duration = wipe_duration
 
         object_decode_duration = ddurs.copy()
 

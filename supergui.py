@@ -38,7 +38,7 @@ from SUPer.__metadata__ import __version__ as SUPVERS, __author__
 ### CONSTS
 SUPER_STRING = "Make it SUPer!"
 
-#### FUnctions, main at the end of the file
+#### Functions, main at the end of the file
 def get_kwargs() -> dict[str, int]:
     return {
         'quality_factor': int(compression_txt.value)/100,
@@ -53,7 +53,6 @@ def get_kwargs() -> dict[str, int]:
         'normal_case_ok': bool(normal_case_ok.value),
         'insert_acquisitions': int(biacqs_val.value),
         'libs_path': lib_paths,
-        'ts_long': bool(soft_dts.value),
         'max_kbps': int(max_kbps.value),
         'log_to_file': opts_log[logcombo.value],
         'ssim_tol': int(ssim_tolb.value)/100,
@@ -73,7 +72,7 @@ def wrapper_mp() -> None:
         invalid |= not (0 <= kwargs['insert_acquisitions'])
         invalid |= not (0 <= kwargs['quality_factor'] <= 1)
         invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
-        invalid |= kwargs['max_kbps'] <= 0
+        invalid |= kwargs['max_kbps'] <= 0 or kwargs['max_kbps'] >= 48000
         if invalid:
             logger.error("Invalid parameter found, aborting.")
             return
@@ -127,7 +126,7 @@ def hide_chkbox() -> None:
         set_dts.enabled = scenarist_fullpal.enabled = False
         #scenarist_checks.enabled = False
     elif not supout.value.lower().endswith('pes'):
-        set_dts.enabled = True
+        #set_dts.enabled = True
         scenarist_fullpal.enabled = True
         #scenarist_checks.enabled = True
 
@@ -157,7 +156,7 @@ def set_outputsup() -> None:
         scenarist_fullpal.enabled = False
     else:
         if not all_formats.value:
-            set_dts.enabled = True
+            #set_dts.enabled = True
             #scenarist_checks.enabled = True
             scenarist_fullpal.enabled = True
 
@@ -297,9 +296,10 @@ if __name__ == '__main__':
 
     set_dts = CheckBox(app, text="Enforce strict compliancy (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     set_dts.value = True
-    Hovertip(set_dts.tk, "PG streams include a decoding timestamp. This timestamp is required by old decoders\n"\
-                         "else the on-screen behaviour is erratic. This is forcefully ticked for PES+MUI output.\n"\
-                         "It must be ticked to ensure compatibility and strict compliancy to Blu-ray specifications.")
+    set_dts.enabled = False
+    Hovertip(set_dts.tk, "If ticked, set the decoding timestamp in the stream to ensure strict compliancy and compatibility.\n"\
+                        f"\nNOTE: This is forcefully ticked, the generation of out-of-spec streams is now forbidden.\n"\
+                         "This checkbox will be dropped in the future.")
 
     #scenarist_checks = CheckBox(app, text="Apply additional compliancy rules for Scenarist BD", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     #scenarist_checks.value = 1
@@ -317,10 +317,6 @@ if __name__ == '__main__':
                            "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
                            "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
                            "as if it was 59.94. This flag is meaningless with 23.976 or 24p.")
-
-    soft_dts = CheckBox(app, text="Use PTS/DTS strategy with margin.", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(soft_dts.tk, "When new objects are defined, the DTS-PTS delta includes an additional (unecessary) margin.\n"\
-                          "This reduces the ability to perform acquisitions.")
 
     biacqs = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
     biacqs_val = TextBox(biacqs, width=2, height=1, grid=[0,0], text="2")
