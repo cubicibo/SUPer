@@ -74,14 +74,12 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=-1, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
-    #parser.add_argument('--nodts', help="Flag to not set DTS in stream (NOT COMPLIANT)", action='store_true', default=False, required=False)
     #parser.add_argument('--aheadoftime', help="Flag to allow ahead of time decoding. (NOT COMPLIANT)", action='store_true', default=False, required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
     parser.add_argument("output", type=str)
     args = parser.parse_args()
     args.aheadoftime = False
-    args.nodts = False
 
     #### Sanity checks and conversion
     args.output, ext = check_output(args.output, args.yes)
@@ -165,7 +163,6 @@ if __name__ == '__main__':
         'scale_fps': args.subsampled,
         'quantize_lib': args.qmode,
         'bt_colorspace': f"bt{args.bt}",
-        'enforce_dts': not args.nodts,
         'no_overlap': not args.aheadoftime,
         'full_palette': args.palette,
         'output_all_formats': args.withsup,

@@ -146,10 +146,9 @@ class WOBSAnalyzer:
     def analyze(self):
         allow_normal_case = self.kwargs.get('normal_case_ok', False)
         scale_pts = 1.001 if self.kwargs.get('adjust_ntsc', False) else 1
-        enforce_dts = self.kwargs.get('enforce_dts', True)
         ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
 
-        DSNode.configure(scale_pts, self.bdn.fps, enforce_dts)
+        DSNode.configure(scale_pts, self.bdn.fps)
 
         woba = []
         pm = PaletteManager()
@@ -1183,10 +1182,9 @@ class DSNode:
         self._dts = None
 
     @classmethod
-    def configure(cls, scale_pts: float, fps: BDVideo.FPS, enforce_dts: bool = True) -> None:
+    def configure(cls, scale_pts: float, fps: BDVideo.FPS) -> None:
         cls.scale_pts = scale_pts
         cls.bdn_fps = fps
-        cls.enforce_dts = enforce_dts
 
     def wipe_duration(self) -> int:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
@@ -1348,8 +1346,9 @@ class DSNode:
 
     @classmethod
     def apply_pts_dts(cls, ds: DisplaySet, ts: tuple[int, int]) -> None:
-        nullify_dts = lambda x: x*(1 if cls.enforce_dts else 0)
-        select_pts = lambda x: x if cls.enforce_dts else ts[0][0]
+        enforce_dts = True
+        nullify_dts = lambda x: x*(1 if enforce_dts else 0)
+        select_pts = lambda x: x if enforce_dts else ts[0][0]
 
         assert len(ds) == len(ts), "Timestamps-DS size mismatch."
         for seg, (pts, dts) in zip(ds, ts):

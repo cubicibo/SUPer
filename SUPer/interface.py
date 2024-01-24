@@ -164,17 +164,17 @@ class BDNRender:
         # Final check
         logger.info("Checking stream consistency and compliancy...")
         final_fps = round(bdn.fps, 2) * int(1+scaled_fps)
-        compliant, warnings = is_compliant(self._epochs, final_fps, self.kwargs.get('enforce_dts', True), self.kwargs.get('adjust_ntsc', False))
+        compliant, warnings = is_compliant(self._epochs, final_fps)
 
-        if compliant and self.kwargs.get('enforce_dts', True):
+        if compliant:
             logger.info("Checking PTS and DTS rules...")
-            compliant &= check_pts_dts_sanity(self._epochs, final_fps, self.kwargs.get('adjust_ntsc', False))
+            compliant &= check_pts_dts_sanity(self._epochs, final_fps)
             if not compliant:
                 logger.error("=> Stream has a PTS/DTS issue!!")
             elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
                 logger.info(f"Checking PG buffer usage w.r.t bitrate: {max_bitrate} Kbps")
                 max_bitrate = max_bitrate*1000/8
-                warnings += not test_rx_bitrate(self._epochs, int(max_bitrate), final_fps, self.kwargs.get('adjust_ntsc', False))
+                warnings += not test_rx_bitrate(self._epochs, int(max_bitrate), final_fps)
         if warnings == 0 and compliant:
             logger.info("=> Output PGS seems compliant.")
         if warnings > 0 and compliant:

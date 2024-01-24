@@ -46,7 +46,6 @@ def get_kwargs() -> dict[str, int]:
         'scale_fps': bool(scale_fps.value),
         'quantize_lib': Quantizer.get_option_id(quantcombo.value),
         'bt_colorspace': colorspace.value,
-        'enforce_dts': bool(set_dts.value),
         'no_overlap': True, #scenarist_checks.value,
         'full_palette': bool(scenarist_fullpal.value),
         'output_all_formats': bool(all_formats.value),
@@ -120,13 +119,11 @@ def monitor_mp() -> None:
 
 def hide_chkbox() -> None:
     if all_formats.value:
-        set_dts.value = True
         scenarist_fullpal.value = True
         #scenarist_checks.value = True
-        set_dts.enabled = scenarist_fullpal.enabled = False
+        scenarist_fullpal.enabled = False
         #scenarist_checks.enabled = False
     elif not supout.value.lower().endswith('pes'):
-        #set_dts.enabled = True
         scenarist_fullpal.enabled = True
         #scenarist_checks.enabled = True
 
@@ -148,15 +145,12 @@ def set_outputsup() -> None:
         supout.value += '.sup'
 
     if supout.value.lower().endswith('pes'):
-        set_dts.value = True
-        set_dts.enabled = False
         #scenarist_checks.value = True
         #scenarist_checks.enabled = False
         scenarist_fullpal.value = True
         scenarist_fullpal.enabled = False
     else:
         if not all_formats.value:
-            #set_dts.enabled = True
             #scenarist_checks.enabled = True
             scenarist_fullpal.enabled = True
 
@@ -293,13 +287,6 @@ if __name__ == '__main__':
     Hovertip(normal_case_ok.tk, "This option may reduce the number of dropped events on complicated animations.\n"\
                                 "When there are two objects on screen and one must be updated, it may be possible\n"\
                                 "to update the given object in a tighter time window than in an acquisition (both objects refreshed).")
-
-    set_dts = CheckBox(app, text="Enforce strict compliancy (see tooltip)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    set_dts.value = True
-    set_dts.enabled = False
-    Hovertip(set_dts.tk, "If ticked, set the decoding timestamp in the stream to ensure strict compliancy and compatibility.\n"\
-                        f"\nNOTE: This is forcefully ticked, the generation of out-of-spec streams is now forbidden.\n"\
-                         "This checkbox will be dropped in the future.")
 
     #scenarist_checks = CheckBox(app, text="Apply additional compliancy rules for Scenarist BD", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     #scenarist_checks.value = 1

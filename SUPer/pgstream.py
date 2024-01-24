@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, Epoch, DisplaySet
-from .pgraphics import PGDecoder, PGraphics, PGObjectBuffer
+from .pgraphics import PGDecoder, PGraphics, PGObjectBuffer, PaletteManager
 from .palette import Palette
 from .utils import LogFacility, TimeConv as TC, Box
 
@@ -103,15 +103,12 @@ class LeakyBuffer:
         return (100*self.stats.min, 100*self.stats.avg, round(self.stats.max1s, 3))
 ####
 
-def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float, ndf_ntsc: bool = False) -> bool:
+def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
     prev_ts = (epochs[0][0][0].tdts-int(PGDecoder.FREQ)) & ((1<<32)-1)
     is_ok = True
     leaky = LeakyBuffer(prev_ts, bitrate)
 
-    if ndf_ntsc:
-        leaky.set_tc_func(lambda pts: TC.s2tc(pts/PGDecoder.FREQ/1.001, fps))
-    else:
-        leaky.set_tc_func(lambda pts: TC.s2tc(pts/PGDecoder.FREQ, fps))
+    leaky.set_tc_func(lambda pts: TC.s2tc(pts/PGDecoder.FREQ/(1 if float(fps).is_integer() else 1.001), fps))
 
     dur_offset = 0
     ts_first = prev_ts
@@ -168,7 +165,7 @@ def test_diplayset(ds: DisplaySet) -> bool:
     return comply & (ds.end is not None) # "No END segment in DS."
 ####
 
-def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_ntsc: bool = False) -> bool:
+def is_compliant(epochs: list[Epoch], fps: float) -> bool:
     ts_mask = ((1 << 32) - 1)
     prev_pts = -1
     last_cbbw = 0
@@ -182,10 +179,7 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
     coded_bw_ra_pts = [-1] * round(fps)
     coded_bw_ra = [0] * round(fps)
 
-    if ndf_ntsc:
-        to_tc = lambda pts: TC.s2tc(pts/1.001, fps)
-    else:
-        to_tc = lambda pts: TC.s2tc(pts, fps)
+    to_tc = lambda pts: TC.s2tc(pts/(1 if float(fps).is_integer() else 1.001), fps)
 
     for ke, epoch in enumerate(epochs):
         windows = {}
@@ -217,7 +211,7 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
 
             for ks, seg in enumerate(ds.segments):
                 areas2gp = {}
-                if has_dts and ((seg.tpts - seg.tdts) & ts_mask >= PGDecoder.FREQ):
+                if ((seg.tpts - seg.tdts) & ts_mask >= PGDecoder.FREQ):
                     logger.warning(f"Too large PTS-DTS difference for seg._type at {to_tc(current_pts)}.")
 
                 if isinstance(seg, PCS):
@@ -339,72 +333,18 @@ def is_compliant(epochs: list[Epoch], fps: float, has_dts: bool = False, ndf_nts
             ####for
             if ds.pcs.pal_flag or ds.wds is not None:
                 compliant &= pds_vn[ds.pcs.pal_id] >= 0 #Check that the used palette is indeed set in the decoder.
-
-            area_copied = 0
-            for idx, area in areas2gp.items():
-                area_copied += area if area >= 0 else objects_sizes[idx]
-            coded_buffer_pts = last_cbbw + coded_this_ds
-            decoded_buffer_pts = last_dbbw + decoded_this_ds
-
-            if prev_pts != seg.pts:
-                coded_buffer_bandwidth = coded_buffer_pts/abs(seg.pts-prev_pts)
-                decoded_buffer_bandwidth = decoded_buffer_pts/abs(seg.pts-prev_pts)
-                last_cbbw, last_dbbw = 0, 0
-            else:
-                # Same PTS, we can't do any calculation -> accumulate to next PTS
-                last_cbbw = coded_buffer_pts
-                last_dbbw = decoded_buffer_pts
-                coded_buffer_bandwidth, decoded_buffer_bandwidth = 0, 0
-
-            # This is an arbitrary constraint: ts_packet are read at Rx=16Mbps
-            if coded_buffer_bandwidth > (max_rate := PGDecoder.RX) and not has_dts:
-                if coded_buffer_bandwidth/max_rate >= 2:
-                    logger.warning(f"High instantaneous coded bandwidth at {to_tc(seg.pts)} (not critical - fair warning)")
-                # This is not an issue unless it happens very frequently, so we don't mark as not compliant
-
-            if prev_pts != seg.pts:
-                coded_bw_ra = coded_bw_ra[1:round(fps)]
-                coded_bw_ra_pts = coded_bw_ra_pts[1:round(fps)]
-                coded_bw_ra.append(coded_buffer_pts)
-                coded_bw_ra_pts.append(seg.pts)
-
-            if (rate:=sum(coded_bw_ra)/abs(coded_bw_ra_pts[-1]-coded_bw_ra_pts[0])) > PGDecoder.RX and not has_dts:
-                logger.warning(f"Exceeding coded bandwidth at ~{to_tc(seg.pts)}, {100*rate/PGDecoder.RX:.03f}%.")
-                warnings += 1
-
-            if decoded_buffer_bandwidth > PGDecoder.RD and not has_dts:
-                logger.warning(f"Exceeding decoded buffer bandwidth at {to_tc(seg.pts)}.")
-                warnings += 1
-
-            #On palette update, we re-evaluate the existing graphic plane with a new CLUT.
-            # so we are not subject to the Rc constraint.
-            if ds.pcs.pal_flag:
-                continue
-
-            #We clear the plane (window area) and copy the objects to window. This is done at 32MB/s
-            Rc = fps*(sum(window_area.values()) + np.min([area_copied, sum(window_area.values())]))
-            nf = TC.s2f(seg.pts, fps) - TC.s2f(prev_pts, fps)
-            if nf == 0:
-                last_rc += Rc
-            elif (last_rc+Rc)/nf > PGDecoder.RC and not has_dts:
-                logger.warning(f"Graphic plane overloaded. Display is not ensured at {to_tc(seg.pts)}.")
-                warnings += 1
         #### for ds
     ####for epoch
     return compliant, warnings
 
-def check_pts_dts_sanity(epochs: list[Epoch], fps: float, ndf_ntsc: bool = False) -> bool:
+def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     PTS_MASK = (1 << 32) - 1
     PTS_DIFF_BOUND = PTS_MASK >> 1
     is_compliant = True
     prev_pts = prev_dts = -99999999
     min_dts_delta = 99999999
 
-    if ndf_ntsc:
-        to_tc = lambda pts: TC.s2tc(pts/1.001, fps)
-    else:
-        to_tc = lambda pts: TC.s2tc(pts, fps)
-
+    to_tc = lambda pts: TC.s2tc(pts/(1 if float(fps).is_integer() else 1.001), fps)
     frame_duration = np.floor(PGDecoder.FREQ/fps)
 
     for k, epoch in enumerate(epochs):
