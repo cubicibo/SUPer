@@ -69,13 +69,11 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--palette', help="Flag to always write the full palette.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Flag to overwrite output file", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Flag to write both SUP and PES+MUI files.", action='store_true', default=False, required=False)
-    parser.add_argument('-t', '--tslong', help="Flag to use PTS/DTS strategy with additional margins.", action='store_true', default=False, required=False)
     parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: off] (def:  %(default)s)", type=int, default=2, required=False)
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=-1, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
-    parser.add_argument('--nodts', help="Flag to not set DTS in stream (NOT COMPLIANT)", action='store_true', default=False, required=False)
     #parser.add_argument('--aheadoftime', help="Flag to allow ahead of time decoding. (NOT COMPLIANT)", action='store_true', default=False, required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
@@ -100,10 +98,10 @@ if __name__ == '__main__':
         logger.warning("Got invalid extra-acq, disabling option.")
         args.extra_acq = 0
 
-    if args.max_kbps > 40000:
-        logger.warning("Max bitrate is beyond total BDAV video limits.")
+    if args.max_kbps > 48000:
+        logger.warning("Max bitrate is beyond total BDAV limit.")
     elif 10 < args.max_kbps < 500:
-        logger.warning("Max bitrate is low. Buffer underflow errors may be spammed.")
+        logger.warning("Max bitrate is low. Buffer underflow errors will be spammed.")
     elif args.max_kbps < 10 and args.max_kbps != 0:
         exit_msg("Meaningless max bitrate, aborting.")
 
@@ -165,12 +163,10 @@ if __name__ == '__main__':
         'scale_fps': args.subsampled,
         'quantize_lib': args.qmode,
         'bt_colorspace': f"bt{args.bt}",
-        'enforce_dts': not args.nodts,
         'no_overlap': not args.aheadoftime,
         'full_palette': args.palette,
         'output_all_formats': args.withsup,
         'normal_case_ok': args.allow_normal,
-        'ts_long': args.tslong,
         'max_kbps': args.max_kbps,
         'log_to_file': args.log_to_file,
         'insert_acquisitions': args.extra_acq,

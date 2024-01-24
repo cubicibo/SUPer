@@ -76,15 +76,11 @@ class BDNRender:
                 import sys
                 sys.exit(1)
 
-        clip_framerate = bdn.fps
-        if isinstance(bdn.fps, float) and not bdn.dropframe:
-            bdn.fps = round(bdn.fps)
-            self.kwargs['adjust_dropframe'] = True
+        self.kwargs['adjust_ntsc'] = isinstance(bdn.fps, float) and not bdn.dropframe
+        if self.kwargs['adjust_ntsc']:
             logger.info(f"NDF NTSC detected: scaling all timestamps by 1.001.")
-        else:
-            self.kwargs['adjust_dropframe'] = False
 
-        self._first_pts = max(TC.tc2s(bdn.events[0].tc_in, bdn.fps) - (1/3)/PGDecoder.FREQ, 0) * (1.001 if self.kwargs['adjust_dropframe'] else 1.0)
+        self._first_pts = TC.tc2pts(bdn.events[0].tc_in, bdn.fps)
 
         logger.info("Finding epochs...")
 
@@ -149,7 +145,7 @@ class BDNRender:
                 else:
                     logger.info(f" => Screen layout: {len(wob)} window(s), processing...")
 
-                wobz = WOBSAnalyzer(wob, subgroup, box, clip_framerate, bdn, pcs_id=pcs_id, **kwargs)
+                wobz = WOBSAnalyzer(wob, subgroup, box, bdn, pcs_id=pcs_id, **kwargs)
                 new_epoch, final_ds, pcs_id = wobz.analyze()
                 self._epochs.append(new_epoch)
                 logger.info(f" => optimised as {len(self._epochs[-1])} display sets.")
@@ -165,18 +161,18 @@ class BDNRender:
 
         # Final check
         logger.info("Checking stream consistency and compliancy...")
-        final_fps = bdn.fps * int(1+scaled_fps)
-        compliant, warnings = is_compliant(self._epochs, final_fps, self.kwargs.get('enforce_dts', True), self.kwargs.get('adjust_dropframe', False))
+        final_fps = round(bdn.fps, 2) * int(1+scaled_fps)
+        compliant, warnings = is_compliant(self._epochs, final_fps)
 
-        if compliant and self.kwargs.get('enforce_dts', True):
+        if compliant:
             logger.info("Checking PTS and DTS rules...")
-            compliant &= check_pts_dts_sanity(self._epochs, final_fps, self.kwargs.get('adjust_dropframe', False))
+            compliant &= check_pts_dts_sanity(self._epochs, final_fps)
             if not compliant:
                 logger.error("=> Stream has a PTS/DTS issue!!")
             elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
                 logger.info(f"Checking PG buffer usage w.r.t bitrate: {max_bitrate} Kbps")
                 max_bitrate = max_bitrate*1000/8
-                warnings += not test_rx_bitrate(self._epochs, int(max_bitrate), final_fps, self.kwargs.get('adjust_dropframe', False))
+                warnings += not test_rx_bitrate(self._epochs, int(max_bitrate), final_fps)
         if warnings == 0 and compliant:
             logger.info("=> Output PGS seems compliant.")
         if warnings > 0 and compliant:

@@ -524,7 +524,7 @@ class BDNXML(SeqIO):
 
         hformat = header.find('Format')
         self.fps = float(hformat.attrib['FrameRate'])
-        self.dropframe = bool(1 if hformat.attrib['DropFrame'].lower() == 'true' else 0)
+        self.dropframe = bool(hformat.attrib['DropFrame'].lower() == 'true')
         self.format = hformat.attrib['VideoFormat']
 
     def _parse_events(self) -> None:

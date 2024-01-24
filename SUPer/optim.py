@@ -319,9 +319,9 @@ class Optimise:
         :return: N palette objects defining palette that can be converted to PDSes.
         """
         stacked_cluts =  np.swapaxes(cluts, 1, 0)
+
         if to_ycbcr:
-            PE_fn = lambda rgba: PaletteEntry.from_rgba(rgba, matrix=matrix,
-                                                        s_range=s_range)
+            PE_fn = lambda rgba: PaletteEntry.from_rgba(rgba, matrix=matrix, s_range=s_range)
         else:
             PE_fn = lambda ycbcra: PaletteEntry(*ycbcra)
 

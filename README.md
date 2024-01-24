@@ -42,7 +42,6 @@ The config.ini file can be used to specify the relative or absolute path to a qu
  -p, --palette       Flag to always write the full palette (enforced for PES).
  -y, --yes           Flag to overwrite output file if it already exists.
  -w, --withsup       Flag to write both SUP and PES+MUI files.
- -t, --tslong        Flag to use a conservative PTS/DTS strategy (more events may be filtered out on complex animations).
  -m, --max-kbps      Set the maximum bitrate to test the output against. Recommended range: [500-16000].
  -e, --extra-acq     Set the min count of palette update after which acquisitions should be inserted [0: off, default: 2]
  -l, --log-to-file   Set (enable) logging to file and set logging level: [10: debug, 20: info, 25: iinf, 30: warnings]
@@ -53,11 +52,7 @@ The config.ini file can be used to specify the relative or absolute path to a qu
 - The output file extension is used to infer the desired output type (SUP or PES).
 - If `--allow-normal`  is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Scenarist BD does not implement normal case object redefinition and may destroy the stream. However, building or rebuilding are not mendatory to mux the project.
 - `--max-kbps` does not shape the stream, it is just a limit to compare it to. Only `--compression` and `--qmode` may be used to reduce the filesize.
-
-Additionally, one flag is available to generate SUPs that are not subject to decoding constraints. This flag is unmaintained code and its operability not guaranteed.
-```
- --nodts         Flag to not set the DTS in stream (NOT compliant).
-```
+- SUPer shall only generate strictly compliant datastream. No option or value will break compliancy.
 
 ## Misc
 ### GUI/CLI options
@@ -67,14 +62,13 @@ Here are some additional informations on selected options, especially those that
 - Quantization: image quantizer to use. PIL+K-Means is low quality but fast. K-Means and pngquant/libimagequant are high quality but slower.
 - Allow normal case object redefinition: whenever possible, update a single object out of two. The requirements are complex so this option may have no effect for some files. Also, the palette is split 50/50 in the vicinity of these events in the stream.
 - Subsampled BDN XML: Generate a 50/59.94 fps SUP for a 25/29.97 fps BDN input.
-- Conservative PTS/DTS strategy: doubles the graphic plane access time whenever a drawing operation is performed.
 - Insert acquisition: Palette effects are encoded in a single bitmap and the output of the last palette update may remain on screen for sufficiently long. Artifacts may come to the viewer attention if they remain visible long enough on the screen. Refreshing the screen will hide potential side effects and improve the perceived quality. You may lower the value if you feel like the filesize increases too significantly, or disable this behavior altogether.
 
 ### TL;DR Options
 First of all, one should leave the acquisition rate untouched at 100%, unless the stream is highly compressible (i.e includes solely a karaoke).
 
-- No faith in SUPer: Use a low compression rate (< 50%), use the conservative PTS/DTS strategy. Import the resulting PES+MUI in Scenarist BD and use the Encode->Rebuild functionality. Scenarist BD will re-write the SUP according to their logic without compromising integrity.
-- Have faith in SUPer: Do not use the conservative PTS/DTS strategy, set to allow normal case object redefinition, and use an appropriate compression rate (50-85% typ.). Then, in Scenarist BD, mux your project without ever attempting to Encode->Build/Rebuild the PES project.
+- No faith in SUPer: Use a low compression rate (< 50%). Import the resulting PES+MUI in Scenarist BD and use the Encode->Rebuild functionality. Scenarist BD will re-write the SUP according to their logic without compromising integrity.
+- Have faith in SUPer: Set to allow normal case object redefinition, and use an appropriate compression rate (50-85% typ.). Then, in Scenarist BD, mux your project without ever attempting to Encode->Build/Rebuild the PES+MUI files.
 
 ### How SUPer works
 SUPer implements a conversion engine that uses the entirety of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities that includes palette updates, object redefinition, object cropping and events buffering.

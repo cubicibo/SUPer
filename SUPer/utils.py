@@ -34,6 +34,8 @@ try:
 except ModuleNotFoundError:
     from contextlib import nullcontext as tqdm
 
+MPEGTS_FREQ = int(90e3)
+
 RegionType = TypeVar('Region')
 _BaseEvent = TypeVar('BaseEvent')
 
@@ -227,10 +229,9 @@ class WindowOnBuffer:
 #%%
 class BDVideo:
     class FPS(Enum):
-        NTSCi_NDF = 60 #Illegal, just for NDF timing
+        HFR_60 = 60
         NTSCi = 59.94
         PALi  = 50
-        NTSCp_NDF = 30 #Illegal, just for NDF timing
         NTSCp = 29.97
         PALp  = 25
         FILM  = 24
@@ -295,6 +296,13 @@ class BDVideo:
         SD576_43  = (720,  576)
         SD480_43  = (720,  480)
 
+        @classmethod
+        def from_height(cls, height: int) -> 'BDVideo.VideoFormat':
+            for fmt in cls:
+                if fmt[1] == height:
+                    return cls(*fmt)
+            raise ValueError(f"Unknown video format with height '{height}'.")
+
     class PCSFPS(IntEnum):
         FILM_NTSC_P = 0x10
         FILM_24P    = 0x20
@@ -302,7 +310,7 @@ class BDVideo:
         NTSC_P      = 0x40
         PAL_I       = 0x60
         NTSC_I      = 0x70
-        FPS_60      = 0x80
+        HFR_60      = 0x80
 
         @classmethod
         def from_fps(cls, other: float):
@@ -313,22 +321,11 @@ class BDVideo:
         24:    0x20,
         25:    0x30,
         29.97: 0x40,
-        30:    0x40,#hack for NDF timing
         50:    0x60,
         59.94: 0x70,
-        60:    0x70 #hack for NDF timing
+        60:    0x80,
     }
-
-    LUT_FPS_PCSFPS = {
-        0x10: 23.976,
-        0x20: 24,
-        0x30: 25,
-        0x40: 30, #hack for NDF timing
-        0x40: 29.97,
-        0x60: 50,
-        0x70: 60, #hack for NDF timing
-        0x70: 59.94,
-    }
+    LUT_FPS_PCSFPS = {v: k for k,v in LUT_PCS_FPS.items()}
 
     def __init__(self, fps: float, height: int, width: Optional[int] = None) -> None:
         self.fps = __class__.FPS(fps)
@@ -341,7 +338,7 @@ class BDVideo:
                     break
             assert self.format is not None
         else:
-            self.format = __class__.VideoFormat((height, width))
+            self.format = __class__.VideoFormat((width, height))
 
 
 class TimeConv:
@@ -389,12 +386,19 @@ class TimeConv:
     @classmethod
     def add_framestc(cls, tc: str, fps: float, nf: int) -> str:
         fps = round(fps, 2)
-        return str(Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF) + nf)
+        tc_udf = Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF) + nf
+        if cls.FORCE_NDF:
+            tc_udf.drop_frame = False
+        return str(tc_udf)
 
     @classmethod
     def add_frames(cls, tc: str, fps: float, nf: int) -> float:
         fps = round(fps, 2)
         return cls.tc2s(cls.add_framestc(tc, fps, nf), fps)
+    
+    @classmethod
+    def tc2pts(cls, tc: str, fps: float) -> float:
+        return max(0, (cls.tc2s(tc, fps) - (1/3)/MPEGTS_FREQ)) * (1 if float(fps).is_integer() else 1.001)
 
 def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """
