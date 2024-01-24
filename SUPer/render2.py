@@ -145,10 +145,8 @@ class WOBSAnalyzer:
 
     def analyze(self):
         allow_normal_case = self.kwargs.get('normal_case_ok', False)
-        scale_pts = 1.001 if self.kwargs.get('adjust_ntsc', False) else 1
         ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
-
-        DSNode.configure(scale_pts, self.bdn.fps)
+        DSNode.configure(self.bdn.fps)
 
         woba = []
         pm = PaletteManager()
@@ -629,7 +627,6 @@ class WOBSAnalyzer:
         is_compat_mode = True #self.kwargs.get('pgs_compatibility', True)
         insert_acqs = self.kwargs.get('insert_acquisitions', 0)
         displaysets = []
-        time_scale = 1.001 if self.kwargs.get('adjust_ntsc', False) else 1
         use_full_pal = self.kwargs.get('full_palette', False)
         palette_manager = PaletteManager()
 
@@ -657,7 +654,6 @@ class WOBSAnalyzer:
         last_cobjs = []
         last_palette_id = -1
 
-        get_pts: Callable[[float], float] = lambda c_pts: max(c_pts - (1/3)/PGDecoder.FREQ, 0) * time_scale
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.bdn.fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
@@ -673,7 +669,7 @@ class WOBSAnalyzer:
             if durs[i][1] != 0:
                 assert i > 0
                 assert nodes[i].parent is not None
-                w_pts = get_pts(TC.tc2s(self.events[i-1].tc_out, self.bdn.fps))
+                w_pts = TC.tc2pts(self.events[i-1].tc_out, self.bdn.fps)
                 wds_doable = (nodes[i].parent.write_duration() + 3)/PGDecoder.FREQ < 1/self.bdn.fps
                 if wds_doable and not nodes[i].parent.is_custom_dts():
                     uds, pcs_id = self._get_undisplay(w_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
@@ -702,13 +698,13 @@ class WOBSAnalyzer:
 
             if nodes[i].tc_shift == 0:
                 assert nodes[i].tc_pts == self.events[i].tc_in
-                c_pts = get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))
+                c_pts = TC.tc2pts(self.events[i].tc_in, self.bdn.fps)
             else:
                 nodes[i].tc_pts = TC.add_framestc(self.events[i].tc_in, self.bdn.fps, nodes[i].tc_shift)
-                c_pts = get_pts(TC.tc2s(nodes[i].tc_pts, self.bdn.fps))
-                logger.debug(f"Shifted event: {self.events[i].tc_in} -> {nodes[i].tc_pts}, {get_pts(TC.tc2s(self.events[i].tc_in, self.bdn.fps))} -> c_pts={c_pts}")
+                c_pts = TC.tc2pts(nodes[i].tc_pts, self.bdn.fps)
+                logger.debug(f"Shifted event: {self.events[i].tc_in} -> {nodes[i].tc_pts}, {TC.tc2pts(self.events[i].tc_in, self.bdn.fps)} -> c_pts={c_pts}")
 
-            assert c_pts == get_pts(TC.tc2s(nodes[i].tc_pts, self.bdn.fps))
+            assert c_pts == TC.tc2pts(nodes[i].tc_pts, self.bdn.fps)
 
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
@@ -749,7 +745,7 @@ class WOBSAnalyzer:
                 pals[1] += [Palette()] * (k-i - len(pals[1]))
 
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
-                    c_pts = get_pts(TC.tc2s(self.events[z].tc_in, self.bdn.fps))
+                    c_pts = TC.tc2pts(self.events[z].tc_in, self.bdn.fps)
                     assert states[z] == PCS.CompositionState.NORMAL
                     pal |= pals[0][z-i] | pals[1][z-i]
 
@@ -760,7 +756,7 @@ class WOBSAnalyzer:
                         p_id, p_vn = get_palette_data(palette_manager, nodes[z].parent)
                         nodes[z].parent.palette_id = p_id
                         nodes[z].parent.pal_vn = p_vn
-                        uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[z-1].tc_out, self.bdn.fps)), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1, wds_base)
+                        uds, pcs_id = self._get_undisplay_pds(TC.tc2pts(self.events[z-1].tc_out, self.bdn.fps), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1, wds_base)
                         displaysets.append(uds)
                         #We just wipped a palette, whatever the next palette id, rewrite it fully
                         last_palette_id = None
@@ -831,7 +827,7 @@ class WOBSAnalyzer:
                             has_two_objs += 1
 
                         logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
-                        c_pts = get_pts(TC.tc2s(nodes[k-1].tc_pts, self.bdn.fps))
+                        c_pts = TC.tc2pts(nodes[k-1].tc_pts, self.bdn.fps)
 
                         r = self._generate_acquisition_ds(k-1, k, pgobs_items, windows, nodes[k-1], double_buffering,
                                                           has_two_objs > 1, is_compat_mode, ods_reg, c_pts, False, flags)
@@ -860,17 +856,18 @@ class WOBSAnalyzer:
             p_id, p_vn = get_palette_data(palette_manager, final_node)
             last_palette_id = final_node.palette_id = p_id
             final_node.pal_vn = p_vn
-            uds, pcs_id = self._get_undisplay_pds(get_pts(TC.tc2s(self.events[-1].tc_out, self.bdn.fps)), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
+            uds, pcs_id = self._get_undisplay_pds(TC.tc2pts(self.events[-1].tc_out, self.bdn.fps), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
             displaysets.append(uds)
 
             #Prepare an additional display set to undraw the screen. Will be added by parent if there's enough time before the next epoch.
             nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self.bdn.fps)/PGDecoder.FREQ)))
-            final_pts = TC.add_frames(self.events[-1].tc_out, self.bdn.fps, nf_shift)
-            logger.debug(f"Optional epoch end screen wipe PTS: {TC.add_framestc(self.events[-1].tc_out, self.bdn.fps, nf_shift)}={get_pts(final_pts)}.")
+            final_pts = TC.add_framestc(self.events[-1].tc_out, self.bdn.fps, nf_shift)
+            logger.debug(f"Optional epoch end screen wipe PTS: {final_pts}.")
+            final_pts = TC.tc2pts(final_pts, self.bdn.fps)
         else:
             logger.debug("Performing standard screen wipe at end of epoch.")
-            final_pts = TC.tc2s(self.events[-1].tc_out, self.bdn.fps)
-        final_ds, pcs_id = self._get_undisplay(get_pts(final_pts), pcs_id, wds_base, last_palette_id, pcs_fn)
+            final_pts = TC.tc2pts(self.events[-1].tc_out, self.bdn.fps)
+        final_ds, pcs_id = self._get_undisplay(final_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
 
         if perform_wds_end:
             displaysets.append(final_ds)
@@ -1155,7 +1152,6 @@ def get_wipe_duration(wds: WDS) -> int:
 #%%
 ####
 class DSNode:
-    scale_pts = 1.0
     bdn_fps = None
 
     def __init__(self,
@@ -1182,8 +1178,7 @@ class DSNode:
         self._dts = None
 
     @classmethod
-    def configure(cls, scale_pts: float, fps: BDVideo.FPS) -> None:
-        cls.scale_pts = scale_pts
+    def configure(cls, fps: BDVideo.FPS) -> None:
         cls.bdn_fps = fps
 
     def wipe_duration(self) -> int:
@@ -1210,7 +1205,7 @@ class DSNode:
         return self.get_dts_markers()[1]/PGDecoder.FREQ
 
     def pts(self) -> float:
-        return max(TC.tc2s(self.tc_pts, self.__class__.bdn_fps) - (1/3)/PGDecoder.FREQ, 0) * self.__class__.scale_pts
+        return TC.tc2pts(self.tc_pts, __class__.bdn_fps)
 
     def is_custom_dts(self) -> bool:
         return not (self._dts is None)

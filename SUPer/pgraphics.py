@@ -26,7 +26,7 @@ from itertools import starmap
 
 from .palette import Palette, PaletteEntry
 from .segments import WDS, ODS, DisplaySet, PDS
-from .utils import Shape, Box
+from .utils import Shape, Box, MPEGTS_FREQ
 
 from dataclasses import dataclass
 #%%
@@ -339,7 +339,7 @@ class PGDecoder:
     RX =  2e6
     RD = 16e6
     RC = 32e6
-    FREQ = 90e3
+    FREQ = MPEGTS_FREQ
     DECODED_BUF_SIZE = 4*(1024**2)
     CODED_BUF_SIZE   = 1*(1024**2)
 

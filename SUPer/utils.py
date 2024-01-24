@@ -34,6 +34,8 @@ try:
 except ModuleNotFoundError:
     from contextlib import nullcontext as tqdm
 
+MPEGTS_FREQ = int(90e3)
+
 RegionType = TypeVar('Region')
 _BaseEvent = TypeVar('BaseEvent')
 
@@ -393,6 +395,10 @@ class TimeConv:
     def add_frames(cls, tc: str, fps: float, nf: int) -> float:
         fps = round(fps, 2)
         return cls.tc2s(cls.add_framestc(tc, fps, nf), fps)
+    
+    @classmethod
+    def tc2pts(cls, tc: str, fps: float) -> float:
+        return max(0, (cls.tc2s(tc, fps) - (1/3)/MPEGTS_FREQ)) * (1 if float(fps).is_integer() else 1.001)
 
 def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """

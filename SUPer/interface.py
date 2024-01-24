@@ -76,13 +76,11 @@ class BDNRender:
                 import sys
                 sys.exit(1)
 
-        if isinstance(bdn.fps, float) and not bdn.dropframe:
-            self.kwargs['adjust_ntsc'] = True
+        self.kwargs['adjust_ntsc'] = isinstance(bdn.fps, float) and not bdn.dropframe
+        if self.kwargs['adjust_ntsc']:
             logger.info(f"NDF NTSC detected: scaling all timestamps by 1.001.")
-        else:
-            self.kwargs['adjust_ntsc'] = False
 
-        self._first_pts = max(TC.tc2s(bdn.events[0].tc_in, bdn.fps) - (1/3)/PGDecoder.FREQ, 0) * (1.001 if self.kwargs['adjust_ntsc'] else 1.0)
+        self._first_pts = TC.tc2pts(bdn.events[0].tc_in, bdn.fps)
 
         logger.info("Finding epochs...")
 
