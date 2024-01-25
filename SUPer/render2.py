@@ -532,17 +532,10 @@ class WOBSAnalyzer:
             id_skipped = None
             for wid, pgo in pgobs_items:
                 if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
-                    optional_skip = True
                     if normal_case_refresh:
-                        #An object may exist but be masked for the whole acquisition, ignore it.
-                        optional_skip = pgo is None or (isinstance(normal_case_refresh, bool) and not np.any(pgo.mask[i-pgo.f:k-pgo.f]))
-                        if optional_skip:
-                            assert isinstance(normal_case_refresh, bool)
-                            pals.append([Palette()] * (k-i))
-                        else:
-                            assert isinstance(normal_case_refresh, list)
-                    if optional_skip:
-                        continue
+                        #An object may exist but be masked for the whole acquisition: pad palette.
+                        pals.append([Palette()] * (k-i))
+                    continue
 
                 oxl = max(0, node.pos[wid].x2 - node.slots[wid][1])
                 oyl = max(0, node.pos[wid].y2 - node.slots[wid][0])
@@ -550,7 +543,7 @@ class WOBSAnalyzer:
                 cpy = windows[wid].y + self.box.y + oyl
 
                 if isinstance(normal_case_refresh, list) and not normal_case_refresh[wid]:
-                    assert sum(normal_case_refresh) == 1
+                    assert 1 == sum(normal_case_refresh) and id_skipped is None
                     #Take latest used object id
                     oid = wid + double_buffering[wid]
                     cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
@@ -731,7 +724,7 @@ class WOBSAnalyzer:
 
             pcs_id += 1
             last_palette_id = p_id
-            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts:.03f}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}, L(ODS)={len(o_ods)}")
+            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts:.03f}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}, L(ODS)={len(o_ods)}, f: {i}->{k}")
 
             if len(pals[0]) > 1:
                 # Pad palette chains
