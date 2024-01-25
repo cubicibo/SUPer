@@ -111,7 +111,7 @@ if __name__ == '__main__':
         logger.warning("Meaningless logging level, disabling file logging.")
         args.log_to_file = False
 
-    if (args.nodts or args.aheadoftime) and (ext == 'pes' or args.withsup):
+    if args.aheadoftime and (ext == 'pes' or args.withsup):
         exit_msg("PES output without DTS or with ahead-of-time decoding is not allowed, aborting.")
     if (ext == 'pes' or args.withsup) and not args.palette:
         logger.warning("PES output requested, adding --palette to command.")
