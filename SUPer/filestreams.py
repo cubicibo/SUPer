@@ -359,7 +359,7 @@ else:
         diff_list = []
         for i in range(0, len(images)-1):
             if images[i+1].shape != images[i].shape:
-                diff_list[i] = True
+                diff_list.append(True)
             else:
                 diff_list.append(np.any(images[i+1] - images[i]))
         return diff_list
