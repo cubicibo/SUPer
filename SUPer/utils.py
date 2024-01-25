@@ -34,7 +34,7 @@ try:
 except ModuleNotFoundError:
     from contextlib import nullcontext as tqdm
 
-MPEGTS_FREQ = int(90e3)
+MPEGTS_FREQ = np.uint64(90e3)
 
 RegionType = TypeVar('Region')
 _BaseEvent = TypeVar('BaseEvent')
@@ -160,7 +160,6 @@ class Box:
         if isinstance(other, __class__):
             return self.coords == other.coords
         return NotImplemented
-
 ####
 
 #%%
@@ -219,7 +218,7 @@ class WindowOnBuffer:
         for sr in self.srs:
             mxy[:] = np.min([np.asarray((sr.y,  sr.x)),  mxy], axis=0)
             Mxy[:] = np.max([np.asarray((sr.y2, sr.x2)), Mxy], axis=0)
-        mxy, Mxy = np.int32((mxy, Mxy))
+        mxy, Mxy = np.int64((mxy, Mxy))
         return Box(mxy[0], max(Mxy[0]-mxy[0], 8), mxy[1], max(Mxy[1]-mxy[1], 8))
 
     def area(self) -> int:
