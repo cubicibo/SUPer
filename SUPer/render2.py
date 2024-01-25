@@ -1025,7 +1025,7 @@ class WOBAnalyzer:
 
         if overlap > 0:
             mask = 255*(np.logical_and((a_bitmap[:, :, 3] > 0), (a_current[:, :, 3] > 0)).astype(np.uint8))
-            mask = cv2.GaussianBlur(mask, (3,3), 0)
+            mask = cv2.GaussianBlur(mask, (5,5), 0)
             mask[mask > 0] = 255
 
             score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), Image.fromarray(a_current & mask[: , :, None]).convert('L'))
