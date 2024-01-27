@@ -250,16 +250,19 @@ class WOBSAnalyzer:
                 j = k
                 while (j := j-1) and (nodes[j].dts_end() >= node.dts() or nodes[j].pts() + pts_delta >= node.pts()):
                     drop_abs_acq_def |= absolutes[j]
-                    drop_pal_ups_def += int(not allow_overlaps)
+                    drop_pal_ups_def += int(not allow_overlaps and nodes[j].nc_refresh)
 
+                other_new_mask = 0
                 for pk, pnode in enumerate(reversed(nodes[:k]), 1):
                     if pnode.objects == []:
                         continue
                     redefine_same_object = next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is not None
                     overlap_in_window = sum(map(lambda x: x is not None, [node.objects[future_obj_idx], pnode.objects[future_obj_idx]])) > 1
+                    other_new_mask += pnode.new_mask[1-future_obj_idx]
                     #Same object is redefined in the previous DS, give up
-                    if redefine_same_object or overlap_in_window:
+                    if redefine_same_object or overlap_in_window or other_new_mask > 1 or pk > 15:
                         break
+
                     new_node = pnode.copy()
                     new_node.new_mask[future_obj_idx] = True
                     new_node.objects[future_obj_idx] = node.objects[future_obj_idx]
@@ -273,43 +276,45 @@ class WOBSAnalyzer:
                         drop_abs_acq |= absolutes[j]
                         drop_pal_ups += int(not allow_overlaps and nodes[j].nc_refresh)
 
-                    #Shifting up to epoch start and acquisition at j=1 is not possible?
-                    if not drop_abs_acq and j == 0 and (nodes[j].dts_end() >= new_node.dts() or\
-                       nodes[j].pts() + pts_delta >= new_node.pts()) and\
-                       next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is None:
-                        scores.append((0, drop_pal_ups, new_node, 0))
-                        break #Hit epoch start, can't go any closer
+                    if not drop_abs_acq:
+                        #Shifting up to epoch start and acquisition at j=1 is not possible?
+                        if j == 0 and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()) and\
+                           next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is None:
+                            scores.append((0, drop_pal_ups, new_node, 0))
+                            break #Hit epoch start, can't go any closer
 
-                    elif not drop_abs_acq and (nodes[j].dts_end() < new_node.dts() and nodes[j].pts() + pts_delta < new_node.pts()):
-                        scores.append((k - pk, drop_pal_ups, new_node, j+1))
+                        elif nodes[j].dts_end() < new_node.dts() and nodes[j].pts() + pts_delta < new_node.pts():
+                            scores.append((k - pk, drop_pal_ups, new_node, j+1))
 
-                    #quick exit
-                    if not drop_abs_acq and (0 == drop_pal_ups or (allow_overlaps and len(scores))):
-                        break
+                        #quick exit
+                        if 0 == drop_pal_ups or (allow_overlaps and len(scores)):
+                            break
                 ####for pk, node
                 if scores:
+                    #jk: preceeding nodes, best_pk: promoted node
                     best_pk, drop_palups, new_node, jk = min(scores, key=lambda x: x[1] + 0.1249*(k - x[0]))
                     #Only do the shift if worthwile
                     if drop_pal_ups_def > drop_palups or drop_abs_acq_def:
-                        prev_f = new_node.objects[future_obj_idx].f
                         new_node.objects[future_obj_idx].pad_left(node.idx - new_node.idx)
+
+                        logger.debug(f"Merged acquisition at {nodes[best_pk].tc_pts} from {node.tc_pts}, NM={new_node.new_mask}, shift={node.idx - new_node.idx}")
 
                         if best_pk > 0:
                             states[best_pk] = PCS.CompositionState.ACQUISITION
-                        logger.debug(f"Merged acquisition at {nodes[best_pk].tc_pts} from {node.tc_pts}, NM={new_node.new_mask}, shift={node.idx - new_node.idx}")
 
                         absolutes[best_pk]   =   True
                         node.new_mask[future_obj_idx] = False
 
                         for j in range(jk, best_pk):
+                            assert not absolutes[j]
                             states[j] = PCS.CompositionState.NORMAL
                             nodes[j].nc_refresh = True
                         for j in range(best_pk+1, k+1):
-                            states[j] = PCS.CompositionState.NORMAL
-                            nodes[j].nc_refresh = True
                             nodes[j].objects[future_obj_idx] = new_node.objects[future_obj_idx]
                             nodes[j].pos[future_obj_idx] = new_node.pos[future_obj_idx]
                             assert not absolutes[j] or j == k
+                            states[j] = PCS.CompositionState.NORMAL
+                            nodes[j].nc_refresh = True
                             absolutes[j] = False
                         #Apply new node to output
                         nodes[best_pk] = new_node
