@@ -142,11 +142,12 @@ def test_diplayset(ds: DisplaySet) -> bool:
 
     :param ds: Display Set to test for structural compliancy
     """
-    comply = ds.pcs is not None
+    comply = ds.pcs is not None and isinstance(ds[0], PCS)
     if ds.pcs.composition_state != PCS.CompositionState.NORMAL:
         comply &= ds.pcs.pal_flag is False # "Palette update on epoch start or acquisition."
         comply &= ds.pcs.pal_id < 8 # "Using undefined palette ID."
     if ds.wds:
+        comply &= isinstance(ds[1], WDS)
         comply &= ds.pcs.pal_flag is False # "Manipulating windows on palette update (conflicting display updates)."
         comply &= len(ds.wds.windows) <= 2 # "More than two windows."
     if ds.pds:
@@ -157,41 +158,34 @@ def test_diplayset(ds: DisplaySet) -> bool:
             comply &= pds.p_id < 8 # "Using undefined palette ID."
             comply &= pds.n_entries <= 256 # "Defining more than 256 palette entries."
     if ds.ods:
-        start_cnt = close_cnt = 0
+        ctx_cnt = 0
         for ods in ds.ods:
-            start_cnt += bool(ods.flags & ODS.ODSFlags.SEQUENCE_FIRST)
-            close_cnt += bool(ods.flags & ODS.ODSFlags.SEQUENCE_LAST)
-        comply &= start_cnt == close_cnt # "ODS segments flags mismatch."
-    return comply & (ds.end is not None) # "No END segment in DS."
+            ctx_cnt += bool(ods.flags & ODS.ODSFlags.SEQUENCE_FIRST)
+            ctx_cnt -= bool(ods.flags & ODS.ODSFlags.SEQUENCE_LAST)
+        comply &= 0 == ctx_cnt # "ODS segments flags mismatch."
+    return comply & (ds.end is not None) & isinstance(ds[-1], ENDS) # "No END segment in DS."
 ####
 
 def is_compliant(epochs: list[Epoch], fps: float) -> bool:
     ts_mask = ((1 << 32) - 1)
     prev_pts = -1
-    last_cbbw = 0
-    last_dbbw = 0
     compliant = True
     warnings = 0
-    pal_id = 0
     cumulated_ods_size = 0
     prev_pcs_id = 0xFFFF
-
-    coded_bw_ra_pts = [-1] * round(fps)
-    coded_bw_ra = [0] * round(fps)
 
     to_tc = lambda pts: TC.s2tc(pts/(1 if float(fps).is_integer() else 1.001), fps)
 
     for ke, epoch in enumerate(epochs):
         windows = {}
-        window_area = {}
-        objects_sizes = {}
         ods_vn = {}
+        ods_filled = set()
         pds_vn = [-1] * 8
         pals = [Palette() for _ in range(8)]
         buffer = PGObjectBuffer()
 
         compliant &= bool(epoch[0].pcs.composition_state & epoch[0].pcs.CompositionState.EPOCH_START)
-        
+
         if epoch[0].wds:
             for wd in epoch[0].wds.windows:
                 if wd.h_pos + wd.width > epoch[0].pcs.width or wd.v_pos + wd.height > epoch[0].pcs.height:
@@ -199,36 +193,28 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
 
         for kd, ds in enumerate(epoch.ds):
             compliant &= test_diplayset(ds)
-            decoded_this_ds = 0
-            coded_this_ds = 0
-
             current_pts = ds.pcs.pts
+
             if epoch.ds[kd-1].pcs.pts != prev_pts and current_pts != epoch.ds[kd-1].pcs.pts:
                 prev_pts = epoch.ds[kd-1].pcs.pts
-                last_cbbw, last_dbbw, last_rc = [0]*3
             else:
                 logger.warning(f"Two displaysets at {to_tc(current_pts)} (internal rendering error?)")
 
             for ks, seg in enumerate(ds.segments):
-                areas2gp = {}
-                if ((seg.tpts - seg.tdts) & ts_mask >= PGDecoder.FREQ):
+                if (seg.tpts - seg.tdts) & ts_mask >= PGDecoder.FREQ:
                     logger.warning(f"Too large PTS-DTS difference for seg._type at {to_tc(current_pts)}.")
 
                 if isinstance(seg, PCS):
-                    pal_id = seg.pal_id
-                    compliant &= (ks == 0) #PCS is first in DisplaySet
                     if seg.composition_n != (prev_pcs_id + 1) & 0xFFFF and seg.composition_state != PCS.CompositionState.EPOCH_START:
-                        logger.warning(f"Displayset does not increment composition number normally at {to_tc(seg.pts)}.")
+                        logger.warning(f"Displayset does not increment composition number normally at {to_tc(current_pts)}.")
                     prev_pcs_id = seg.composition_n
                     if int(seg.composition_state) != 0:
-                        # On acquisition, the object buffer is flushed
-                        objects_sizes = {}
-                        pals = [Palette() for _ in range(8)]
-                    for cobj in seg.cobjects:
-                        areas2gp[cobj.o_id] = -1 if not cobj.cropped else cobj.c_w*cobj.c_h
+                        # On acquisition, past palettes and objects should not be accessed
+                        ods_filled.clear()
+                        for pal in pals:
+                            pal.palette.clear()
 
                 elif isinstance(seg, WDS):
-                    compliant &= (ks == 1) #WDS is not second segment of DS, if present
                     if len(windows) == 0:
                         for w in seg.windows:
                             windows[w.window_id] = (w.h_pos, w.v_pos, w.width, w.height)
@@ -241,14 +227,16 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                             if windows[w.window_id] != (w.h_pos, w.v_pos, w.width, w.height):
                                 logger.error(f"Window change mid-epoch at {to_tc(current_pts)}, this is strictly prohibited.")
                                 compliant = False
-                    for w in seg.windows:
-                        window_area[w.window_id] = w.width*w.height                        
-                        
+
                 elif isinstance(seg, PDS):
                     if (pds_vn[seg.p_id] + 1) & 0xFF != seg.p_vn:
                         logger.warning(f"Palette version not incremented by one, may be discarded by decoder. Palette {seg.p_id} at DTS {to_tc(seg.pts)}.")
                     pds_vn[seg.p_id] = seg.p_vn
                     pals[seg.p_id] |= seg.to_palette()
+                    if (pal_ff_entry := pals[seg.p_id].get(0xFF, None)) is not None and pal_ff_entry.alpha != 0:
+                        logger.warning(f"Palette entry 0xFF is set and not transparent at {to_tc(current_pts)}.")
+                        warnings += 1
+
                 elif isinstance(seg, ODS):
                     if seg.flags & ODS.ODSFlags.SEQUENCE_FIRST:
                         ods_data = bytearray()
@@ -257,59 +245,59 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                         if 8 > min(ods_width, ods_height) or 4096 < max(ods_width, ods_height):
                             logger.error(f"Illegal object dimensions at {to_tc(current_pts)}, object id={seg.o_id}: {ods_width}x{ods_height}.")
                             compliant = False
+                            continue #We can't do the buffer allocation below with the illegal dimension
                         if (slot := buffer.get(seg.o_id)) is None:
-                            if not buffer.allocate_id(seg.o_id, seg.height, seg.width):
-                                logger.error("Object buffer overflow (not enough memory for all object slots).")
+                            if not buffer.allocate_id(seg.o_id, seg.width, seg.height):
+                                logger.error(f"Object buffer overflow (not enough memory for all object slots) at {to_tc(current_pts)}.")
                                 compliant = False
                             ods_vn[seg.o_id] = seg.o_vn
-                        elif slot != (seg.height, seg.width):
-                            logger.error(f"Object-slot {seg.o_id} dimensions mismatch. Slot: {slot}, object: {(seg.height, seg.width)}")
+                        elif slot.shape != (seg.width, seg.height):
+                            logger.error(f"Object-slot {seg.o_id} dimensions mismatch. Slot: {slot.shape}, object: {(seg.width, seg.height)} at {to_tc(current_pts)}.")
                             compliant = False
                         elif ods_vn[seg.o_id] == seg.o_vn:
-                            logger.warning(f"Object version not incremented, will be discarded by decoder. ODS {seg.o_id} at {to_tc(seg.pts)}.")
+                            logger.warning(f"Object version not incremented, will be discarded by decoder. ODS {seg.o_id} at {to_tc(current_pts)}.")
                         ods_vn[seg.o_id] = seg.o_vn
                         if cumulated_ods_size > 0:
                             logger.error("A past ODS was not properly terminated! Stream is critically corrupted!")
                             compliant = False
-                        decoded_this_ds += seg.width * seg.height
-                        coded_this_ds += seg.rle_len
-                        objects_sizes[seg.o_id] = seg.width * seg.height
 
-                    cumulated_ods_size += len(bytes(seg)[2:])
+                    cumulated_ods_size += len(bytes(seg))
                     ods_data += seg.data
 
                     if seg.flags & ODS.ODSFlags.SEQUENCE_LAST:
-                        if cumulated_ods_size > PGDecoder.CODED_BUF_SIZE:
-                            logger.warning(f"Object size >1 MiB at {to_tc(seg.pts)} is unsupported by oldest decoders. UHD BD will be OK.")
+                        if cumulated_ods_size >= PGDecoder.CODED_BUF_SIZE:
+                            logger.warning(f"Object size >1 MiB at {to_tc(current_pts)} is unsupported by oldest decoders. UHD BD will be OK.")
                             warnings += 1
+                        cumulated_ods_size = 0
+                        ods_filled.add(seg.o_id)
+                        #Hypothesis: the graphic controller processes one RLE command (byte) per Rd tick
+                        # To avoid decode time > object write time, RLE line must be smaller or equal to width + marker.
                         try:
-                            #Hypothesis: the graphic controller processes one RLE command (byte) per Rd tick
-                            # To avoid decode time > object write time, RLE line must be smaller or equal to width + marker.
-                            next(filter(lambda x: len(x) > ods_width + 2, PGraphics.get_rle_lines(ods_data, ods_width)))
-                        except StopIteration:
-                            ...
-                        else:
-                            logger.warning("ODS at {to_tc(seg.pts)} has too long RLE line(s). Oldest decoders may have issues.")
+                            dec_bitmap = PGraphics.decode_rle(ods_data, width=ods_width, height=ods_height, check_rle=True)
+                        except AssertionError:
+                            dec_bitmap = PGraphics.decode_rle(ods_data, width=ods_width, height=ods_height, check_rle=False)
+                            logger.warning("ODS at {to_tc(current_pts)} has too long RLE line(s). Older decoders may have issues.")
                             warnings += 1
-                        
-                        for pe in np.unique(PGraphics.decode_rle(ods_data, width=ods_width, height=ods_height)):
-                            if pe != 0xFF and pe not in pals[pal_id].palette:
-                                logger.warning(f"ODS at {to_tc(seg.pts)} uses undefined palette entries (first: {pe:02X}). Some pixels will not display.")
+
+                        for pe in np.unique(dec_bitmap):
+                            if pe != 0xFF and pe not in pals[ds.pcs.pal_id].palette:
+                                logger.warning(f"ODS at {to_tc(current_pts)} uses undefined palette entries (first: {pe:02X}). Some pixels will not display.")
                                 warnings += 1
                                 break
-                        cumulated_ods_size = 0
+                    #### if seg.flags
                 elif isinstance(seg, ENDS):
-                    compliant &= ks == len(ds)-1 # END segment is not last or not alone
-                    
                     # Control the spatial values of the composition w.r.t. object
                     if ds.wds:
                         for cobj in ds.pcs.cobjects:
                             obj_dims = buffer.get(cobj.o_id)
-                            if obj_dims == None:
-                                logger.error(f"Trying to use object {cobj.o_id} not stored in buffer at {to_tc(current_pts)}.")
+                            if obj_dims is None:
+                                logger.error(f"Using an unknown slot {cobj.o_id} in buffer at {to_tc(current_pts)}.")
+                                compliant = False
+                            elif cobj.o_id not in ods_filled:
+                                logger.error(f"Using expired memory for object {cobj.o_id} at {to_tc(current_pts)}.")
                                 compliant = False
                             else:
-                                h, w = obj_dims
+                                w, h = obj_dims.shape
                                 if cobj.cropped:
                                     if h < cobj.c_h or w < cobj.c_w or h < cobj.c_h + cobj.vc_pos or w < cobj.c_w + cobj.hc_pos:
                                         logger.error(f"Cropped dimension exceeed object {cobj.o_id} size at {to_tc(current_pts)}.")
@@ -328,8 +316,6 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                         ####for cobj
                     ####if wds
                 ####elif END
-                        
-                ####elif
             ####for
             if ds.pcs.pal_flag or ds.wds is not None:
                 compliant &= pds_vn[ds.pcs.pal_id] >= 0 #Check that the used palette is indeed set in the decoder.

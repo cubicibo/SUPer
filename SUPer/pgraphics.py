@@ -21,19 +21,16 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 from numpy import typing as npt
 import numpy as np
 from typing import Union, Optional, Type
-from enum import IntEnum
-from itertools import starmap
 
 from .palette import Palette, PaletteEntry
-from .segments import WDS, ODS, DisplaySet, PDS
+from .segments import ODS, PDS
 from .utils import Shape, Box, MPEGTS_FREQ
 
 from dataclasses import dataclass
 #%%
 try:
-    #If numba is available, provide compiled functions for the encoder/decoder 10x gain
+    #If numba is available, provide compiled functions for the encoder/decoder
     from numba import njit
-    from numba.typed import List
 
     @njit(fastmath=True)
     def njit_encode_rle(bitmap: npt.NDArray[np.uint8]) -> list[np.uint8]:
@@ -73,51 +70,23 @@ try:
         return rle_data
 
     @njit(fastmath=True)
-    def njit_get_rle_lines(rle_data: Union[list[np.uint8], npt.NDArray[np.uint8], bytes], width: int) -> list[list[np.uint8]]:
-        """
-        Get the RLE lines within the raw RLE data.
-        :param rle_data:  The RLE bitmap
-        :param width:     The bitmap width when decoded
-        :return:          list of RLE lines, N(lines) == bitmap height
-        """
-        k, j = -2, 0
-        prev_k = 0
-        rle_lines = List()
-        len_rle = len(rle_data) - 2
-
-        while k < len_rle:
-            if j % width == 0:
-                if k > 0:
-                    rle_lines.append(rle_data[prev_k:k])
-                j = 0
-                k += 2
-                prev_k = k
-            if rle_data[k] == 0:
-                byte = rle_data[(k:=k+1)]
-                if byte & 0x40:
-                    j += ((byte & 0x3F) << 8) | rle_data[(k:=k+1)]
-                else:
-                    j += byte & 0x3F
-                if byte & 0x80:
-                    k += 1
-            else:
-                j += 1
-            k += 1
-        rle_lines.append(rle_data[prev_k:-2])
-        return rle_lines
-
-    @njit(fastmath=True)
-    def njit_decode_rle(rle_data: Union[list[np.uint8], npt.NDArray[np.uint8], bytes], width: int, height: int) -> npt.NDArray[np.uint8]:
+    def njit_decode_rle(rle_data: Union[list[np.uint8], npt.NDArray[np.uint8], bytes], width: int, height: int, check_rle: bool = False) -> npt.NDArray[np.uint8]:
         i, j, k = 0, -1, -2
         # RLE is terminated by new line command ([0x00, 0x00]), we can ignore it.
         len_rle = len(rle_data) - 2
         bitmap = np.zeros((height, width), np.uint8)
+        line_length = 0
 
         while k < len_rle:
             if i % width == 0:
+                if line_length > 0:
+                    assert 0 == rle_data[k] == rle_data[k+1], "RLE line terminator not found at given width."
+                    assert not check_rle or line_length <= width, "Illegal RLE line width."
+                    line_length = 0
                 i = 0
                 j += 1
                 k += 2
+            k_start = k
             byte = rle_data[k]
             if byte == 0:
                 byte = rle_data[(k:=k+1)]
@@ -132,12 +101,12 @@ try:
             else:
                 bitmap[j, i:(i:=i+1)] = byte
             k+=1
+            line_length += (k - k_start)
         return bitmap
 
 except ModuleNotFoundError:
     njit_decode_rle = None
     njit_encode_rle = None
-    njit_get_rle_lines = None
 ####
 #%%
 class PGraphics:
@@ -194,7 +163,8 @@ class PGraphics:
     def decode_rle(data: Union[bytes, bytearray, ODS, list[ODS]],
            o_id: Optional[int] = None,
            width: Optional[int] = None,
-           height: Optional[int] = None
+           height: Optional[int] = None,
+           check_rle: bool = False,
         ) -> npt.NDArray[np.uint8]:
         """
         Decode a RLE object, as defined in 'US 7912305 B1' patent.
@@ -202,6 +172,7 @@ class PGraphics:
         :param o_id:  Optional object ID to display, if rle_data is packed ODSes from a DS
         :param width: Expected width
         :param height:Expected height
+        :param check_rle: flag to enforce strict RLE line width compliancy.
         :return:      2D map to associate with the proper palette
         """
         if isinstance(data, ODS):
@@ -217,20 +188,24 @@ class PGraphics:
                 data = bytearray(data)
 
         if njit_decode_rle and width and height:
-            return njit_decode_rle(np.asarray(data, dtype=np.uint8), width, height)
+            return njit_decode_rle(np.asarray(data, dtype=np.uint8), width, height, check_rle)
 
         k = 0
         len_data = len(data)
         bitmap = []
         line = []
+        rle_line_length = 0
 
         while k < len_data:
+            k_start = k
             byte = data[k]
             if byte == 0:
                 byte = data[(k:=k+1)]
                 if byte == 0:
+                    assert not check_rle or width and rle_line_length <= width
                     bitmap.append(line)
                     line = []
+                    rle_line_length = 0
                     k += 1
                     continue
                 if byte & 0x40:
@@ -244,43 +219,8 @@ class PGraphics:
             else:
                 line.append(byte)
             k+=1
+            rle_line_length += (k - k_start)
         return np.asarray(bitmap, np.uint8)
-
-    @staticmethod
-    def get_rle_lines(rle_data: Union[list[np.uint8], bytes], width: int) -> list[bytes]:
-        """
-        From raw RLE data, find the RLE code encoding each line separately.
-        :param rle_data:  RLE bitmap
-        :param width:     bitmap width when decoded
-        :return:          list of RLE encoded lines, N(lines) == bitmap height
-        """
-        if njit_get_rle_lines is not None:
-            return [line.tobytes() for line in njit_get_rle_lines(np.frombuffer(rle_data, np.uint8), width)]
-        k, j = -2, 0
-        prev_k = 0
-        rle_lines = []
-        len_rle = len(rle_data) - 2
-
-        while k < len_rle:
-            if j % width == 0:
-                if k > 0:
-                    rle_lines.append(rle_data[prev_k:k])
-                j = 0
-                k += 2
-                prev_k = k
-            if rle_data[k] == 0:
-                byte = rle_data[(k:=k+1)]
-                if byte & 0x40:
-                    j += ((byte & 0x3F) << 8) | rle_data[(k:=k+1)]
-                else:
-                    j += byte & 0x3F
-                if byte & 0x80:
-                    k += 1
-            else:
-                j += 1
-            k += 1
-        rle_lines.append(rle_data[prev_k:-2])
-        return rle_lines
 
     @staticmethod
     def show(l_ods: Union[ODS, list[ODS]],
@@ -344,88 +284,12 @@ class PGDecoder:
     CODED_BUF_SIZE   = 1*(1024**2)
 
     @classmethod
-    def gplane_write_time(cls, *shape, coeff: int = 1) -> int:
-        return  int(np.ceil((cls.FREQ*coeff*shape[0]*shape[1])/cls.RC))
-
-    @classmethod
-    def plane_initilaization_time(cls, ds: DisplaySet) -> int:
-        init_d = 0
-        if ds.pcs.CompositionState.EPOCH_START & ds.pcs.composition_state:
-            #The patent gives the coeff 8 but does not explain where it comes from
-            # and the statements in the documentation says it is just the size of the
-            # graphic plane. However there are two graphic plane so coeff could be
-            # equal to 2 but who knows.
-            init_d = cls.gplane_write_time(ds.pcs.width, ds.pcs.height, coeff=1)
-        else:
-            for window in ds.wds.windows:
-                init_d += cls.gplane_write_time(window.width, window.height)
-        return init_d
-
-    @classmethod
-    def wait(cls, ds: DisplaySet, obj_id: int, current_duration: int) -> int:
-        wait_duration = 0
-        for object_def in ds.ods:
-            if object_def.o_id == obj_id:
-                c_time = ds.pcs.dts + current_duration
-                if c_time < object_def.pts:
-                    wait_duration += object_def.pts - c_time
-                return int(np.ceil(wait_duration*cls.FREQ))
-        #Stream is either corrupted or object already in buffer
-        return wait_duration
-    ####
-    @staticmethod
-    def size(ds: DisplaySet, window_id: int) -> Shape:
-        for wd in ds.wds.windows:
-            if wd.window_id == window_id:
-                return Shape(wd.width, wd.height)
-        assert False, "Did not find window definition."
-
-    @staticmethod
-    def object_areas(ods: list[ODS]) -> int:
-        return sum(map(lambda o: o.width*o.height if o.flags & o.ODSFlags.SEQUENCE_FIRST else 0, ods))
-
-    @staticmethod
-    def window_areas(wds: WDS) -> int:
-        return sum(map(lambda window: window.width * window.height, wds.windows))
-
-    @classmethod
-    def rc_coeff(cls, ods: list[ODS], wds: WDS) -> int:
-        return cls.object_areas(ods) + cls.window_areas(wds)
-
-    @classmethod
-    def decode_duration(cls, ds: DisplaySet) -> int:
-        decode_duration = cls.plane_initilaization_time(ds)
-        if ds.pcs.n_objects == 2:
-            if ds.pcs.cobjects[0].window_id == ds.pcs.cobjects[1].window_id:
-                decode_duration += cls.wait(ds, ds.pcs.cobjects[1].o_id, decode_duration)
-                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
-            else:
-                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
-                decode_duration += cls.wait(ds, ds.pcs.cobjects[1].o_id, decode_duration)
-                decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[1].window_id))
-
-        elif ds.pcs.n_objects == 1:
-            decode_duration += cls.wait(ds, ds.pcs.cobjects[0].o_id, decode_duration)
-            decode_duration += cls.gplane_write_time(*cls.size(ds, ds.pcs.cobjects[0].window_id))
-        return decode_duration
-
-    @classmethod
     def decode_obj_duration(cls, area: int) -> float:
         return np.ceil(cls.FREQ*area/cls.RD)/cls.FREQ
 
     @classmethod
     def copy_gp_duration(cls, area: int) -> float:
         return np.ceil(cls.FREQ*area/cls.RC)/cls.FREQ
-
-    @classmethod
-    def decode_display_duration(cls, gp_clear_dur: float, areas: list[int], gp_areas: list[int]) -> float:
-        decode_duration = 0
-        gp_duration = gp_clear_dur
-        for d_area, c_area in zip(areas, gp_areas):
-            decode_duration += cls.decode_obj_duration(d_area)
-            gp_duration += (decode_duration-gp_duration) * (decode_duration > gp_duration)
-            gp_duration += cls.copy_gp_duration(c_area)
-        return gp_duration
 ####
 
 #%%
@@ -472,155 +336,141 @@ class PGObject:
 ####
 
 #%%
+@dataclass
+class BufferSlot:
+    _width: int
+    _height: int
+
+    def __post_init__(self) -> None:
+        assert 8 <= self._width  <= 4096, f"Illegal PG object width: {self._width}."
+        assert 8 <= self._height <= 4096, f"Illegal PG object height: {self._height}."
+        self._pts = -np.inf
+        self._version = -1
+
+    @property
+    def width(self) -> int:
+        return self._width
+
+    @property
+    def height(self) -> int:
+        return self._height
+
+    @property
+    def size(self) -> int:
+        return self.width*self.height
+
+    def version_as_byte(self) -> int:
+        assert self._version >= 0
+        return self._version & 0xFF
+
+    def writable_at(self, dts: float) -> bool:
+        """
+        Tells the caller if the slot can be written to starting dts
+        :param dts: timestamp when the slot starts to be written to.
+        :return: Writability status at dts
+        """
+        return self._pts <= dts
+
+    def lock_until(self, pts: float) -> None:
+        self._pts = pts
+        self._version += 1
+
+    @property
+    def shape(self) -> Shape:
+        return Shape(self.width, self.height)
+
+
 class PGObjectBuffer:
     """
-    This class represents a PG Buffer with some functions to interact with it.
-    The PG Buffer is entirely cleared on EPOCH START.
-    On ACQUISITION or NORMAL case, we can only use existing buffer slots or define
-    new ones, within the limited buffer memory size.
+    This class represents a PG Object Buffer with some functions to interact with it.
+    The buffer allocates BufferSlots that are acquired at specified times.
     """
     _MAX_OBJECTS = 64
-    _MAX_SIZE = 4 << 20
     def __init__(self, /, *, _max_size: Optional[int] = None, _margin: int = 0) -> None:
-        self._max_size = (__class__._MAX_SIZE if _max_size is None else _max_size)
+        self._max_size = (PGDecoder.DECODED_BUF_SIZE if _max_size is None else _max_size)
         self._max_size -= _margin
-
         self._slots = {}
-        self._loaded = []
 
     def get_free_size(self) -> int:
         """
         Get the remaining bytes available in the buffer.
         """
-        diff = self._max_size - sum(starmap(lambda h, w: h*w, self._slots.values()))
-        return diff if diff >= 0 else 0
+        diff = self._max_size - sum(map(lambda x: x.size, self._slots.values()))
+        return max(diff, 0)
 
-    def get_n_free_slots(self) -> int:
+    def reset(self) -> None:
         """
-        Get the number of free slots left.
+        Reset the buffer allocations (i.e. epoch start)
         """
-        return __class__.MAX_OBJECTS - len(self.slots)
+        self._slots = {}
 
     def _find_free_id(self) -> Optional[int]:
         """
         Find the first available object ID.
         """
-        for k in range(__class__.MAX_OBJECTS):
+        for k in range(__class__._MAX_OBJECTS):
             if self._slots.get(k, None) is None:
                 return k
         return None
 
-    def free(self, obj_id: int) -> bool:
+    def request_slot(self, width: int, height: int, dts: float) -> tuple[Optional[int], Optional[BufferSlot]]:
         """
-        Free a slot in the buffer (this is not realistic HW-wise but
-                                   provided out of programming courtesy)
-        """
-        if obj_id in self.slots:
-            self._slots.pop(obj_id)
-            return True
-        return False
+        Request a buffer slot of size (width, height) writable at the specified DTS.
 
-    def get_slot(self, height: int, width: int) -> Optional[int]:
+        :param width: width of the slot
+        :param height: height of the slot
+        :param dts: timestamp at which the slot shall be available for writing.
+        :return: the slot id and the buffer slot itself, if one is available.
         """
-        Find the most suited existing free slot for a graphic of given dimensions.
-        :param height: Graphic height to fit
-        :param width:  Graphic width to fit
-        :return: the slot ID that is large enough to fit the graphic, if any.
-        """
-        best_fit = np.inf
-        best_fit_id = None
-        for obj_id in self._slots:
-            if obj_id in self._loaded:
-                continue
-            h, w = self._slots[obj_id]
-            area_diff =  w*h-width*height
-            if h >= height and w >= width and area_diff < best_fit:
-                best_fit = area_diff
-                best_fit_id = obj_id
-        return best_fit_id
+        for k, slot in self._slots.items():
+            if slot.width == width and slot.height == height and slot.writable_at(dts):
+                return (k, slot)
 
-    def get_all_slots(self, only_free: bool = False) -> dict[int, tuple[int, int]]:
-        """
-        Return all allocated slots.
-        :param only_free: Flag to request only the unloaded slots.
-        """
-        if only_free:
-            return dict(filter(lambda x: x[0] in self._loaded, self._slots.items()))
-        return self._slots
+        slot_id = self._find_free_id()
+        if slot_id is not None and self.get_free_size() - (bs := BufferSlot(width, height)).size >= 0:
+            self._slots[slot_id] = bs
+            return (slot_id, bs)
+        return (None, None)
 
-    def flush_objects(self) -> None:
-        """
-        Flush all loaded data on acquisition (the slots still exist but empty).
-        """
-        self._loaded.clear()
-
-    def load(self, obj_id: int) -> None:
-        """
-        Mark a given slot ID as occupied in the buffer.
-        :param obj_id: Slot ID to flag as occupied.
-        """
-        assert not self.is_loaded(obj_id), "Object already loaded in the buffer."
-        self._loaded.append(obj_id)
-
-    def is_loaded(self, obj_id: int) -> bool:
-        """
-        Check if a slot is already occupied by an object.
-        :param obj_id: slot ID
-        :return: true if the slot is occupied
-        """
-        return obj_id in self._loaded
-
-    def check(self, obj_id: int, height: int, width: int) -> None:
-        """
-        Check that the provided object is suited for the given slot.
-        :param obj_id: Slot ID
-        :param height: Object height
-        :param width:  Object width
-        """
-        hw = self._slots.get(obj_id, None)
-        assert hw is not None, f"No slot allocated for {obj_id}"
-        assert hw == (height, width), "Dimensions mismatch."
-
-    @classmethod
-    def get_capacity(cls) -> int:
-        return cls._MAX_SIZE
-
-    def get(self, slot_id: int) -> Optional[tuple[int, int]]:
+    def get(self, slot_id: int) -> Optional[BufferSlot]:
         """
         Get a slot if it exists.
         :param slot_id: id of the slot to get
-        :return: the slot size, if it exist
+        :return: the buffer slot, if it exists
         """
         return self._slots.get(slot_id, None)
 
-    def allocate_id(self, slot_id: int, height: int, width: int) -> bool:
+    def get_slot_version(self, slot_id: int) -> Optional[int]:
+        if slot_id in self._slots:
+            return self._slots[slot_id].version_as_byte()
+        return None
+
+    def allocate_id(self, slot_id: int, width: int, height: int) -> bool:
         """
-        Allocate a buffer slot with given dimensions.
+        Allocate a specific buffer slot with given dimensions.
         :param slot_id: desired slot id
         :param height: Object height
         :param width: Object width
         :return: success of the operation
         """
         assert 0 <= slot_id < 64
+        bs = BufferSlot(width, height)
 
-        desired_id = self._slots.get(slot_id, None)
-        if desired_id is None and self.get_free_size() - width*height >= 0:
-            self._slots[slot_id] = (height, width)
+        if self.get(slot_id) is None and self.get_free_size() - bs.size >= 0:
+            self._slots[slot_id] = bs
             return True
         return False
 
-    def allocate(self, height: int, width: int) -> Optional[int]:
+    def allocate(self, width: int, height: int) -> Optional[int]:
         """
-        Allocate a buffer slot with given dimensions.
+        Allocate a buffer slot (any id) with given dimensions.
         :param height: Object height
         :param width: Object width
-        :return: the object ID, if a slot could be allocated.
+        :return: the slot ID, if a slot could be allocated.
         """
-        assert 8 <= width <= 4096 and 8 <= height <= 4096, "Incorrect dimensions for PG buffer."
-
         new_id = self._find_free_id()
-        if new_id is not None and self.get_free_size() - width*height >= 0:
-            self._slots[new_id] = (height, width)
+        if new_id is not None and self.get_free_size() - (bs := BufferSlot(width, height)).size >= 0:
+            self._slots[new_id] = bs
             return new_id
         return None
 ####

@@ -24,9 +24,9 @@ from os import path
 
 from scenaristream import EsMuiStream
 
-from .utils import TimeConv as TC, LogFacility, Box
+from .utils import TimeConv as TC, LogFacility, Box, BDVideo
 from .pgraphics import PGDecoder
-from .filestreams import BDNXML, SUPFile, filter_events
+from .filestreams import BDNXML, filter_events
 from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate
 
@@ -43,8 +43,7 @@ class BDNRender:
         self.setup()
 
     def setup(self) -> None:
-        libs_params = self.kwargs.pop('libs_path', {})
-        if libs_params:
+        if (libs_params := self.kwargs.pop('libs_path', {})):
             logger.info(f"Library parameters: {libs_params}")
             if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) == Quantizer.Libs.PILIQ:
                 if (piq_params := libs_params.get('quant', None)) is not None:
@@ -70,15 +69,18 @@ class BDNRender:
         fps_str = bdn.fps if float(bdn.fps).is_integer() else round(bdn.fps, 3)
         logger.iinfo(f"BDN metadata: {'x'.join(map(str, bdn.format.value))}, FPS={fps_str}, DF={bdn.dropframe}, {len(bdn.events)} valid events.")
 
-        if self.kwargs.get('scale_fps', False):
-            if bdn.fps >= 50:
-                logger.critical("BDNXML is not subsampled, aborting!")
-                import sys
-                sys.exit(1)
+        if len(bdn.events) == 0:
+            logger.error("No BDN event found, exiting.")
+            import sys
+            sys.exit(1)
+
+        if self.kwargs.get('scale_fps', False) and bdn.fps > 30:
+            logger.error("Incorrect XML FPS for subsampling operation: flag ignored.")
+            self.kwargs['scale_fps'] = False
 
         self.kwargs['adjust_ntsc'] = isinstance(bdn.fps, float) and not bdn.dropframe
         if self.kwargs['adjust_ntsc']:
-            logger.info(f"NDF NTSC detected: scaling all timestamps by 1.001.")
+            logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
 
         self._first_pts = TC.tc2pts(bdn.events[0].tc_in, bdn.fps)
 
@@ -89,8 +91,6 @@ class BDNRender:
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
         #Round up to tick
         epochstart_dd_fnr = lambda o_area: np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
-
-        debug_enabled = logger.level <= 10
 
         final_ds = None
         last_pts_out = None
@@ -132,13 +132,13 @@ class BDNRender:
             for ksub, subgroup in enumerate(reversed(subgroups), 1):
                 r_subgroup = filter_events(subgroup)
                 logger.info(f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(r_subgroup)} event(s):")
-                
+
                 subgroup = r_subgroup
                 box = Box.from_events(subgroup)
 
                 n_groups = 2 if (len(subgroup) > 1 or areas[-ksub]/screen_area > 0.1) else 1
                 wob = GroupingEngine(box, n_groups=n_groups).group(subgroup)
-                if debug_enabled:
+                if logger.level <= 10:
                     for w_id, wb in enumerate(wob):
                         wb = wb.get_window()
                         logger.debug(f"Window {w_id}: X={wb.x+box.x}, Y={wb.y+box.y}, W={wb.dx}, H={wb.dy}")
@@ -161,7 +161,7 @@ class BDNRender:
 
         # Final check
         logger.info("Checking stream consistency and compliancy...")
-        final_fps = round(bdn.fps, 2) * int(1+scaled_fps)
+        final_fps = round(bdn.fps, 3) * int(1+scaled_fps)
         compliant, warnings = is_compliant(self._epochs, final_fps)
 
         if compliant:
@@ -170,7 +170,7 @@ class BDNRender:
             if not compliant:
                 logger.error("=> Stream has a PTS/DTS issue!!")
             elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
-                logger.info(f"Checking PG buffer usage w.r.t bitrate: {max_bitrate} Kbps")
+                logger.info(f"Checking PGS bitrate and buffer usage w.r.t max bitrate: {max_bitrate} Kbps...")
                 max_bitrate = max_bitrate*1000/8
                 warnings += not test_rx_bitrate(self._epochs, int(max_bitrate), final_fps)
         if warnings == 0 and compliant:
@@ -182,19 +182,17 @@ class BDNRender:
     ####
 
     def scale_pcsfps(self) -> bool:
-        scaled_fps = False
-        from SUPer.utils import BDVideo
         pcs_fps = self._epochs[0].ds[0].pcs.fps.value
         real_fps = BDVideo.LUT_FPS_PCSFPS[pcs_fps]
         if (new_pcs_fps := BDVideo.LUT_PCS_FPS.get(2*real_fps, None)):
             for epoch in self._epochs:
                 for ds in epoch.ds:
                     ds.pcs.fps = new_pcs_fps
-            scaled_fps = True
             logger.info(f"Overwrote origin FPS {real_fps:.3f} to {2*real_fps:.3f} in stream.")
+            return True
         else:
-            logger.error(f"Expected 25 or 30 fps for 2x scaling. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}'.")
-        return scaled_fps
+            logger.error(f"Expected input FPS of 25 or 29.97. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}': no action taken.")
+        return False
     ####
 
     def write_output(self) -> None:
@@ -233,8 +231,7 @@ class BDNRender:
                 logger.info(f"Writing output file {fp_sup}")
 
                 with open(fp_sup, 'wb') as f:
-                    for epoch in self._epochs:
-                        f.write(bytes(epoch))
+                    f.write(b''.join(map(bytes, self._epochs)))
         else:
             raise RuntimeError("No data to write.")
  ####
