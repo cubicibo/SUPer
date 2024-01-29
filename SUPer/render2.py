@@ -18,8 +18,7 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import TypeVar, Optional, Type, Union, Callable
-from dataclasses import dataclass
+from typing import Optional, Type, Callable
 from itertools import chain, zip_longest
 
 from PIL import Image
@@ -29,7 +28,7 @@ import numpy as np
 import cv2
 
 #%%
-from .utils import LogFacility, Pos, Dim, BDVideo, TimeConv as TC, Box, ScreenRegion, RegionType, WindowOnBuffer
+from .utils import LogFacility, BDVideo, TimeConv as TC, Box
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise
@@ -54,75 +53,57 @@ class GroupingEngine:
             slice_x = slice(event.x-pxtl, event.x-pxtl+event.width)
             slice_y = slice(event.y-pytl, event.y-pytl+event.height)
             alpha = np.array(event.img.getchannel('A'), dtype=np.uint8)
-            event.unload()
 
             alpha[alpha > 0] = 1
             gs_orig[0, slice_y, slice_x] |= (alpha > 0)
         return gs_orig
 
-    def find_layout(self, gs_origs: npt.NDArray[np.uint8]) -> tuple[WindowOnBuffer]:
+    @staticmethod
+    def check_best(new_lwd: tuple[Box], prev_lwd: tuple[Box]) -> tuple[Box]:
+        lwd = (Box.union(*new_lwd),) if (Box.intersect(*new_lwd).area > 0) else new_lwd
+        if sum(map(lambda wd: wd.area, lwd)) < sum(map(lambda wd: wd.area, prev_lwd)):
+            return lwd
+        return prev_lwd
+
+    def find_layout(self, gs_origs: npt.NDArray[np.uint8]) -> tuple[Box]:
         xl, yl, xr, yr = Image.fromarray(gs_origs[0, :, :], 'L').getbbox(alpha_only=False)
+        best_wds = (Box(yl, yr-yl, xl, xr-xl),)
         if self.n_groups == 1 or (gs_origs.shape[1] < 8 and gs_origs.shape[2] < 8):
-            logger.debug("Single window due to shape or n_groups")
-            return (WindowOnBuffer([ScreenRegion(yl, yr-yl, xl, xr-xl, 0, 1, None)]),)
+            logger.debug(f"Single window due to shape ({gs_origs.shape}) or n_groups ({self.n_groups})")
+            return best_wds
 
-        def check_best(best_area: int, wd1: Box, wd2: Box, prev_wob: tuple[WindowOnBuffer]) -> tuple[int, tuple[WindowOnBuffer]]:
-            #Clean up this mess. WOB and ScreenRegion are outdated containers.
-            wd1 = WindowOnBuffer([ScreenRegion(wd1.y, wd1.dy, wd1.x, wd1.dx, 0, 1, None)])
-            wd1b = wd1.get_window()
-            wd2 = WindowOnBuffer([ScreenRegion(wd2.y, wd2.dy, wd2.x, wd2.dx, 0, 1, None)])
-            wd2b = wd2.get_window()
-
-            if Box.intersect(wd1b, wd2b).area > 0:
-                wd = WindowOnBuffer(wd1.srs + wd2.srs)
-                new_area = wd.get_window().area
-                lwobs = (wd,)
-            else:
-                new_area = wd1b.area + wd2b.area
-                lwobs = (wd1, wd2)
-
-            if new_area < best_area:
-                best_area = new_area
-                best_wob = lwobs
-            else:
-                best_wob = prev_wob
-            return best_area, best_wob
-
-        best_wob = None
-        best_area = np.inf
         for yj in range(yl+8, yr-8):
             top_wd = Box.from_coords(*Image.fromarray(gs_origs[0, :yj, :]).getbbox(alpha_only=False))
             xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[0, yj:, :]).getbbox(alpha_only=False)
             bottom_wd = Box.from_coords(xt0, yt0+yj, xt1, yt1+yj)
-            best_area, best_wob = check_best(best_area, top_wd, bottom_wd, best_wob)
+            best_wds = __class__.check_best((top_wd, bottom_wd), best_wds)
 
         for xj in range(xl+8, xr-8):
             left_wd = Box.from_coords(*Image.fromarray(gs_origs[0, :, :xj]).getbbox(alpha_only=False))
             xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[0, :, xj:]).getbbox(alpha_only=False)
             right_wd = Box.from_coords(xt0+xj, yt0, xt1+xj, yt1)
-            best_area, best_wob = check_best(best_area, left_wd, right_wd, best_wob)
+            best_wds = __class__.check_best((left_wd, right_wd), best_wds)
 
         # 356 = 32e6/90e3: number of pixels we can output in a tick. If area diff is smaller,
         # the tick overhead for dual windows/objects may not be worthwile.
-        if best_wob is None or sum(map(lambda x: x.get_window().area, best_wob)) >= (yr - yl)*(xr - xl) - 356:
+        if best_wds is None or sum(map(lambda x: x.area, best_wds)) >= (yr - yl)*(xr - xl) - 356:
             logger.debug("No layout found or a single window is as efficient.")
-            return (WindowOnBuffer([ScreenRegion(yl, yr-yl, xl, xr-xl, 0, 1, None)]),)
+            return (Box(yl, yr-yl, xl, xr-xl),)
 
-        for wd in best_wob:
-            wd = wd.get_window()
+        for wd in best_wds:
             assert wd.dx >= 8 and wd.dy >= 8, "Incorrect window or object size."
-        assert len(best_wob) == 1 or Box.intersect(*list(map(lambda x: x.get_window(), best_wob))).area == 0
-        return best_wob
+        assert 1 == len(best_wds) or Box.intersect(*best_wds).area == 0
+        return best_wds
 
-    def group(self, subgroup: list[Type[BaseEvent]]) -> tuple[WindowOnBuffer]:
+    def group(self, subgroup: list[Type[BaseEvent]]) -> tuple[Box]:
         gs_origs = self.coarse_grouping(subgroup, self.box)
         return self.find_layout(gs_origs)
 ####
 
 #%%
-class WOBSAnalyzer:
-    def __init__(self, wobs: tuple[WindowOnBuffer], events: list[BDNXMLEvent], box: Box, bdn: ..., **kwargs):
-        self.wobs = wobs
+class WindowsAnalyzer:
+    def __init__(self, windows: tuple[Box], events: list[BDNXMLEvent], box: Box, bdn: ..., **kwargs):
+        self.windows = windows
         self.events = events
         self.box = box
         self.bdn = bdn
@@ -145,34 +126,33 @@ class WOBSAnalyzer:
 
     def analyze(self):
         allow_normal_case = self.kwargs.get('normal_case_ok', False)
+        allow_overlaps = self.kwargs.get('allow_overlaps', False)
+
         ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
         DSNode.configure(self.bdn.fps)
 
-        woba = []
         pm = PaletteManager()
 
         #Adjust slightly SSIM threshold depending of res
         ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480))
 
         #Init
-        gens, windows = [], []
-        for k, swob in enumerate(self.wobs):
-            woba.append(WOBAnalyzer(swob, ssim_threshold=ssim_score, ssim_offset=ssim_offset))
-            windows.append(swob.get_window())
-            gens.append(woba[k].analyze())
+        gens = []
+        for k, window in enumerate(self.windows):
+            gens.append(WindowAnalyzer(window, ssim_threshold=ssim_score, ssim_offset=ssim_offset).analyze())
             next(gens[-1])
 
         pbar = LogFacility.get_progress_bar(logger, range(len(self.events)))
         pbar.set_description("Analyzing", False)
         #get all windowed bitmaps
-        pgobjs = [[] for k in range(len(windows))]
+        pgobjs = [[] for k in range(len(self.windows))]
         for event in chain(self.events, [None]*2):
             if event is not None:
                 logger.hdebug(f"Event TCin={event.tc_in}")
                 pbar.n += 1
                 if pbar.n & 0xF == 0 or pbar.n == len(self.events):
                     pbar.refresh()
-            for wid, (window, gen) in enumerate(zip(windows, gens)):
+            for wid, (window, gen) in enumerate(zip(self.windows, gens)):
                 try:
                     pgobj = gen.send(self.mask_event(window,  event))
                 except StopIteration:
@@ -183,9 +163,7 @@ class WOBSAnalyzer:
         pbar.clear()
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
-        acqs, absolutes, margins, durs, nodes, flags, bslots, cboxes = self.find_acqs(pgobjs_proc, windows)
-        allow_normal_case = self.kwargs.get('normal_case_ok', False)
-        allow_overlaps = self.kwargs.get('allow_overlaps', False)
+        acqs, absolutes, margins, durs, nodes, flags, bslots, cboxes = self.find_acqs(pgobjs_proc)
 
         states = [PCS.CompositionState.NORMAL] * len(acqs)
         states[0] = PCS.CompositionState.EPOCH_START
@@ -199,7 +177,7 @@ class WOBSAnalyzer:
         last_acq = 0
         for k, (acq, forced, margin, node) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:], nodes[1:]), 1):
             if not node.nc_refresh:
-                for wid in range(len(windows)):
+                for wid in range(len(self.windows)):
                     box_assets = list(filter(lambda x: x is not None, [positions[wid], cboxes[k][wid]]))
                     if len(box_assets) > 0:
                         cont = Box.union(*box_assets)
@@ -222,7 +200,7 @@ class WOBSAnalyzer:
                     states[k] = PCS.CompositionState.ACQUISITION
                     drought = 0
                 else:
-                    #try to not do too many acquisitions, as we want to compress the stream.
+                    #prevent excessive acquisitions, as we want to compress the stream.
                     drought += 1*refresh_rate
                 if states[k] == PCS.CompositionState.NORMAL:
                     nodes[k].nc_refresh = True
@@ -237,7 +215,7 @@ class WOBSAnalyzer:
         pts_delta = nodes[0].write_duration()/PGDecoder.FREQ
 
         #First backtrack: remove acquisitions to display one window after the other
-        if 2 == len(windows):
+        if 2 == len(self.windows):
             for k, node in enumerate(nodes):
                 if acqs[k] or node.objects == [] or sum(node.new_mask) != 1:
                     continue
@@ -321,7 +299,7 @@ class WOBSAnalyzer:
                     ####if drop_pal_
                 ####if scores
             ####for k, node
-        ####if len(windows)
+        ####if len(self.windows)
 
         #At this point, we have the stream acquisitions. Some may be impossible,
         # so we have to filter out some less relevant events.
@@ -460,7 +438,7 @@ class WOBSAnalyzer:
             logger.debug(f"{state:02X} {flag} - {node.partial} DTS={node.dts():.05f}->{node.dts_end():.05f} PTS={node.pts():.05f} OM={node.new_mask} {node.palette_id} {node.pal_vn}")
         ####
         r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
-        return self._convert(r_states, pgobjs, windows, r_durs, r_flags, r_nodes)
+        return self._convert(r_states, pgobjs, r_durs, r_flags, r_nodes)
     ####
 
     @staticmethod
@@ -472,10 +450,9 @@ class WOBSAnalyzer:
             return np.array([widths[0], 0], np.int32), (sum(widths), max(heights))
         return np.array([0, heights[0]], np.int32), (max(widths), sum(heights))
 
-    def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, windows: list[Box], node: 'DSNode',
-                                 double_buffering: list[int], has_two_objs: bool,
-                                 ods_reg: list[int], c_pts: float, normal_case_refresh: bool, flags: list[int]) -> ...:
-        box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
+    def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, node: 'DSNode', double_buffering: list[int],
+                                 has_two_objs: bool, ods_reg: list[int], c_pts: float, normal_case_refresh: bool, flags: list[int]) -> ...:
+        #box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
         cobjs, pals, o_ods = [], [], []
 
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
@@ -505,23 +482,23 @@ class WOBSAnalyzer:
             coords = np.zeros((2,), np.int32)
             for wid, pgo in pgobs_items:
                 if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f])):
-                    double_buffering[wid] = len(windows) - double_buffering[wid]
+                    double_buffering[wid] = len(self.windows) - double_buffering[wid]
                     oid = wid + double_buffering[wid]
 
                     #get bitmap
-                    window_bitmap = 0xFF*np.ones((windows[wid].dy, windows[wid].dx), np.uint8)
+                    window_bitmap = 0xFF*np.ones((self.windows[wid].dy, self.windows[wid].dx), np.uint8)
                     nx, ny = coords
                     window_bitmap[pgo.box.slice] = bitmap[ny:ny+pgo.box.dy, nx:nx+pgo.box.dx]
 
                     #Generate object related segments objects
                     oxl = max(0, node.pos[wid].x2 - node.slots[wid][1])
                     oyl = max(0, node.pos[wid].y2 - node.slots[wid][0])
-                    cpx = windows[wid].x + self.box.x + oxl
-                    cpy = windows[wid].y + self.box.y + oyl
+                    cpx = self.windows[wid].x + self.box.x + oxl
+                    cpy = self.windows[wid].y + self.box.y + oyl
 
                     cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                     # cparams = box_to_crop(pgo.box)
-                    # cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
+                    # cobjs_cropped.append(CObject.from_scratch(oid, wid, self.windows[wid].x+self.box.x+cparams['hc_pos'], self.windows[wid].y+self.box.y+cparams['vc_pos'], False,
                     #                                           cropped=True, **cparams))
                     window_bitmap = window_bitmap[oyl:oyl+node.slots[wid][0], oxl:oxl+node.slots[wid][1]]
                     ods_data = PGraphics.encode_rle(window_bitmap)
@@ -544,8 +521,8 @@ class WOBSAnalyzer:
 
                 oxl = max(0, node.pos[wid].x2 - node.slots[wid][1])
                 oyl = max(0, node.pos[wid].y2 - node.slots[wid][0])
-                cpx = windows[wid].x + self.box.x + oxl
-                cpy = windows[wid].y + self.box.y + oyl
+                cpx = self.windows[wid].x + self.box.x + oxl
+                cpy = self.windows[wid].y + self.box.y + oyl
 
                 if isinstance(normal_case_refresh, list) and not normal_case_refresh[wid]:
                     assert 1 == sum(normal_case_refresh) and id_skipped is None
@@ -553,21 +530,21 @@ class WOBSAnalyzer:
                     oid = wid + double_buffering[wid]
                     cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                     # cparams = box_to_crop(pgo.box)
-                    # cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'],
+                    # cobjs_cropped.append(CObject.from_scratch(oid, wid, self.windows[wid].x+self.box.x+cparams['hc_pos'], self.windows[wid].y+self.box.y+cparams['vc_pos'],
                     #                                           False, cropped=True, **cparams))
                     pals.append([Palette()] * (k-i))
                     id_skipped = oid
                     continue
 
-                double_buffering[wid] = abs(len(windows) - double_buffering[wid])
+                double_buffering[wid] = abs(len(self.windows) - double_buffering[wid])
                 oid = wid + double_buffering[wid]
-                
+
                 assert len(flags[i:k]) >= len(pgo.gfx[i-pgo.f:k-pgo.f])
                 imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
 
                 cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                 # cparams = box_to_crop(pgo.box)
-                # cobjs_cropped.append(CObject.from_scratch(oid, wid, windows[wid].x+self.box.x+cparams['hc_pos'], windows[wid].y+self.box.y+cparams['vc_pos'], False,
+                # cobjs_cropped.append(CObject.from_scratch(oid, wid, self.windows[wid].x+self.box.x+cparams['hc_pos'], self.windows[wid].y+self.box.y+cparams['vc_pos'], False,
                 #                                           cropped=True, **cparams))
 
                 n_colors = 128 if has_two_objs else 255
@@ -619,8 +596,8 @@ class WOBSAnalyzer:
         DSNode.apply_pts_dts(uds, DSNode.set_pts_dts_sc(uds, self.buffer, wds_base, node))
         return uds, pcs_id+1
 
-    def _convert(self, states, pgobjs, windows, durs, flags, nodes):
-        wd_base = [WindowDefinition.from_scratch(k, w.x+self.box.x, w.y+self.box.y, w.dx, w.dy) for k, w in enumerate(windows)]
+    def _convert(self, states, pgobjs, durs, flags, nodes):
+        wd_base = [WindowDefinition.from_scratch(k, w.x+self.box.x, w.y+self.box.y, w.dx, w.dy) for k, w in enumerate(self.windows)]
         wds_base = WDS.from_scratch(wd_base, pts=0.0)
         n_actions = len(durs)
         insert_acqs = self.kwargs.get('insert_acquisitions', 0)
@@ -645,8 +622,8 @@ class WOBSAnalyzer:
         ####
 
         i = 0
-        double_buffering = [len(windows)]*len(windows)
-        ods_reg = [0]*(2*len(windows))
+        double_buffering = [len(self.windows)]*len(self.windows)
+        ods_reg = [0]*(2*len(self.windows))
         pcs_id = self.pcs_id
         c_pts = 0
         last_cobjs = []
@@ -655,7 +632,7 @@ class WOBSAnalyzer:
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.bdn.fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
-        final_node = DSNode([], windows, self.events[-1].tc_out, nc_refresh=True)
+        final_node = DSNode([], self.windows, self.events[-1].tc_out, nc_refresh=True)
         #Do we have time to redraw the window (with some margin)?
         perform_wds_end = durs[-1][0] >= np.ceil(((final_node.write_duration() + 10)/PGDecoder.FREQ)*self.bdn.fps)
 
@@ -714,7 +691,7 @@ class WOBSAnalyzer:
             #Normal case refresh implies we are refreshing one object out of two displayed.
             has_two_objs = has_two_objs > 1 or normal_case_refresh
 
-            r = self._generate_acquisition_ds(i, k, pgobs_items, windows, nodes[i], double_buffering,
+            r = self._generate_acquisition_ds(i, k, pgobs_items, nodes[i], double_buffering,
                                               has_two_objs, ods_reg, c_pts, normal_case_refresh, flags)
             cobjs, pals, o_ods, pal = r
 
@@ -763,7 +740,7 @@ class WOBSAnalyzer:
 
                     if flags[z] == 1:
                         normal_case_refresh = nodes[z].new_mask
-                        r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), windows, nodes[z], double_buffering,
+                        r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), nodes[z], double_buffering,
                                                           has_two_objs, ods_reg, c_pts, normal_case_refresh, flags)
                         cobjs, n_pals, o_ods, new_pal = r
                         logger.debug(f"Normal Case: PTS={self.events[z].tc_in}={c_pts:.03f}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
@@ -811,7 +788,7 @@ class WOBSAnalyzer:
                     npts = nodes[k-1].pts() + 2/PGDecoder.FREQ
                     nodes[k-1].nc_refresh = nodes[k-1].partial = False
                     frame_added = 0
-                    original_tc = nodes[k-1].tc_pts
+                    #original_tc = nodes[k-1].tc_pts
                     while nodes[k-1].dts() < dts_end or nodes[k-1].pts() < npts + nodes[k-1].write_duration()/PGDecoder.FREQ:
                         nodes[k-1].tc_pts = TC.add_framestc(nodes[k-1].tc_pts, self.bdn.fps, 1)
                         frame_added += 1
@@ -827,7 +804,7 @@ class WOBSAnalyzer:
                         logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
                         c_pts = TC.tc2pts(nodes[k-1].tc_pts, self.bdn.fps)
 
-                        r = self._generate_acquisition_ds(k-1, k, pgobs_items, windows, nodes[k-1], double_buffering,
+                        r = self._generate_acquisition_ds(k-1, k, pgobs_items, nodes[k-1], double_buffering,
                                                           has_two_objs > 1, ods_reg, c_pts, False, flags)
                         cobjs, _, o_ods, pal = r
                         wds = wds_base.copy(pts=c_pts, in_ticks=False)
@@ -873,9 +850,9 @@ class WOBSAnalyzer:
         return Epoch(displaysets), final_ds, pcs_id
     ####
 
-    def find_acqs(self, pgobjs_proc: dict[..., list[...]], windows: list[Box]):
+    def find_acqs(self, pgobjs_proc: dict[..., list[...]]):
         #get the frame count between each screen update and find where we can do acqs
-        durs, nodes = self.get_durations(windows)
+        durs, nodes = self.get_durations()
 
         dtl = np.zeros((len(durs)), dtype=float)
         valid = np.zeros((len(durs),), dtype=np.bool_)
@@ -883,19 +860,19 @@ class WOBSAnalyzer:
         flags = [0] * len(durs)
 
         chain_boxes = []
-        min_boxes = 8*np.ones((len(windows), 2), np.uint16)
+        min_boxes = 8*np.ones((len(self.windows), 2), np.uint16)
 
         objs = [None for objs in pgobjs_proc]
         write_duration = nodes[0].write_duration()/PGDecoder.FREQ
 
         running_bbox = [None, None]
         for k, node in enumerate(nodes):
-            is_new = [False]*len(windows)
-            boxes = [None] * len(windows)
+            is_new = [False]*len(self.windows)
+            boxes = [None] * len(self.windows)
             force_acq = False
             #NC palette updates don't need to know about the objects
             if not node.nc_refresh:
-                for wid, wd in enumerate(windows):
+                for wid, wd in enumerate(self.windows):
                     is_new[wid] = False
                     if objs[wid] and not objs[wid].is_active(node.idx):
                         objs[wid] = None
@@ -941,7 +918,7 @@ class WOBSAnalyzer:
         return valid, absolutes, dtl, durs, nodes, flags, min_boxes, chain_boxes
     ####
 
-    def get_durations(self, windows: list[Box]) -> npt.NDArray[np.uint32]:
+    def get_durations(self) -> npt.NDArray[np.uint32]:
         """
         Returns the duration of each event in frames.
         Additionally, the offset from the previous event is also returned. This value
@@ -957,9 +934,9 @@ class WOBSAnalyzer:
             delays += [toc-tic]
             if clear_duration > 0:
                 delays += [clear_duration]
-                nodes.append(DSNode([], windows, self.events[ne-1].tc_out, nc_refresh=True))
+                nodes.append(DSNode([], self.windows, self.events[ne-1].tc_out, nc_refresh=True))
                 nodes[-1].idx = -1
-            nodes.append(DSNode([], windows, event.tc_in))
+            nodes.append(DSNode([], self.windows, event.tc_in))
             nodes[-1].idx = ne
             top = toc
         return delays, nodes
@@ -991,13 +968,13 @@ class WOBSAnalyzer:
 ####
 #%%
 
-class WOBAnalyzer:
+class WindowAnalyzer:
     def __init__(self,
-        wob, ssim_threshold: float = 0.986,
+        window: Box, ssim_threshold: float = 0.986,
         ssim_offset: float = 0.0,
         overlap_threshold: float = 0.995
     ) -> None:
-        self.wob = wob
+        self.window = window
         assert ssim_threshold < 1.0, "Not a valid SSIM threshold"
         self.ssim_threshold = ssim_threshold
         assert 0 < overlap_threshold < 1.0, "Not a valid overlap threshold."
@@ -1052,46 +1029,9 @@ class WOBAnalyzer:
             score = 1.0
         return score, cross_percentage
 
-    @staticmethod
-    def get_patch(image1, image2) -> Image.Image:
-        bbox1 = image1.getbbox()
-        bbox2 = image2.getbbox()
-
-        #One of the image is fully transparent.
-        if bbox1 is None or bbox2 is None:
-            return bbox1, bbox2
-
-        f_area = lambda bbox: (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-
-        A1 = f_area(bbox1)
-        A2 = f_area(bbox2)
-
-        if A1 >= A2:
-            return (image1.crop(bbox1), Pos(*bbox1[:2])), image2
-        return image1, (image2.crop(bbox2), Pos(*bbox2[:2]))
-
-    @staticmethod
-    def correlate_patch(image, patch) -> tuple[float, Type['Box']]:
-        image = cv2.cvtColor(np.array(image), cv2.COLOR_RGBA2BGRA)
-
-        #pad image with patch dimension, so we can look at the edges.
-        image = cv2.copyMakeBorder(image, patch.height-1, patch.height-1,
-                                   patch.width-1, patch.width-1,
-                                   cv2.BORDER_CONSTANT, value=[0]*4)
-
-        img_gray = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
-        patch_gray = cv2.cvtColor(np.asarray(patch, dtype=np.uint8), cv2.COLOR_RGBA2GRAY)
-
-        #Correlate across entire surface and return the best scores
-        res = cv2.matchTemplate(img_gray, patch_gray, cv2.TM_CCOEFF_NORMED)
-        score1, score2, p1, p2 = cv2.minMaxLoc(res)
-        return (score1, p1), (score2, p2)
-
     def analyze(self):
-        window = self.wob.get_window()
-
         bitmaps = []
-        alpha_compo = Image.fromarray(np.zeros((window.dy, window.dx, 4), np.uint8))
+        alpha_compo = Image.fromarray(np.zeros((self.window.dy, self.window.dx, 4), np.uint8))
 
         mask = []
         event_cnt = 0
@@ -1143,9 +1083,6 @@ class WOBAnalyzer:
             event_cnt += 1
         ####while
         return # StopIteration
-#%%
-def get_wipe_duration(wds: WDS) -> int:
-    return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.height*w.width/PGDecoder.RC, wds.windows)))
 
 #%%
 ####
@@ -1281,7 +1218,7 @@ class DSNode:
 
         t_decoding = 0
         decode_duration = 0
-        wipe_duration = get_wipe_duration(wds)
+        wipe_duration = __class__.get_wipe_duration(wds)
 
         windows = {wd.window_id: (wd.height, wd.width) for wd in wds.windows}
 
@@ -1338,6 +1275,10 @@ class DSNode:
         ts_pairs.append((dts, dts))
         return ts_pairs
     ####
+
+    @staticmethod
+    def get_wipe_duration(wds: WDS) -> int:
+        return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.height*w.width/PGDecoder.RC, wds.windows)))
 
     @classmethod
     def apply_pts_dts(cls, ds: DisplaySet, ts: tuple[int, int]) -> None:

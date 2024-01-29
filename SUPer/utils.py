@@ -36,9 +36,7 @@ except ModuleNotFoundError:
 
 MPEGTS_FREQ = np.uint64(90e3)
 
-RegionType = TypeVar('Region')
 _BaseEvent = TypeVar('BaseEvent')
-
 Shape = namedtuple("Shape", "width height")
 Dim = namedtuple("Dim", "w h")
 Pos = namedtuple("Pos", "x y")
@@ -106,10 +104,6 @@ class Box:
         return cls(y1, dy * bool(dy > 0), x1, dx * bool(dx > 0))
 
     @classmethod
-    def from_region(cls, region: RegionType) -> 'Box':
-        return cls.from_slices(region.slice)
-
-    @classmethod
     def from_slices(cls, slices: tuple[slice]) -> 'Box':
         if len(slices) == 3:
             slyx = slices[1:]
@@ -117,14 +111,6 @@ class Box:
             slyx = slices
         f_ZWz = lambda slz : (int(slz.start), int(slz.stop-slz.start))
         return cls(*f_ZWz(slyx[0]), *f_ZWz(slyx[1]))
-
-    @classmethod
-    def from_hulls(cls, *hulls: list[...]) -> 'Box':
-        final_hull = cls(*([None]*4))
-        for hull in hulls:
-            final_hull
-            raise NotImplementedError
-        return final_hull
 
     @classmethod
     def union(cls, *box) -> 'Box':
@@ -160,69 +146,6 @@ class Box:
         if isinstance(other, __class__):
             return self.coords == other.coords
         return NotImplemented
-####
-
-#%%
-@dataclass(frozen=True)
-class ScreenRegion(Box):
-    t:  int
-    dt: int
-    region: RegionType
-
-    @classmethod
-    def from_slices(cls, slices: tuple[slice], region: Optional[RegionType] = None) -> 'ScreenRegion':
-        f_ZWz = lambda slz : (int(slz.start), int(slz.stop-slz.start))
-        X, Y, T = f_ZWz(slices[2]), f_ZWz(slices[1]), f_ZWz(slices[0])
-
-        if len(slices) != 3:
-            raise ValueError("Expected 3 slices (t, y, x).")
-        return cls(*Y, *X, *T, region)
-
-    @property
-    def spatial_slice(self) -> tuple[slice]:
-        return (slice(self.y, self.y2),
-                slice(self.x, self.x2))
-
-    @property
-    def slice(self) -> tuple[slice]:
-        return (slice(self.t, self.t2),
-                slice(self.y, self.y2),
-                slice(self.x, self.x2))
-
-    @property
-    def range(self) -> tuple[range]:
-        return (range(self.t, self.t2),
-                range(self.y, self.y2),
-                range(self.x, self.x2))
-
-    @property
-    def t2(self) -> int:
-        return self.t + self.dt
-
-    @classmethod
-    def from_region(cls, region: RegionType) -> 'ScreenRegion':
-        return cls.from_slices(region.slice, region)
-
-    @classmethod
-    def from_coords(cls, x1: int, y1: int, t1: int, x2: int, y2: int, t2: int, region: RegionType) -> 'ScreenRegion':
-        return cls(min(y1, y2), abs(y2-y1), min(x1, x2), abs(x2-x1), min(t1, t2), abs(t2-t1), region=region)
-####
-
-class WindowOnBuffer:
-    def __init__(self, screen_regions: list[ScreenRegion]) -> None:
-        self.srs = screen_regions
-
-    def get_window(self) -> Box:
-        mxy = np.asarray([np.inf, np.inf])
-        Mxy = np.asarray([-1, -1])
-        for sr in self.srs:
-            mxy[:] = np.min([np.asarray((sr.y,  sr.x)),  mxy], axis=0)
-            Mxy[:] = np.max([np.asarray((sr.y2, sr.x2)), Mxy], axis=0)
-        mxy, Mxy = np.int64((mxy, Mxy))
-        return Box(mxy[0], max(Mxy[0]-mxy[0], 8), mxy[1], max(Mxy[1]-mxy[1], 8))
-
-    def area(self) -> int:
-        return self.get_window().area
 ####
 
 #%%

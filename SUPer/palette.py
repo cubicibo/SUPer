@@ -289,7 +289,7 @@ class Palette:
                   rgba: Union[list, bytes, bytearray,
                               dict[int, Union[npt.NDArray[np.uint8], tuple]]], /, *,
                   prev_pal: Optional['Palette'] = None, matrix: str = 'bt709',
-                  s_range: str= 'limited', **kwargs):
+                  s_range: str= 'limited', **kwargs) -> 'Palette':
         """
         Construct a Palette from a mapping or an iterable, like Pillow ImagePalette.
         :param rgba: Iterable list or dictionary with RGBA entries.

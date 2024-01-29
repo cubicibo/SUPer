@@ -41,7 +41,7 @@ except ModuleNotFoundError:
 from .segments import PGSegment, PCS, DisplaySet, Epoch
 from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Pos, Dim)
 
-logging = LogFacility.get_logger('SUPer')
+logger = LogFacility.get_logger('SUPer')
 
 #%%
 class SUPFile:
@@ -209,14 +209,14 @@ class BaseEvent:
 
     @property
     def width(self) -> int:
-        if self._width == -1:
+        if self._width is None:
             self.load()
             self.unload()
         return self._width
 
     @property
     def height(self) -> int:
-        if self._height == -1:
+        if self._height is None:
             self.load()
             self.unload()
         return self._height
@@ -252,8 +252,11 @@ class BaseEvent:
         else:
             self._img = Image.open(os.path.join(fp, self.gfxfile)).convert('RGBA')
         # Update wh
-        self._width = self._img.width
-        self._height = self._img.height
+        if self._width is None or self._height is None:
+            self._width = self._img.width
+            self._height = self._img.height
+        else:
+            assert self._img.width == self._width and self._img.height == self._height
 
     def unload(self) -> None:
         if not self._custom and self._img is not None:
@@ -293,6 +296,7 @@ def merge_events(group: list[BaseEvent], pos: Pos, dim: Dim) -> Image.Image:
         slice_x = slice(event.x-pos.x, event.x-pos.x+event.width)
         slice_y = slice(event.y-pos.y, event.y-pos.y+event.height)
         img_plane[slice_y, slice_x, :] = np.asarray(event.img).astype(np.uint8)
+        event.unload()
     return Image.fromarray(img_plane)
 
 class BDNXMLEvent(BaseEvent):
@@ -316,7 +320,6 @@ class BDNXMLEvent(BaseEvent):
         self.forced = (te.get('Forced', 'False')).lower() == 'true'
         self._width = int(ie.get('Width'))
         self._height = int(ie.get('Height'))
-
         self.fade_in = dict()
         self.fade_out = dict()
         self._custom = False
@@ -338,7 +341,7 @@ class BDNXMLEvent(BaseEvent):
                     raise ValueError(f"Unknown fade type {e.attrib['FadeType']}")
             # Do you notice how the implementers of BDNXML thought that people would
             #  consider to anchor fade-in at the end????
-    
+
     def set_tc_out(self, tc_out: str) -> None:
         self.tc_out = tc_out
         self.__te['OutTC'] = tc_out
@@ -364,7 +367,7 @@ else:
                 diff_list.append(np.any(images[i+1] - images[i]))
         return diff_list
 
-def filter_events(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
+def remove_dupes(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
     if _has_numba:
         imgs = List()
         for event in events:
@@ -380,7 +383,7 @@ def filter_events(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
         else:
             output_events[-1].set_tc_out(event.tc_out)
     assert output_events[0].tc_in == events[0].tc_in and output_events[-1].tc_out == events[-1].tc_out
-    logging.debug(f"Removed {len(events) - len(output_events)} duplicate event(s).")
+    logger.debug(f"Removed {len(events) - len(output_events)} duplicate event(s).")
     return output_events
 
 class SeqIO(ABC):
@@ -408,23 +411,18 @@ class SeqIO(ABC):
                 break
         return default
 
-    # Very roughly, if we have to set up two 1920x1080 compositon objects with two
-    #  windows of the same size, we need to initialise 4 planes -> about 6 frames at 24p.
-    def groups(self, nf_split: Optional[float] = 0.26, tc_in: Optional[str] = None,
-               tc_out: Optional[str] = None, /, *, _hard: bool = True) -> list[Type[BaseEvent]]:
+    def groups(self, dt_split: float) -> list[Type[BaseEvent]]:
         le = []
-        nf_split *= 1e3
 
-        for event in self.fetch(tc_in, tc_out):
+        for event in self.fetch():
             if le == []:
                 le = [event]
                 continue
-            td = TC.tc2ms(event.tc_in, self.fps) - TC.tc2ms(le[-1].tc_out, self.fps)
-
-            if _hard and td < 0:
+            td = TC.tc2s(event.tc_in, self.fps) - TC.tc2s(le[-1].tc_out, self.fps)
+            if td < 0:
                 raise Exception(f"Events are not ordered in time: {event.tc_in}, "
                                 f"{event.gfxfile.split(os.path.sep)[-1]} predates previous event.")
-            if le == [] or abs(td) < nf_split:
+            if le == [] or abs(td) < dt_split:
                 le.append(event)
             else:
                 yield le
@@ -545,6 +543,7 @@ class BDNXML(SeqIO):
         # so, we merge sub-evnets on the same plane.
         prev_f_out = -1
         self.events = []
+        split_seen = False
 
         for event in self._raw_events:
             cnt = 0
@@ -560,6 +559,10 @@ class BDNXML(SeqIO):
                 # Event[cnt] features the internal content of the <event> tag.
                 # i.e <Graphic>, <Fade ...>
                 if gevents != []:
+                    if not split_seen:
+                        split_seen = True
+                        logger.warning("Input XML has split events! This is unefficient: Merging back splits to find better splits...")
+                        logger.warning("Risk of excessive RAM usage due to input BDN XML.")
                     gevents[0:0] = [event[cnt]]
                     group2merge = [BDNXMLEvent(event.attrib, dict(gevent.attrib, fp=os.path.join(self.folder, gevent.text)), []) for gevent in gevents]
                     pos, dim = min_enclosing_square(group2merge)
@@ -573,7 +576,7 @@ class BDNXML(SeqIO):
                 if not (ea.tc_in == ea.tc_out and self._skip_zero_duration):
                     self.events.append(ea)
                 else:
-                    logging.warning(f"Ignored zero-duration graphic: '{ea.gfxfile.split(os.path.sep)[-1]}' @ '{ea.tc_in}'.")
+                    logger.warning(f"Ignored zero-duration graphic: '{ea.gfxfile.split(os.path.sep)[-1]}' @ '{ea.tc_in}'.")
                 new_out = TC.tc2f(ea.tc_out, self.fps)
                 assert prev_f_out <= new_out, "Event ahead finish before last event!"
                 prev_f_out = new_out
@@ -589,4 +592,4 @@ class BDNXML(SeqIO):
         self._dropframe = dropframe
         TC.FORCE_NDF = not dropframe
         if dropframe:
-            logging.warning("WARNING: Detected drop frame flag in BDNXML! SUPer is untested with drop frame timecodes!")
+            logger.warning("WARNING: Detected drop frame flag in BDNXML! SUPer is untested with drop frame timecodes!")
