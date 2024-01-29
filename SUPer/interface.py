@@ -58,7 +58,7 @@ class BDNRender:
             LogFacility.set_logger_level(logger.name, file_logging_level)
 
     def optimise(self) -> None:
-        from .render2 import GroupingEngine, WOBSAnalyzer
+        from .render2 import GroupingEngine, WindowsAnalyzer
 
         kwargs = self.kwargs
         stkw = ''
@@ -130,22 +130,18 @@ class BDNRender:
 
             #Epoch generation (each subgroup will be its own epoch)
             for ksub, subgroup in enumerate(reversed(subgroups), 1):
-                r_subgroup = filter_events(subgroup)
-                logger.info(f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(r_subgroup)} event(s):")
-
-                subgroup = r_subgroup
+                logger.info(f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := filter_events(subgroup))} event(s):")
                 box = Box.from_events(subgroup)
 
                 n_groups = 2 if (len(subgroup) > 1 or areas[-ksub]/screen_area > 0.1) else 1
-                wob = GroupingEngine(box, n_groups=n_groups).group(subgroup)
+                windows = GroupingEngine(box, n_groups=n_groups).group(subgroup)
                 if logger.level <= 10:
-                    for w_id, wb in enumerate(wob):
-                        wb = wb.get_window()
-                        logger.debug(f"Window {w_id}: X={wb.x+box.x}, Y={wb.y+box.y}, W={wb.dx}, H={wb.dy}")
+                    for w_id, wd in enumerate(windows):
+                        logger.debug(f"Window {w_id}: X={wd.x+box.x}, Y={wd.y+box.y}, W={wd.dx}, H={wd.dy}")
                 else:
-                    logger.info(f" => Screen layout: {len(wob)} window(s), processing...")
+                    logger.info(f" => Screen layout: {len(windows)} window(s), processing...")
 
-                wobz = WOBSAnalyzer(wob, subgroup, box, bdn, pcs_id=pcs_id, **kwargs)
+                wobz = WindowsAnalyzer(windows, subgroup, box, bdn, pcs_id=pcs_id, **kwargs)
                 new_epoch, final_ds, pcs_id = wobz.analyze()
                 self._epochs.append(new_epoch)
                 logger.info(f" => optimised as {len(self._epochs[-1])} display sets.")
@@ -171,13 +167,14 @@ class BDNRender:
                 logger.error("=> Stream has a PTS/DTS issue!!")
             elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
                 logger.info(f"Checking PGS bitrate and buffer usage w.r.t max bitrate: {max_bitrate} Kbps...")
-                max_bitrate = max_bitrate*1000/8
-                warnings += not test_rx_bitrate(self._epochs, int(max_bitrate), final_fps)
-        if warnings == 0 and compliant:
-            logger.info("=> Output PGS seems compliant.")
-        if warnings > 0 and compliant:
-            logger.warning("=> Excessive bandwidth detected, testing with mux required.")
-        elif not compliant:
+                max_bitrate = int(max_bitrate*1000/8)
+                warnings += not test_rx_bitrate(self._epochs, max_bitrate, final_fps)
+        if compliant:
+            if warnings == 0:
+                logger.info("=> Output PGS seems compliant.")
+            if warnings > 0:
+                logger.warning("=> Excessive bandwidth detected, testing with mux required.")
+        else:
             logger.error("=> Output PGS is not compliant. Expect display issues or decoder crash.")
     ####
 
