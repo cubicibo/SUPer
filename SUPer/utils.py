@@ -28,6 +28,7 @@ from numpy import (typing as npt)
 from timecode import Timecode
 from dataclasses import dataclass
 from contextlib import nullcontext
+from functools import lru_cache
 
 try:
     from tqdm import tqdm
@@ -322,6 +323,7 @@ class TimeConv:
     def tc2pts(cls, tc: str, fps: float) -> float:
         return max(0, (cls.tc2s(tc, fps) - (1/3)/MPEGTS_FREQ)) * (1 if float(fps).is_integer() else 1.001)
 
+@lru_cache(maxsize=6)
 def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """
     Getter of colorspace conversion matrix, BT ITU, limited or full

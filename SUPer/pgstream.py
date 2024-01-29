@@ -232,7 +232,11 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                     if (pds_vn[seg.p_id] + 1) & 0xFF != seg.p_vn:
                         logger.warning(f"Palette version not incremented by one, may be discarded by decoder. Palette {seg.p_id} at DTS {to_tc(seg.pts)}.")
                     pds_vn[seg.p_id] = seg.p_vn
-                    pals[seg.p_id] |= seg.to_palette()
+                    new_pal = seg.to_palette()
+                    pals[seg.p_id] |= new_pal
+                    if next(filter(lambda x: not (16 <= x.y <= 235 and 16 <= x.cb <= 240 and 16 <= x.cr <= 240), new_pal), None) is not None:
+                        logger.warning(f"Palette is not limited range at {to_tc(current_pts)}.")
+                        warnings += 1
                     if (pal_ff_entry := pals[seg.p_id].get(0xFF, None)) is not None and pal_ff_entry.alpha != 0:
                         logger.warning(f"Palette entry 0xFF is set and not transparent at {to_tc(current_pts)}.")
                         warnings += 1
