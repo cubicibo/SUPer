@@ -31,7 +31,7 @@ from piliq import PILIQ
 import cv2
 
 from .palette import Palette, PaletteEntry
-from .utils import TimeConv as TC, LogFacility
+from .utils import TimeConv as TC, LogFacility, get_matrix
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -133,7 +133,7 @@ class Preprocess:
 
             lib_piq = Quantizer.get_piliq()
             assert lib_piq is not None
-            pal, qtz_img = lib_piq.quantize(img, min(colors, int(np.ceil(20+235/255*nc))))
+            pal, qtz_img = lib_piq.quantize(img, min(colors, int(np.ceil(20+nc*235/255))))
             return qtz_img, pal
 
         else:
@@ -307,30 +307,35 @@ class Optimise:
     ####
 
     @staticmethod
-    def diff_cluts(cluts: npt.NDArray[np.uint8], to_ycbcr: bool = True, /, *,
+    def diff_cluts(cluts: npt.NDArray[np.uint8], /, *,
                    matrix: str = 'bt709', s_range: str = 'limited') -> list[Palette]:
         """
         This functions finds the chain of palette updates for consecutives cluts.
         :param cluts:  Color look-up tables of the sequence, stacked one after the other.
-        :param to_ycbcr: Convert to YCbCr when diffing (for PGS)
         :param matrix:  BT ITU conversion
         :param s_range: YUV range.
 
         :return: N palette objects defining palette that can be converted to PDSes.
         """
-        stacked_cluts =  np.swapaxes(cluts, 1, 0)
+        stacked_cluts = np.swapaxes(cluts, 1, 0).astype(np.int32)
+        matrix = get_matrix(matrix, False, s_range)
 
-        if to_ycbcr:
-            PE_fn = lambda rgba: PaletteEntry.from_rgba(rgba, matrix=matrix, s_range=s_range)
+        shape = stacked_cluts.shape
+        stacked_cluts = np.round(np.matmul(stacked_cluts.reshape((-1, 4)), matrix.T))
+        if 'full' in s_range:
+            stacked_cluts += np.asarray([[0, 128, 128, 0]])
+            clip_vals = (np.array([[0, 0, 0, 0]]), np.asarray([[255, 255, 255, 255]]))
         else:
-            PE_fn = lambda ycbcra: PaletteEntry(*ycbcra)
+            stacked_cluts += np.asarray([[16, 128, 128, 0]])
+            clip_vals = (np.array([[16, 16, 16, 0]]), np.asarray([[235, 240, 240, 255]]))
+        stacked_cluts = np.clip(stacked_cluts, *clip_vals).astype(np.uint8).reshape(shape)
 
         l_pal = []
-
         for j, clut in enumerate(stacked_cluts):
             pal = Palette()
             for k, pal_entry in enumerate(clut):
-                n_e = PE_fn(pal_entry)
+                n_e = PaletteEntry(*pal_entry)
+                n_e.swap_cbcr()
                 if j == 0: # For t0, set the entire palette regardless
                     pal[k] = n_e
                     continue
