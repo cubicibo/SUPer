@@ -18,8 +18,7 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import TypeVar, Optional, Type, Union, Callable
-from dataclasses import dataclass
+from typing import Optional, Type, Callable
 from itertools import chain, zip_longest
 
 from PIL import Image
@@ -127,6 +126,8 @@ class WindowsAnalyzer:
 
     def analyze(self):
         allow_normal_case = self.kwargs.get('normal_case_ok', False)
+        allow_overlaps = self.kwargs.get('allow_overlaps', False)
+
         ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
         DSNode.configure(self.bdn.fps)
 
@@ -163,8 +164,6 @@ class WindowsAnalyzer:
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
         acqs, absolutes, margins, durs, nodes, flags, bslots, cboxes = self.find_acqs(pgobjs_proc)
-        allow_normal_case = self.kwargs.get('normal_case_ok', False)
-        allow_overlaps = self.kwargs.get('allow_overlaps', False)
 
         states = [PCS.CompositionState.NORMAL] * len(acqs)
         states[0] = PCS.CompositionState.EPOCH_START
@@ -201,7 +200,7 @@ class WindowsAnalyzer:
                     states[k] = PCS.CompositionState.ACQUISITION
                     drought = 0
                 else:
-                    #try to not do too many acquisitions, as we want to compress the stream.
+                    #prevent excessive acquisitions, as we want to compress the stream.
                     drought += 1*refresh_rate
                 if states[k] == PCS.CompositionState.NORMAL:
                     nodes[k].nc_refresh = True
@@ -453,7 +452,7 @@ class WindowsAnalyzer:
 
     def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, node: 'DSNode', double_buffering: list[int],
                                  has_two_objs: bool, ods_reg: list[int], c_pts: float, normal_case_refresh: bool, flags: list[int]) -> ...:
-        box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
+        #box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
         cobjs, pals, o_ods = [], [], []
 
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
@@ -539,7 +538,7 @@ class WindowsAnalyzer:
 
                 double_buffering[wid] = abs(len(self.windows) - double_buffering[wid])
                 oid = wid + double_buffering[wid]
-                
+
                 assert len(flags[i:k]) >= len(pgo.gfx[i-pgo.f:k-pgo.f])
                 imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
 
@@ -789,7 +788,7 @@ class WindowsAnalyzer:
                     npts = nodes[k-1].pts() + 2/PGDecoder.FREQ
                     nodes[k-1].nc_refresh = nodes[k-1].partial = False
                     frame_added = 0
-                    original_tc = nodes[k-1].tc_pts
+                    #original_tc = nodes[k-1].tc_pts
                     while nodes[k-1].dts() < dts_end or nodes[k-1].pts() < npts + nodes[k-1].write_duration()/PGDecoder.FREQ:
                         nodes[k-1].tc_pts = TC.add_framestc(nodes[k-1].tc_pts, self.bdn.fps, 1)
                         frame_added += 1

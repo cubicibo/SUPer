@@ -367,7 +367,7 @@ else:
                 diff_list.append(np.any(images[i+1] - images[i]))
         return diff_list
 
-def filter_events(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
+def remove_dupes(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
     if _has_numba:
         imgs = List()
         for event in events:

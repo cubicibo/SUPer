@@ -26,7 +26,7 @@ from scenaristream import EsMuiStream
 
 from .utils import TimeConv as TC, LogFacility, Box, BDVideo
 from .pgraphics import PGDecoder
-from .filestreams import BDNXML, filter_events
+from .filestreams import BDNXML, remove_dupes
 from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate
 
@@ -60,9 +60,7 @@ class BDNRender:
     def optimise(self) -> None:
         from .render2 import GroupingEngine, WindowsAnalyzer
 
-        kwargs = self.kwargs
-        stkw = ''
-        stkw += ':'.join([f"{k}={v}" for k, v in kwargs.items()])
+        stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items()])
         logger.iinfo(f"Parameters: {stkw}")
 
         bdn = BDNXML(path.expanduser(self.bdn_file))
@@ -130,7 +128,7 @@ class BDNRender:
 
             #Epoch generation (each subgroup will be its own epoch)
             for ksub, subgroup in enumerate(reversed(subgroups), 1):
-                logger.info(f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := filter_events(subgroup))} event(s):")
+                logger.info(f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s):")
                 box = Box.from_events(subgroup)
 
                 n_groups = 2 if (len(subgroup) > 1 or areas[-ksub]/screen_area > 0.1) else 1
@@ -141,7 +139,7 @@ class BDNRender:
                 else:
                     logger.info(f" => Screen layout: {len(windows)} window(s), processing...")
 
-                wobz = WindowsAnalyzer(windows, subgroup, box, bdn, pcs_id=pcs_id, **kwargs)
+                wobz = WindowsAnalyzer(windows, subgroup, box, bdn, pcs_id=pcs_id, **self.kwargs)
                 new_epoch, final_ds, pcs_id = wobz.analyze()
                 self._epochs.append(new_epoch)
                 logger.info(f" => optimised as {len(self._epochs[-1])} display sets.")
