@@ -39,7 +39,7 @@ except ModuleNotFoundError:
     _has_numba = False
 
 from .segments import PGSegment, PCS, DisplaySet, Epoch
-from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Pos, Dim)
+from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Pos, Dim, Box)
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -205,7 +205,6 @@ class BaseEvent:
         self.gfxfile = file
         self.x, self.y = x, y
         self._img, self._width, self._height = None, None, None
-        self._custom = False
 
     @property
     def width(self) -> int:
@@ -239,14 +238,7 @@ class BaseEvent:
     def img(self) -> Image.Image:
         return self.image
 
-    def set_custom_image(self, img: npt.NDArray[np.uint8]) -> None:
-        self._img = img.convert('RGBA')
-        self._custom = True
-
     def load(self, fp: Union[str, Path] = None) -> None:
-        if self._custom:
-            return
-
         if fp is None:
             self._img = Image.open(self.gfxfile).convert('RGBA')
         else:
@@ -259,7 +251,7 @@ class BaseEvent:
             assert self._img.width == self._width and self._img.height == self._height
 
     def unload(self) -> None:
-        if not self._custom and self._img is not None:
+        if self._img is not None:
             self._img.close()
             self._img = None
 
@@ -276,29 +268,6 @@ class BaseEvent:
         self._outtc = tc_out
 ####
 
-def min_enclosing_square(group: list[BaseEvent]) -> npt.NDArray[np.uint8]:
-    pxtl, pytl = np.inf, np.inf
-    pxbr, pybr = 0, 0
-    for event in group:
-        if event.x < pxtl:
-            pxtl = event.x
-        if event.y < pytl:
-            pytl = event.y
-        if pxbr < event.x + event.width:
-            pxbr = event.x + event.width
-        if pybr < event.y + event.height:
-            pybr = event.y + event.height
-    return Pos(pxtl, pytl), Dim(pxbr-pxtl, pybr-pytl)
-
-def merge_events(group: list[BaseEvent], pos: Pos, dim: Dim) -> Image.Image:
-    img_plane = np.zeros((dim.h, dim.w, 4), dtype=np.uint8)
-    for k, event in enumerate(group):
-        slice_x = slice(event.x-pos.x, event.x-pos.x+event.width)
-        slice_y = slice(event.y-pos.y, event.y-pos.y+event.height)
-        img_plane[slice_y, slice_x, :] = np.asarray(event.img).astype(np.uint8)
-        event.unload()
-    return Image.fromarray(img_plane)
-
 class BDNXMLEvent(BaseEvent):
     """
     A BDNXML event can have numerous child elements such as fade timing and >1
@@ -311,44 +280,64 @@ class BDNXMLEvent(BaseEvent):
         te : dict[str, int]
             Temporal informations related to the event.
         ie : dict[str, Any]
-            Spatial informations related to the event (incl. file name).
+            Spatial informations related to the event (incl. base path).
         others : dict[str, Any]
             Other elements related to the event such as fades.
         """
-        super().__init__(te.get('InTC'), te.get('OutTC'), ie.get('fp'),
-                         int(ie.get('X')), int(ie.get('Y')))
-        self.forced = (te.get('Forced', 'False')).lower() == 'true'
-        self._width = int(ie.get('Width'))
-        self._height = int(ie.get('Height'))
-        self.fade_in = dict()
-        self.fade_out = dict()
-        self._custom = False
+        base_folder = ie.get('fp')
+        assert len(ie['graphics']) > 0
 
-        # Internal raw data
-        self.__te = te
-        self.__ie = ie
-        self.__others = others
+        fp = os.path.join(base_folder, ie['graphics'][0].text)
+
+        f_box = lambda gfx: Box(int(gfx.get('Y')), int(gfx.get('Height')),
+                                int(gfx.get('X')), int(gfx.get('Width')))
+        box = f_box(ie['graphics'][0])
+        for gfx_ev in ie['graphics'][1:]:
+            box = Box.union(box, f_box(gfx_ev))
+
+        self._custom = False
+        if len(ie['graphics']) > 1:
+            self._custom = True
+            self._gfx = ie['graphics']
+            self._bf = base_folder
+
+        super().__init__(te.get('InTC'), te.get('OutTC'), fp, box.x, box.y)
+        self.forced = (te.get('Forced', 'False')).lower() == 'true'
+        self._width = box.dx
+        self._height = box.dy
 
         #Apparently there's "Crop", "Position" and "Color" but god knows how these are even structured and
         # no commonly used program appears to generate any of those tags.
-        for e in others:
-            if e.get('Type', None) == 'Fade':
-                if e.find('Fade').attrib['FadeType'] == 'FadeIn':
-                    self.fade_in = e.attrib
-                elif e.find('Fade').attrib['FadeType'] == 'FadeOut':
-                    self.fade_out = e.attrib
-                else:
-                    raise ValueError(f"Unknown fade type {e.attrib['FadeType']}")
+        #self.fade_in = dict()
+        #self.fade_out = dict()
+        #for e in others:
+        #    if e.get('Type', None) == 'Fade':
+        #        if e.find('Fade').attrib['FadeType'] == 'FadeIn':
+        #            self.fade_in = e.attrib
+        #        elif e.find('Fade').attrib['FadeType'] == 'FadeOut':
+        #            self.fade_out = e.attrib
+        #        else:
+        #            raise ValueError(f"Unknown fade type {e.attrib['FadeType']}")
             # Do you notice how the implementers of BDNXML thought that people would
             #  consider to anchor fade-in at the end????
 
     def set_tc_out(self, tc_out: str) -> None:
         self.tc_out = tc_out
-        self.__te['OutTC'] = tc_out
+
+    def load(self) -> None:
+        if self._custom:
+            self._img = Image.new('RGBA', (self._width, self._height), (0,0,0,0))
+            for gfx in self._gfx:
+                self._img.paste(Image.open(os.path.join(self._bf, gfx.text)).convert('RGBA'),
+                          (int(gfx.get('X')) - self.x, int(gfx.get('Y')) - self.y))
+        else:
+            self._img = Image.open(self.gfxfile).convert('RGBA')
+        assert self._img.width == self._width
+        assert self._img.height == self._height
 ####BDNXMLEvent
 
 if _has_numba:    
-    @njit(fastmath=True, parallel=True)
+    @njit(fastmath=True)
     def _compare_images(images: list[npt.NDArray[np.uint8]]) -> list[np.bool_]:
         diff_list = [np.bool_(1) for x in range(len(images)-1)]
         for i in prange(0, len(images)-1):
@@ -493,7 +482,9 @@ class SeqIO(ABC):
         if not os.path.exists(newf):
             raise OSError("Folder not found.")
         self._folder = newf
+####
 
+#%%
 class BDNXML(SeqIO):
     def __init__(self,
             file: Union[str, Path],
@@ -546,41 +537,29 @@ class BDNXML(SeqIO):
         split_seen = False
 
         for event in self._raw_events:
-            cnt = 0
-            while event[cnt:]:
-                assert event[cnt].tag == 'Graphic', "Expected a 'Graphic' first."
-                effects, gevents, k = [], [], 0
-                for k, subevent in enumerate(event[cnt+1:]):
-                    if subevent.tag == 'Graphic':
-                        gevents.append(subevent)
-                    else:
-                        effects.append(subevent)
-                # Event.attrib contains the <Event> tag params
-                # Event[cnt] features the internal content of the <event> tag.
-                # i.e <Graphic>, <Fade ...>
-                if gevents != []:
-                    if not split_seen:
-                        split_seen = True
-                        logger.warning("Input XML has split events! This is unefficient: Merging back splits to find better splits...")
-                        logger.warning("Risk of excessive RAM usage due to input BDN XML.")
-                    gevents[0:0] = [event[cnt]]
-                    group2merge = [BDNXMLEvent(event.attrib, dict(gevent.attrib, fp=os.path.join(self.folder, gevent.text)), []) for gevent in gevents]
-                    pos, dim = min_enclosing_square(group2merge)
-                    image_info = dict(Width=dim.w, Height=dim.h, X=pos.x, Y=pos.y, fp=None)
-                    image = merge_events(group2merge, dim=dim, pos=pos)
-                    image_info['fp'] = os.path.join(self.folder, 'temp', event[cnt].text)
-                    ea = BDNXMLEvent(event.attrib, image_info, others=effects)
-                    ea.set_custom_image(image)
+            assert event.tag == 'Event'
+            effects, gevents, k = [], [], 0
+            for k, subevent in enumerate(event):
+                assert k > 0 or subevent.tag == 'Graphic', "Expected a 'Graphic' first."
+                if subevent.tag == 'Graphic':
+                    gevents.append(subevent)
                 else:
-                    ea = BDNXMLEvent(event.attrib, dict(event[cnt].attrib, fp=os.path.join(self.folder, event[cnt].text)), effects)
-                if not (ea.tc_in == ea.tc_out and self._skip_zero_duration):
-                    self.events.append(ea)
-                else:
-                    logger.warning(f"Ignored zero-duration graphic: '{ea.gfxfile.split(os.path.sep)[-1]}' @ '{ea.tc_in}'.")
-                new_out = TC.tc2f(ea.tc_out, self.fps)
-                assert prev_f_out <= new_out, "Event ahead finish before last event!"
-                prev_f_out = new_out
-                cnt += k+2
+                    effects.append(subevent)
+            # Event.attrib contains the <Event> tag params
+            # Event[cnt] features the internal content of the <event> tag.
+            # i.e <Graphic>, <Fade ...>
+            if len(gevents) > 1 and not split_seen:
+                split_seen = True
+                logger.warning("Input BDN has split events! Merging back splits to find better ones...")
+                logger.warning("Risk of excessive RAM usage: storing in RAM combined images...")
+            ea = BDNXMLEvent(event.attrib, dict(graphics=gevents, fp=os.path.join(self.folder)), effects)
+            if not (ea.tc_in == ea.tc_out and self._skip_zero_duration):
+                self.events.append(ea)
+            else:
+                logger.warning(f"Ignored zero-duration graphic: '{ea.gfxfile.split(os.path.sep)[-1]}' @ '{ea.tc_in}'.")
+            new_out = TC.tc2f(ea.tc_out, self.fps)
+            assert prev_f_out <= new_out, "Event ahead finish before last event!"
+            prev_f_out = new_out
         # for event
 
     @property
