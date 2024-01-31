@@ -84,6 +84,7 @@ class BDNRender:
 
         logger.info("Finding epochs...")
 
+        container = Box(0, bdn.format.value[1], 0, bdn.format.value[0])
         #In the worst case, there is a single composition object for the whole screen.
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
@@ -129,10 +130,12 @@ class BDNRender:
             #Epoch generation (each subgroup will be its own epoch)
             for ksub, subgroup in enumerate(reversed(subgroups), 1):
                 logger.info(f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s):")
-                box = Box.from_events(subgroup)
 
                 n_groups = 2 if (len(subgroup) > 1 or areas[-ksub]/screen_area > 0.1) else 1
-                windows = GroupingEngine(box, n_groups=n_groups).group(subgroup)
+                engine = GroupingEngine(Box.from_events(subgroup), container=container, n_groups=n_groups)
+                box = engine.pad_box()
+                windows = engine.group(subgroup)
+
                 if logger.level <= 10:
                     for w_id, wd in enumerate(windows):
                         logger.debug(f"Window {w_id}: X={wd.x+box.x}, Y={wd.y+box.y}, W={wd.dx}, H={wd.dy}")

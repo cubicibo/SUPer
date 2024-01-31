@@ -39,10 +39,11 @@ logger = LogFacility.get_logger('SUPer')
 
 #%%
 class GroupingEngine:
-    def __init__(self, box: Box, n_groups: int = 2) -> None:
+    def __init__(self, box: Box, container: Box, n_groups: int = 2) -> None:
         if n_groups not in range(1, 3):
             raise AssertionError(f"GroupingEngine expects 1 or 2 groups, not '{n_groups}'.")
         self.box = box
+        self.container = container
         self.n_groups = n_groups
 
     def coarse_grouping(self, group: list[Type[BaseEvent]], box: Box) -> tuple[npt.NDArray[np.uint8]]:
@@ -57,6 +58,35 @@ class GroupingEngine:
             alpha[alpha > 0] = 1
             gs_orig[0, slice_y, slice_x] |= (alpha > 0)
         return gs_orig
+
+    def pad_box(self, min_dx: int = 8, min_dy: int = 8) -> Box:
+        """
+        Adjust a box within a larger container given dimensional constraints.
+        """
+        assert self.container.dx >= min_dx and self.container.dy >= min_dy, "Video container dimensions too small."
+        assert self.box.overlap_with(self.container) == 1.0, "Rendering rectangle not fully within video container."
+        if self.box.dx >= min_dx and self.box.dy >= min_dy:
+            return self.box
+        diff_y = max(0, min_dy - self.box.dy)
+        diff_x = max(0, min_dx - self.box.dx)
+        dv = np.array([[diff_y*(2*self.box.y + (self.box.dy - self.container.dy))/self.container.dy,
+                        diff_x*(2*self.box.x + (self.box.dx - self.container.dx))/self.container.dx]])
+
+        minmax = lambda iterable: reduce(lambda x, y: (min(x[0], np.floor(y)), max(x[1], np.ceil(y))), iterable, (np.inf, -np.inf))
+
+        pu, pd = minmax(map(lambda y: -dv[0, 0] + y, range(diff_y)))
+        pl, pr = minmax(map(lambda x: -dv[0, 1] + x, range(diff_x)))
+
+        new_x1 = int(self.box.x  + (pl if (pl < pr) else 0))
+        new_x2 = int(self.box.x2 + (pr if (pl < pr) else 0))
+        new_y1 = int(self.box.y  + (pu if (pu < pd) else 0))
+        new_y2 = int(self.box.y2 + (pd if (pu < pd) else 0))
+
+        out = Box.from_coords(new_x1, new_y1, new_x2, new_y2)
+        assert out.overlap_with(self.container) == 1.0, "Adjusted rendering rectangle outside of video container."
+        assert out.dx >= min_dx and out.dy >= min_dy
+        self.box = out
+        return self.box
 
     @staticmethod
     def check_best(new_lwd: tuple[Box], prev_lwd: tuple[Box]) -> tuple[Box]:
