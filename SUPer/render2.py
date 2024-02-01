@@ -20,6 +20,7 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 from typing import Optional, Type, Callable
 from itertools import chain, zip_longest
+from functools import reduce
 
 from PIL import Image
 from SSIM_PIL import compare_ssim
@@ -59,32 +60,40 @@ class GroupingEngine:
             gs_orig[0, slice_y, slice_x] |= (alpha > 0)
         return gs_orig
 
+    @staticmethod
+    def _pad_any_box(box: Box, container: Box, min_dx: int, min_dy: int) -> Box:
+        if box.dx >= min_dx and box.dy >= min_dy:
+            return box
+
+        diff_y = max(0, min_dy - box.dy)
+        diff_x = max(0, min_dx - box.dx)
+        dv = np.array([[diff_y*(2*box.y + (box.dy - container.dy))/container.dy,
+                        diff_x*(2*box.x + (box.dx - container.dx))/container.dx]])
+        minmax = lambda iterable: reduce(lambda x, y: (min(x[0], np.floor(y)), max(x[1], np.ceil(y))), iterable, (np.inf, -np.inf))
+        pu, pd = minmax(map(lambda y: dv[0, 0] + y, range(diff_y)))
+        pl, pr = minmax(map(lambda x: dv[0, 1] + x, range(diff_x)))
+
+        new_x1 = max(0, int(box.x  + (pl if (pl < pr) else 0)))
+        new_x2 = min(container.dx, int(box.x2 + (pr if (pl < pr) else 0)))
+        new_y1 = max(0, int(box.y  + (pu if (pu < pd) else 0)))
+        new_y2 = min(container.dy, int(box.y2 + (pd if (pu < pd) else 0)))
+        if (missing := diff_x - (box.x - new_x1 + new_x2 - box.x2)) > 0:
+            new_x2 += (new_x1 < missing)*missing
+            new_x1 -= (new_x1 >= missing)*missing
+        if (missing := diff_y - (box.y - new_y1 + new_y2 - box.y2)) > 0:
+            new_y2 += (new_y1 < missing)*missing
+            new_y1 -= (new_y1 >= missing)*missing
+        return Box.from_coords(new_x1, new_y1, new_x2, new_y2)
+
     def pad_box(self, min_dx: int = 8, min_dy: int = 8) -> Box:
         """
         Adjust a box within a larger container given dimensional constraints.
         """
         assert self.container.dx >= min_dx and self.container.dy >= min_dy, "Video container dimensions too small."
         assert self.box.overlap_with(self.container) == 1.0, "Rendering rectangle not fully within video container."
-        if self.box.dx >= min_dx and self.box.dy >= min_dy:
-            return self.box
-        diff_y = max(0, min_dy - self.box.dy)
-        diff_x = max(0, min_dx - self.box.dx)
-        dv = np.array([[diff_y*(2*self.box.y + (self.box.dy - self.container.dy))/self.container.dy,
-                        diff_x*(2*self.box.x + (self.box.dx - self.container.dx))/self.container.dx]])
-
-        minmax = lambda iterable: reduce(lambda x, y: (min(x[0], np.floor(y)), max(x[1], np.ceil(y))), iterable, (np.inf, -np.inf))
-
-        pu, pd = minmax(map(lambda y: -dv[0, 0] + y, range(diff_y)))
-        pl, pr = minmax(map(lambda x: -dv[0, 1] + x, range(diff_x)))
-
-        new_x1 = int(self.box.x  + (pl if (pl < pr) else 0))
-        new_x2 = int(self.box.x2 + (pr if (pl < pr) else 0))
-        new_y1 = int(self.box.y  + (pu if (pu < pd) else 0))
-        new_y2 = int(self.box.y2 + (pd if (pu < pd) else 0))
-
-        out = Box.from_coords(new_x1, new_y1, new_x2, new_y2)
-        assert out.overlap_with(self.container) == 1.0, "Adjusted rendering rectangle outside of video container."
-        assert out.dx >= min_dx and out.dy >= min_dy
+        out = __class__._pad_any_box(self.box, self.container, min_dx, min_dy)
+        assert out.overlap_with(self.container) == 1.0, f"Adjusted rendering rectangle outside of video container {out} within {self.container}"
+        assert out.dx >= min_dx and out.dy >= min_dy, f"Failed padding: {out}, with input: {self.box}"
         self.box = out
         return self.box
 
@@ -95,9 +104,70 @@ class GroupingEngine:
             return lwd
         return prev_lwd
 
+    def directional_pad(self, lwd: tuple[Box], vertical: Optional[bool] = None) -> tuple[Box]:
+        """
+        Tries really hard to pad the windows in a smart way.
+        :param lwd: list of 1 or 2 window(s)
+        :param vertical: the 2 windows are from a vertical split (one window above the other).
+        """
+        bad_wds = tuple(filter(lambda wd: wd.dx < 8 or wd.dy < 8, lwd))
+        if len(bad_wds) == 0:
+            return lwd
+        if len(lwd) == 1:
+            logger.debug(f"Padding single window {lwd[0]}")
+            return (__class__._pad_any_box(lwd[0], self.box, 8, 8),)
+        assert len(lwd) == 2, "Expected 1 or 2 windows."
+        assert isinstance(vertical, (bool, int))
+
+        new_lwd = []
+        inter_margin = abs((lwd[0].y2 - lwd[1].y) if vertical else (lwd[0].x2 - lwd[1].x))
+
+        for wid, wd in enumerate(lwd):
+            missing = left_pad = right_pad = top_pad = bot_pad = 0
+            if vertical:
+                #Pad horizontally (no constraint)
+                diff = max(0, 8 - wd.dx)
+                left_pad = max(0, min(diff, wd.x + wd.dx + diff - self.box.dx))
+                right_pad = diff - left_pad
+                #Pad vertically (constrained)
+                diff = max(0, 8 - wd.dy)
+                top_pad = wd.y if wid == 0 and diff > 0 else 0
+                bot_pad = 0 if wid == 0 or diff == 0 else (self.box.dy - wd.y2)
+                if top_pad + bot_pad < diff:
+                    missing = (diff - top_pad - bot_pad)
+                    if wid == 0:
+                        bot_pad += missing
+                    else:
+                        top_pad += missing
+            else:
+                diff = max(0, 8 - wd.dy)
+                top_pad = max(0, min(diff, wd.y + wd.dy + diff - self.box.dy))
+                bot_pad = diff - top_pad
+                diff = max(0, 8 - wd.dx)
+                left_pad = wd.x if wid == 0 and diff > 0 else 0
+                right_pad = 0 if wid == 0 or diff == 0 else (self.box.dx - wd.x2)
+                if left_pad + right_pad < diff:
+                    missing = (diff - left_pad - right_pad)
+                    if wid == 0:
+                        right_pad += missing
+                    else:
+                        left_pad += missing
+            inter_margin -= missing
+            new_lwd.append(Box.from_coords(wd.x-left_pad, wd.y-top_pad, wd.x2+right_pad, wd.y2+bot_pad))
+            logger.debug(f"Padded window ID={wid}: {new_lwd[-1]} from {lwd[wid]}")
+            assert Box(self.box.y + new_lwd[-1].y, new_lwd[-1].dy, new_lwd[-1].x + self.box.x, new_lwd[-1].dx).overlap_with(self.container) == 1.0, f"Window does not overlap with renderer container: {self.container}"
+
+        #No suitable padding -> merge
+        if inter_margin < 0:
+            logger.debug("No padding marging available: merge to a single window.")
+            return (Box.union(*lwd),)
+        assert Box.intersect(*new_lwd).area == 0, f"Padded windows overlap: {new_lwd} from {lwd}."
+        return new_lwd
+
     def find_layout(self, gs_origs: npt.NDArray[np.uint8]) -> tuple[Box]:
         xl, yl, xr, yr = Image.fromarray(gs_origs[0, :, :], 'L').getbbox(alpha_only=False)
-        best_wds = (Box(yl, yr-yl, xl, xr-xl),)
+        base_wds = self.directional_pad((Box(yl, yr-yl, xl, xr-xl),))
+        best_wds = base_wds
         if self.n_groups == 1 or (gs_origs.shape[1] < 8 and gs_origs.shape[2] < 8):
             logger.debug(f"Single window due to shape ({gs_origs.shape}) or n_groups ({self.n_groups})")
             return best_wds
@@ -106,19 +176,19 @@ class GroupingEngine:
             top_wd = Box.from_coords(*Image.fromarray(gs_origs[0, :yj, :]).getbbox(alpha_only=False))
             xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[0, yj:, :]).getbbox(alpha_only=False)
             bottom_wd = Box.from_coords(xt0, yt0+yj, xt1, yt1+yj)
-            best_wds = __class__.check_best((top_wd, bottom_wd), best_wds)
+            best_wds = __class__.check_best(self.directional_pad((top_wd, bottom_wd), True), best_wds)
 
         for xj in range(xl+8, xr-8):
             left_wd = Box.from_coords(*Image.fromarray(gs_origs[0, :, :xj]).getbbox(alpha_only=False))
             xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[0, :, xj:]).getbbox(alpha_only=False)
             right_wd = Box.from_coords(xt0+xj, yt0, xt1+xj, yt1)
-            best_wds = __class__.check_best((left_wd, right_wd), best_wds)
+            best_wds = __class__.check_best(self.directional_pad((left_wd, right_wd), False), best_wds)
 
         # 356 = 32e6/90e3: number of pixels we can output in a tick. If area diff is smaller,
         # the tick overhead for dual windows/objects may not be worthwile.
-        if best_wds is None or sum(map(lambda x: x.area, best_wds)) >= (yr - yl)*(xr - xl) - 356:
+        if sum(map(lambda x: x.area, best_wds)) >= (yr - yl)*(xr - xl) - 356:
             logger.debug("No layout found or a single window is as efficient.")
-            return (Box(yl, yr-yl, xl, xr-xl),)
+            return base_wds
 
         for wd in best_wds:
             assert wd.dx >= 8 and wd.dy >= 8, "Incorrect window or object size."
