@@ -70,19 +70,21 @@ class GroupingEngine:
         dv = np.array([[diff_y*(2*box.y + (box.dy - container.dy))/container.dy,
                         diff_x*(2*box.x + (box.dx - container.dx))/container.dx]])
         minmax = lambda iterable: reduce(lambda x, y: (min(x[0], np.floor(y)), max(x[1], np.ceil(y))), iterable, (np.inf, -np.inf))
-        pu, pd = minmax(map(lambda y: dv[0, 0] + y, range(diff_y)))
-        pl, pr = minmax(map(lambda x: dv[0, 1] + x, range(diff_x)))
+        pu, pd = minmax(map(lambda y: -diff_y/2 + dv[0, 0] + y, range(diff_y)))
+        pl, pr = minmax(map(lambda x: -diff_x/2 + dv[0, 1] + x, range(diff_x)))
 
         new_x1 = max(0, int(box.x  + (pl if (pl < pr) else 0)))
         new_x2 = min(container.dx, int(box.x2 + (pr if (pl < pr) else 0)))
         new_y1 = max(0, int(box.y  + (pu if (pu < pd) else 0)))
         new_y2 = min(container.dy, int(box.y2 + (pd if (pu < pd) else 0)))
+
+        #Try to pad right and bottom first due to range rounding
         if (missing := diff_x - (box.x - new_x1 + new_x2 - box.x2)) > 0:
-            new_x2 += (new_x1 < missing)*missing
-            new_x1 -= (new_x1 >= missing)*missing
+            new_x2 += (did_offset := (new_x2 + missing <= container.dx))*missing
+            new_x1 -= (not did_offset)*missing
         if (missing := diff_y - (box.y - new_y1 + new_y2 - box.y2)) > 0:
-            new_y2 += (new_y1 < missing)*missing
-            new_y1 -= (new_y1 >= missing)*missing
+            new_y2 += (did_offset := (new_y2 + missing <= container.dy))*missing
+            new_y1 -= (not did_offset)*missing
         return Box.from_coords(new_x1, new_y1, new_x2, new_y2)
 
     def pad_box(self, min_dx: int = 8, min_dy: int = 8) -> Box:

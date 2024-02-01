@@ -2,13 +2,16 @@ import pytest
 
 from SUPer.utils import Box
 from SUPer.render2 import GroupingEngine
-from SUPer.filestreams import BDNXMLEvent
 
 import numpy as np
 import random
 
 @pytest.mark.parametrize("container", [Box(0, 1080, 0, 1920), Box(0, 480, 0, 720), Box(0, 576, 0, 720), Box(0, 720, 0, 1280)])
 def test_pad_box(container: Box):
+    """
+    Test that, whatever the margins or the input box are, the box is either
+    untouched or padded to the exactly set margin.
+    """
     for k in range(10000):
         mx, my = random.randint(8, 64), random.randint(8, 64)
         py, px = random.randrange(0, container.dy, 1), random.randrange(0, container.dx, 1)
@@ -115,3 +118,24 @@ def test_pad_marging_box():
         np_mask[wd.y:wd.y2, wd.x:wd.x2] = False
         assert Box(wd.y+box.y, wd.dy, wd.x+box.x, wd.dx).overlap_with(container) == 1.0, windows
     assert not np.any(gs_orig[0, np_mask])
+
+def test_single_window():
+    container = Box(0, 480, 0, 720)
+    box = Box(100, 100, 100, 100)
+    ge = GroupingEngine(box, container, 1)
+
+    gs_orig = np.zeros((1, box.dy, box.dx), np.uint8)
+    gs_orig[0, 0, 0] = 1
+    gs_orig[0, -1, -1] = 1
+    assert len(ge.find_layout(gs_orig)) == 1
+
+def test_pad_centered_box():
+    container = Box(0, 1080, 0, 1920)
+    box = Box(538, 4, 959, 3)
+
+    ge = GroupingEngine(box, container, 1)
+    nbox = ge.pad_box()
+
+    #We expect perfect centering on Y axis, and accept off-by-one on X axis.
+    assert abs(nbox.y-536) == 0 and abs(nbox.y2-544) == 0
+    assert abs(nbox.x-956) <= 1 and abs(nbox.x2-964) <= 1
