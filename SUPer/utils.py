@@ -399,7 +399,8 @@ class LogFacility:
     def set_logger_level(cls, name: str, level: int) -> None:
         assert cls._logger.get(name, None) is not None
         cls._logger[name].setLevel(level)
-        cls._logger[name].handlers[0].setLevel(level)
+        if len(cls._logger[name].handlers):
+            cls._logger[name].handlers[0].setLevel(level)
 
     @classmethod
     def get_logger(cls, name: str, level: int = logging.INFO) -> logging.Logger:
