@@ -756,7 +756,7 @@ class WindowsAnalyzer:
 
                     p_write = (pals[0][z-i] | pals[1][z-i])
                     #Skip empty palette updates
-                    if len(p_write) == 0:
+                    if len(p_write) == 0 and last_palette_id is not None:
                         logger.debug(f"Skipped an empty palette at PTS={self.events[z].tc_in}={c_pts:.03f}.")
                         continue
 
