@@ -24,12 +24,13 @@ from os import path
 
 from scenaristream import EsMuiStream
 
-from .utils import TimeConv as TC, LogFacility, Box, BDVideo
+from .utils import TimeConv as TC, LogFacility, Box, BDVideo, SSIMPW
 from .pgraphics import PGDecoder
 from .filestreams import BDNXML, remove_dupes
 from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate
 
+#%%
 logger = LogFacility.get_logger('SUPer')
 
 class BDNRender:
@@ -50,6 +51,10 @@ class BDNRender:
                     if not Quantizer.init_piliq(*piq_params):
                         logger.info("Failed to initialise advanced image quantizer. Falling back to PIL+K-Means.")
                         self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
+
+        if (sup_params := self.kwargs.pop('super_cfg', None)) is not None:
+            SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
+            logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
 
         file_logging_level = self.kwargs.get('log_to_file', False)
         if file_logging_level > 0:

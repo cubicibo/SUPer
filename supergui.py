@@ -31,6 +31,9 @@ from typing import Optional, Any
 from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
 
+from warnings import filterwarnings
+filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
+
 from SUPer import BDNRender, LogFacility
 from SUPer.optim import Quantizer
 from SUPer.__metadata__ import __version__ as SUPVERS, __author__
@@ -202,7 +205,7 @@ def init_extra_libs():
         try: return config[key]
         except KeyError: return None
     ####
-
+    params = {}
     CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
     ini_file = CWD.joinpath('config.ini')
 
@@ -210,20 +213,18 @@ def init_extra_libs():
         exepath, piq_quality = None, None
         import configparser
         config = configparser.ConfigParser()
-        try:
-            config.read(ini_file)
-            piq_params = config['PILIQ']
-        except:
-            ...
-        else:
+        config.read(ini_file)
+        if (piq_params := get_value_key(config, 'PILIQ')) is not None:
             if (exepath := get_value_key(piq_params, 'quantizer')) is not None and not os.path.isabs(exepath):
                 exepath = str(CWD.joinpath(exepath))
             if (piq_quality := get_value_key(piq_params, 'quality')) is not None:
                 piq_quality = int(piq_quality)
         if Quantizer.init_piliq(exepath):
             logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
-            return {'quant': (exepath, piq_quality)}
-    return {}
+            params |= {'quant': (exepath, piq_quality)}
+        if (sup_params := get_value_key(config, 'SUPer')) is not None:
+            params |= {'super_cfg': dict(sup_params)}
+    return params
 
 if __name__ == '__main__':
     import multiprocessing as mp

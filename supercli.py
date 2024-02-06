@@ -18,6 +18,9 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+from warnings import filterwarnings
+filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
+
 from SUPer import BDNRender, LogFacility
 from SUPer.__metadata__ import __author__, __version__ as LIB_VERSION
 from SUPer.optim import Quantizer
@@ -93,7 +96,7 @@ if __name__ == '__main__':
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown BT ITU target, using bt709.")
         args.bt = 709
-        
+
     if args.extra_acq < 0:
         logger.warning("Got invalid extra-acq, disabling option.")
         args.extra_acq = 0
@@ -129,6 +132,7 @@ if __name__ == '__main__':
           "                  @@@BP€    @@@\n"\
           " (c) cubicibo     @@@       @@@\n"\
           "                   @@YY@@   @@@\n")
+    parameters = {}
 
     if args.qmode == 3:
         config_file = Path('config.ini')
@@ -140,11 +144,10 @@ if __name__ == '__main__':
                 except KeyError: return None
             config = configparser.ConfigParser()
             config.read(config_file)
-            try:
-                piq_sect = config['PILIQ']
-            except:
-                ...
-            else:
+            if (super_cfg := get_value_key(config, 'SUPer')) is not None:
+                parameters['super_cfg'] = dict(super_cfg)
+
+            if (piq_sect := get_value_key(config, 'PILIQ')) is not None:
                 exepath = get_value_key(piq_sect, 'quantizer')
                 if exepath is not None and not os.path.isabs(exepath):
                     CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
@@ -157,7 +160,7 @@ if __name__ == '__main__':
         else:
             exit_msg("Could not initialise advanced image quantizer, aborting.", True)
     ###
-    parameters = {
+    parameters |= {
         'quality_factor': int(args.compression)/100,
         'refresh_rate': int(args.acqrate)/100,
         'scale_fps': args.subsampled,

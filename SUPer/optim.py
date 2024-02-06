@@ -22,7 +22,6 @@ import numpy as np
 import numpy.typing as npt
 
 from PIL import Image, ImagePalette
-from SSIM_PIL import compare_ssim
 
 from typing import Optional, Union
 from collections.abc import Iterable
@@ -31,7 +30,7 @@ from piliq import PILIQ
 import cv2
 
 from .palette import Palette, PaletteEntry
-from .utils import TimeConv as TC, LogFacility, get_matrix
+from .utils import TimeConv as TC, LogFacility, get_matrix, SSIMPW
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -145,7 +144,7 @@ class Preprocess:
             pil_failed = len(img_out.palette.colors) != 1+max(img_out.palette.colors.values())
 
             #When PIl fails to quantize alpha channel, there's a clear discrepancy between original and quantized image.
-            pil_failed = pil_failed or compare_ssim(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.95
+            pil_failed = pil_failed or SSIMPW.compare(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.95
 
             if pil_failed:
                 logger.ldebug("Pillow failed to palettize image, falling back to K-Means.")
