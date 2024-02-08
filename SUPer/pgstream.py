@@ -129,7 +129,7 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
     logger.iinfo(f"Bitrate: AVG={avg_bitrate/(128*1024):.04f} Mbps, PEAK_1s={stats[2]:.03f} Mbps @ {leaky.stats.tsavg}.")
 
     f_log_fun = logger.iinfo if is_ok else logger.error
-    f_log_fun(f"Buffer margin: AVG={stats[1]:.02f}%, MIN={stats[0]:.02f}% @ {leaky.stats.tsmin}")
+    f_log_fun(f"Underflow margin (higher is better): AVG={stats[1]:.02f}%, MIN={stats[0]:.02f}% @ {leaky.stats.tsmin}")
     return is_ok
 ####
 #%%
@@ -346,9 +346,9 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
         is_compliant &= diff > 0 and diff < PTS_DIFF_BOUND
 
         for l, ds in enumerate(epoch):
-            ds_comply = True
-            #Check for minimum DTS delta between DS, ideally this should be bigger than 0
-            min_dts_delta = min((ds.pcs.tdts - prev_dts) & PTS_MASK, min_dts_delta)
+            ds_comply = (ds.pcs.tdts - prev_dts) & PTS_MASK <= PTS_DIFF_BOUND
+            ds_comply &= (ds.pcs.tpts - prev_pts) & PTS_MASK <= PTS_DIFF_BOUND
+
             if ds.wds:
                 # WDS action requires pts_delta margin from previous DS
                 diff = (ds.pcs.tpts - prev_pts) & PTS_MASK
@@ -365,6 +365,8 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
             for seg in ds:
                 diff = (seg.tdts - prev_dts) & PTS_MASK
                 ds_comply &= diff >= 0 and diff < PTS_DIFF_BOUND
+                #Segment lifetime in decoder should be less than one second
+                ds_comply &= (seg.tpts - seg.tdts) & PTS_MASK < PGDecoder.FREQ
                 prev_dts = seg.tdts
             prev_pts = ds.pcs.tpts
             if not ds_comply:
@@ -372,5 +374,4 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
             is_compliant &= ds_comply
         ####ds
     ####epochs
-    is_compliant &= min_dts_delta >= 0
     return is_compliant

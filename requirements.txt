@@ -4,6 +4,7 @@ opencv-python
 pyopencl
 SSIM-PIL
 timecode
+psutil ; sys_platform == 'win32'
 scenaristream @ git+https://github.com/cubicibo/ScenariStream.git
 piliq @ git+https://github.com/cubicibo/piliq.git
 # The following dependencies are optional:

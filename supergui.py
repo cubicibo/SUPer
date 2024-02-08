@@ -18,15 +18,12 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-if __name__ == '__main__':
-    print("Loading...")
-
 import os
 import sys
 import time
 import signal
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, Callable
 
 from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
@@ -34,12 +31,32 @@ from idlelib.tooltip import Hovertip
 from warnings import filterwarnings
 filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
 
+### CONSTS
+SUPER_STRING = "Make it SUPer!"
+
+def from_bdnxml(queue: ...) -> None:
+    from SUPer import BDNRender, LogFacility
+    #### This function runs in MP context, not main.
+    logger = LogFacility.get_logger('SUPer')
+    kwargs = queue.get()
+    bdnf = queue.get()
+    supo = queue.get()
+
+    logger.info(f"Loading input BDN: {bdnf}")
+    sup_obj = BDNRender(bdnf, kwargs, supo)
+    sup_obj.optimise()
+    sup_obj.write_output()
+    logger.info("Finished, exiting...")
+####
+
+if __name__ == '__main__':
+    import multiprocessing as mp
+    mp.freeze_support()
+    print("Loading...")
+
 from SUPer import BDNRender, LogFacility
 from SUPer.optim import Quantizer
 from SUPer.__metadata__ import __version__ as SUPVERS, __author__
-
-### CONSTS
-SUPER_STRING = "Make it SUPer!"
 
 #### Functions, main at the end of the file
 def get_kwargs() -> dict[str, int]:
@@ -54,10 +71,12 @@ def get_kwargs() -> dict[str, int]:
         'output_all_formats': bool(all_formats.value),
         'normal_case_ok': bool(normal_case_ok.value),
         'insert_acquisitions': int(biacqs_val.value),
-        'libs_path': lib_paths,
+        'ini_opts': ini_opts,
         'max_kbps': int(max_kbps.value),
         'log_to_file': opts_log[logcombo.value],
         'ssim_tol': int(ssim_tolb.value)/100,
+        'threads': int(threadscombo.value),
+        'daemonize': False,
     }
 
 def wrapper_mp() -> None:
@@ -74,13 +93,14 @@ def wrapper_mp() -> None:
         invalid |= not (0 <= kwargs['insert_acquisitions'])
         invalid |= not (0 <= kwargs['quality_factor'] <= 1)
         invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
-        invalid |= kwargs['max_kbps'] <= 0 or kwargs['max_kbps'] >= 48000
+        invalid |= not (1 <= kwargs['threads'] <= 8)
+        invalid |= not (0 <= kwargs['max_kbps'] <= 48000)
         if invalid:
             logger.error("Invalid parameter found, aborting.")
             return
 
     do_super.enabled = False
-    do_abort.enabled = True
+    do_abort.enabled = True #and (1 == kwargs['threads'])
     logger.info("Starting optimiser process.")
     do_super.text = "Generating (check console)..."
     while True:
@@ -88,11 +108,54 @@ def wrapper_mp() -> None:
             do_super.queue.get_nowait()
         except:
             break
+    do_super.proc = mp.Process(target=from_bdnxml, args=(do_super.queue,), daemon=(1 == kwargs['threads']), name="SUPinternal")
     do_super.proc.start()
     do_super.queue.put(kwargs)
     do_super.queue.put(bdnname.value)
     do_super.queue.put(supout.value)
     do_super.ts = time.time()
+
+def _tryfunc(f: Callable[[Any], None]) -> None:
+    try: f()
+    except: pass
+
+def _win_nt_abort(proc) -> None:
+    import psutil
+    procs = psutil.Process().children(recursive=True)
+    for child in procs:
+        child.terminate()
+    alive = psutil.wait_procs(procs, timeout=0.2)[1]
+    for child in alive:
+        child.kill()
+    alive = psutil.wait_procs(procs, timeout=0.2)[1]
+    #do a hard taskkill
+    if alive:
+        from subprocess import call as scall
+        for child in alive:
+            logger.info(f"Using OS to terminate {child.pid}.")
+            _tryfunc(lambda: scall(f"taskkill /f /PID {child.pid}", creationflags=0x08000000))
+            _tryfunc(lambda: child.wait(0.1))
+####
+
+def _posix_abort(proc, hard: bool = True) -> None:
+    _tryfunc(proc.terminate)
+    if hard:
+        time.sleep(0.5)
+        _tryfunc(proc.kill)
+    _tryfunc(lambda: proc.join(0.2))
+
+def abort(proc: Optional['mp.Process'] = None, hard: bool = True) -> None:
+    try:
+        do_abort.enabled = False
+    except:
+        pass
+    if proc is None:
+        proc = do_super.proc
+    if proc is not None:
+        if 'nt' == os.name and hard and not proc.daemon:
+            _win_nt_abort(proc)
+        else:
+            _posix_abort(proc, hard)
 
 def monitor_mp() -> None:
     do_reset = False
@@ -105,17 +168,12 @@ def monitor_mp() -> None:
                     do_super.queue.get_nowait()
                 except:
                     break
-            try:
-                do_super.proc.join(0.1)
-            except RuntimeError:
-                ...
-            else:
-                from multiprocessing import Process
-                logger.info("Closed gracefully SUPer process.")
-                do_super.proc = Process(target=from_bdnxml, args=(do_super.queue,), daemon=True, name="SUPinternal")
-                do_super.ts = time.time()
-                do_reset = True
-                do_abort.enabled = False
+            abort(do_super.proc, False)
+            do_super.proc = None
+            logger.info("Closed gracefully SUPer process.")
+            do_super.ts = time.time()
+            do_reset = True
+            do_abort.enabled = False
     if do_reset and bdnname.value and supout.value:
         do_super.enabled = True
         do_super.text = SUPER_STRING
@@ -159,8 +217,8 @@ def set_outputsup() -> None:
 
     if bdnname.value != '' and do_super.text == SUPER_STRING:
         do_super.enabled = True
-
 ####
+
 def terminate(frame = None, sig = None):
     global app
     global do_super
@@ -168,37 +226,7 @@ def terminate(frame = None, sig = None):
 
     app.cancel(monitor_mp)
     app.destroy()
-
-    if proc is not None:
-        try:
-            proc.kill()
-        except:
-            ...
-        else:
-            proc.join(0.1)
-
-def abort() -> None:
-    proc = do_super.proc
-    if proc is not None:
-        try:
-            proc.terminate()
-        except:
-            ...
-        else:
-            proc.join(0.25)
-
-def from_bdnxml(queue: ...) -> None:
-    #### This function runs in MP context, not main.
-    logger = LogFacility.get_logger('SUPer')
-    kwargs = queue.get()
-    bdnf = queue.get()
-    supo = queue.get()
-
-    logger.info(f"Loading input BDN: {bdnf}")
-    sup_obj = BDNRender(bdnf, kwargs, supo)
-    sup_obj.optimise()
-    sup_obj.write_output()
-    logger.info("Finished, exiting...")
+    abort(proc)
 
 def init_extra_libs():
     def get_value_key(config, key: str) -> Optional[Any]:
@@ -209,6 +237,8 @@ def init_extra_libs():
     CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
     ini_file = CWD.joinpath('config.ini')
 
+    exepath = None
+    piq_quality = 100
     if ini_file.exists():
         exepath, piq_quality = None, None
         import configparser
@@ -219,21 +249,18 @@ def init_extra_libs():
                 exepath = str(CWD.joinpath(exepath))
             if (piq_quality := get_value_key(piq_params, 'quality')) is not None:
                 piq_quality = int(piq_quality)
-        if Quantizer.init_piliq(exepath):
-            logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
-            params |= {'quant': (exepath, piq_quality)}
         if (sup_params := get_value_key(config, 'SUPer')) is not None:
-            params |= {'super_cfg': dict(sup_params)}
+            params['super_cfg'] = dict(sup_params)
+    if Quantizer.init_piliq(exepath):
+        logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
+        params['quant'] = (exepath, piq_quality)
     return params
 
 if __name__ == '__main__':
-    import multiprocessing as mp
-    mp.freeze_support()
-
     logger = LogFacility.get_logger('SUPui')
     logger.info(f"SUPer v{SUPVERS}, (c) {__author__}")
 
-    lib_paths = init_extra_libs()
+    ini_opts = init_extra_libs()
     opts_quant = Quantizer.get_options()
     opts_log = {'Disabled':  0, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30, 'Debug': 10, 'Max debug': 5}
 
@@ -258,7 +285,7 @@ if __name__ == '__main__':
     do_abort = PushButton(app, command=abort, text="Abort", grid=[1,pos_v], align='left', enabled=False)
 
     do_super.queue = mp.Queue(10)
-    do_super.proc = mp.Process(target=from_bdnxml, args=(do_super.queue,), daemon=True, name="SUPinternal")
+    do_super.proc = None
     do_super.ts = time.time()
     do_super.text_color = 'red'
     do_super.sup_kwargs = {}
@@ -319,6 +346,9 @@ if __name__ == '__main__':
     Hovertip(bssimtol.tk, "Higher sensitivity increases the needed structural similarity to classify two images as similar.\n"\
                         "similar images can be encoded as palette updates, while dissimilar ones require an acquisition.")
 
+    bthread = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1], align='left')
+    threadscombo = Combo(bthread, options=list(range(1, 9)), grid=[0,0], align='left')
+    Text(bthread, "Number of threads", grid=[1,0], align='left', size=11)
 
     bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
     max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="16000", align='left')

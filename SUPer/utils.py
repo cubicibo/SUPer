@@ -382,6 +382,7 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
 class LogFacility:
     _logger = dict()
     _logpbar = dict()
+    _tqdm_off = False
 
     @classmethod
     def set_file_log(cls, logger: logging.Logger, fp: str, level: Optional[int] = None) -> None:
@@ -449,6 +450,10 @@ class LogFacility:
         logging.Logger.hdebug = high_debug
 
     @classmethod
+    def disable_tqdm(cls) -> None:
+        cls._tqdm_off = True
+
+    @classmethod
     def close_progress_bar(cls, logger: logging.Logger):
         if cls._logger.get(logger.name, None) != None and cls._logpbar.get(logger.name, None) is not None:
             cls._logpbar[logger.name].close()
@@ -460,7 +465,7 @@ class LogFacility:
             return None
         if cls._logpbar.get(logger.name, None) is not None:
             return cls._logpbar[logger.name]
-        if logger.getEffectiveLevel() >= logging.INFO:
+        if logger.getEffectiveLevel() >= logging.INFO and not cls._tqdm_off:
             pbar = tqdm(tot)
         else:
             pbar = nullcontext()

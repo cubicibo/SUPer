@@ -21,51 +21,37 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 import gc
 import numpy as np
 from os import path
+from typing import Any, Generator, Optional, NoReturn
+import multiprocessing as mp
+from itertools import chain
 
 from scenaristream import EsMuiStream
 
 from .utils import TimeConv as TC, LogFacility, Box, BDVideo, SSIMPW
 from .pgraphics import PGDecoder
-from .filestreams import BDNXML, remove_dupes
+from .filestreams import BDNXML, BDNXMLEvent, remove_dupes
+from .segments import Epoch, DisplaySet
 from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate
+from .render2 import GroupingEngine, WindowsAnalyzer
 
 #%%
 logger = LogFacility.get_logger('SUPer')
 
 class BDNRender:
-    def __init__(self, bdnf: str, kwargs: dict[str, int], outfile: str) -> None:
+    def __init__(self, bdnf: str, kwargs: dict[str, Any], outfile: str) -> None:
         self.bdn_file = bdnf
         self.outfile = outfile
         self.kwargs = kwargs
 
         self._epochs = []
         self._first_pts = 0
-        self.setup()
 
-    def setup(self) -> None:
-        if (libs_params := self.kwargs.pop('libs_path', {})):
-            logger.info(f"Library parameters: {libs_params}")
-            if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) == Quantizer.Libs.PILIQ:
-                if (piq_params := libs_params.get('quant', None)) is not None:
-                    if not Quantizer.init_piliq(*piq_params):
-                        logger.info("Failed to initialise advanced image quantizer. Falling back to PIL+K-Means.")
-                        self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
+    def prepare(self) -> BDNXML:
+        stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.get('ini_opts', {}).items()])
+        logger.debug(f"INI config: {stkw}")
 
-        if (sup_params := self.kwargs.pop('super_cfg', None)) is not None:
-            SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
-            logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
-
-        file_logging_level = self.kwargs.get('log_to_file', False)
-        if file_logging_level > 0:
-            logfile = str(self.outfile) + '.txt'
-            LogFacility.set_file_log(logger, logfile, file_logging_level)
-            LogFacility.set_logger_level(logger.name, file_logging_level)
-
-    def optimise(self) -> None:
-        from .render2 import GroupingEngine, WindowsAnalyzer
-
-        stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items()])
+        stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
         logger.iinfo(f"Parameters: {stkw}")
 
         bdn = BDNXML(path.expanduser(self.bdn_file))
@@ -84,32 +70,20 @@ class BDNRender:
         self.kwargs['adjust_ntsc'] = isinstance(bdn.fps, float) and not bdn.dropframe
         if self.kwargs['adjust_ntsc']:
             logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
-
         self._first_pts = TC.tc2pts(bdn.events[0].tc_in, bdn.fps)
+        return bdn
 
-        logger.info("Finding epochs...")
-
-        container = Box(0, bdn.format.value[1], 0, bdn.format.value[0])
+    @staticmethod
+    def epoch_events(bdn: BDNXML) -> Generator[tuple[float, list['BDNXMLEvent']], None, None]:
         #In the worst case, there is a single composition object for the whole screen.
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
         #Round up to tick
         epochstart_dd_fnr = lambda o_area: np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
 
-        final_ds = None
-        last_pts_out = None
-        pcs_id = 0
         for group in bdn.groups(epochstart_dd_fn(screen_area)):
-            if final_ds is not None:
-                if TC.tc2s(group[0].tc_in, bdn.fps) - last_pts_out > 1.1:
-                    logger.debug("Adding screen wipe since there was enough time between two epochs.")
-                    self._epochs[-1].ds.append(final_ds)
-                else:
-                    #did not use an optional display set, subtract 1 to PCS id to have continuity
-                    pcs_id -= 1
-
             subgroups = []
-            areas = []
+            relative_areas = []
             offset = len(group)
             max_area = 0
 
@@ -120,48 +94,199 @@ class BDNRender:
                 delay = TC.tc2s(group[len(group)-k].tc_in, bdn.fps) - TC.tc2s(event.tc_out, bdn.fps)
 
                 if delay > epochstart_dd_fnr(max_area):
-                    areas.append(max_area)
+                    relative_areas.append(max_area/screen_area)
                     max_area = 0
                     subgroups.append(group[len(group)-k:offset])
                     offset -= len(subgroups[-1])
             if len(group[:offset]) > 0:
-                areas.append(max_area)
+                relative_areas.append(max_area/screen_area)
                 subgroups.append(group[:offset])
             else:
                 assert offset == 0
             assert sum(map(len, subgroups)) == len(group)
-            assert len(areas) == len(subgroups)
+            assert len(relative_areas) == len(subgroups)
 
-            #Epoch generation (each subgroup will be its own epoch)
-            for ksub, subgroup in enumerate(reversed(subgroups), 1):
-                logger.info(f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s):")
+            for r_area, subgroup in zip(reversed(relative_areas), reversed(subgroups)):
+                yield (r_area, subgroup)
+    ####
 
-                n_groups = 2 if (len(subgroup) > 1 or areas[-ksub]/screen_area > 0.1) else 1
-                engine = GroupingEngine(Box.from_events(subgroup), container=container, n_groups=n_groups)
-                box = engine.pad_box()
-                windows = engine.group(subgroup)
+    def _convert_single(self, bdn: BDNXML) -> None:
+        EpochRenderer.set_mt(False)
+        renderer = EpochRenderer(bdn, self.kwargs, self.outfile)
+        renderer.setup_env()
 
-                if logger.level <= 10:
-                    for w_id, wd in enumerate(windows):
-                        logger.debug(f"Window {w_id}: X={wd.x+box.x}, Y={wd.y+box.y}, W={wd.dx}, H={wd.dy}")
+        pcs_id = 0
+        final_ds = None
+        logger.info("Finding epochs...")
+        for r_area, subgroup in __class__.epoch_events(bdn):
+            if final_ds is not None:
+                if TC.tc2pts(subgroup[0].tc_in, bdn.fps) - last_pts_out > 1.1:
+                    logger.debug("Adding screen wipe since there was enough time between two epochs.")
+                    self._epochs[-1].ds.append(final_ds)
                 else:
-                    logger.info(f" => Screen layout: {len(windows)} window(s), processing...")
+                    #did not use an optional display set, subtract 1 to PCS id to have continuity
+                    pcs_id -= 1
 
-                wobz = WindowsAnalyzer(windows, subgroup, box, bdn, pcs_id=pcs_id, **self.kwargs)
-                new_epoch, final_ds, pcs_id = wobz.analyze()
-                self._epochs.append(new_epoch)
-                logger.info(f" => optimised as {len(self._epochs[-1])} display sets.")
+            epoch, final_ds, pcs_id = renderer.convert(r_area, subgroup, pcs_id)
+            last_pts_out = TC.tc2pts(subgroup[-1].tc_out, bdn.fps)
+
+            self._epochs.append(epoch)
             gc.collect()
-            last_pts_out = TC.tc2s(subgroups[0][-1].tc_out, bdn.fps)
         ####
 
+        #Always add a screen wipe if the last epoch is terminated by a palette update. 
         if final_ds is not None:
             logger.debug("Adding final displayset to the last epoch.")
             self._epochs[-1].ds.append(final_ds)
 
+    def _setup_mt_env(self) -> None:
+        import signal, os
+
+        file_logging_level = self.kwargs.get('log_to_file', False)
+        if file_logging_level > 0:
+            logfile = str(self.outfile) + ".txt"
+            LogFacility.set_file_log(logger, logfile, file_logging_level)
+            LogFacility.set_logger_level(logger.name, file_logging_level)
+
+        def sighandler(workers, snum, frame) -> NoReturn:
+            for worker in workers:
+                if worker.is_alive():
+                    worker.kill()
+            import sys, time
+            time.sleep(0.005)
+            for worker in workers:
+                try:
+                    worker.join()
+                except (RuntimeError, AssertionError):
+                    pass
+            logger.critical("Terminated.")
+            sys.exit(1)
+
+        f_term = lambda signal_num, frame: sighandler(self._workers, signal_num, frame)
+        signal.signal(signal.SIGINT, f_term)
+        signal.signal(signal.SIGTERM, f_term)
+        if os.name == 'nt':
+            signal.signal(signal.SIGBREAK, f_term)
+        logger.debug("Registered signal handlers.")
+    ####
+
+    def _convert_mt(self, bdn: BDNXML) -> None:
+        import time
+        EpochRenderer.set_mt(True)
+        EpochRenderer.reset_module()
+
+        as_deamon = self.kwargs.get('daemonize', True)
+        renderers = [EpochRenderer(bdn, self.kwargs, self.outfile, as_deamon) for _ in range(self.kwargs.get('threads', 2))]
+
+        self._workers = renderers
+        self._setup_mt_env()
+        
+        logger.info("Starting workers...")
+        for renderer in renderers:
+            renderer.start()
+
+        while not all(map(lambda renderer: renderer.is_available(), renderers)):
+            time.sleep(0.2)
+
+        def add_data(ep_timeline: list[bytes], final_ds_l: list[bytes], epoch_data: tuple[bytes, bytes, int]) -> None:
+            new_epoch, final_ds, epoch_id = epoch_data
+            ep_timeline[epoch_id] = new_epoch
+            final_ds_l[epoch_id] = final_ds
+        ###
+
+        #Orchestrator starts here
+        busy_flags = {renderer.iid: False for renderer in renderers}
+        g_epochs = enumerate(chain(__class__.epoch_events(bdn), (None,)))
+        tc_inout, final_ds_l, ep_timeline = [], [], []
+
+        group_data = True
+        while group_data is not None:
+            time.sleep(0.05)
+            for free_renderer in filter(lambda renderer: renderer.is_available(), renderers):
+                if (epoch_data := free_renderer.get()) is not None:
+                    add_data(ep_timeline, final_ds_l, epoch_data)
+                    busy_flags[free_renderer.iid] = False
+                if busy_flags[free_renderer.iid] is False:
+                    group_id, group_data = next(g_epochs)
+                    if group_data is not None:
+                        ep_timeline.append(None)
+                        final_ds_l.append(None)
+                        tc_inout.append((group_data[1][0].tc_in, group_data[1][-1].tc_out))
+                        busy_flags[free_renderer.iid] = True
+                        free_renderer.send((*group_data, group_id))
+                    else:
+                        break
+            ####for
+        ####while
+
+        # Orchestrator is done distributing epochs, wait for everyone to finish
+        logger.info("Done distributing events, waiting for jobs to finish.")
+        time.sleep(0.2)
+        #Todo: terminate workers that are idling while the last ones spin.
+        while not all(map(lambda renderer: renderer.is_available(), renderers)):
+            time.sleep(0.2)
+        time.sleep(0.2)
+
+        # All renderer are idling, get remaining data and close them all.
+        for renderer in renderers:
+            if busy_flags[renderer.iid]:
+                trials = 6
+                while (trials := trials - 1) > 0:
+                    if (epoch_data := renderer.get()) is not None:
+                        add_data(ep_timeline, final_ds_l, epoch_data)
+                        break
+                    else:
+                        time.sleep(0.2)
+                if epoch_data is None:
+                    logger.critical("Failed to retrieve an epoch, SUPer will crash very soon!")
+            #Signal the worker to exit.
+            renderer.send(None)
+
+        logger.info("All jobs finished, gracefully stopping threads.")
+        time.sleep(0.01)
+        for renderer in renderers:
+            renderer.terminate()
+        time.sleep(0.05)
+        for renderer in renderers:
+            renderer.kill()
+        time.sleep(0.05)
+        for renderer in renderers:
+            renderer.join()
+        self._workers.clear()
+
+        logger.debug("Unserializing workers data.")
+        for eid, (final_ds, epoch) in enumerate(zip(final_ds_l, ep_timeline)):
+            ep_timeline[eid] = Epoch.from_bytes(epoch)
+            if final_ds is not None:
+                final_ds = DisplaySet.from_bytes(final_ds)
+                pts_out = TC.tc2pts(tc_inout[0][1], bdn.fps)
+                pts_in_next = np.inf if (eid+1 == len(ep_timeline)) else TC.tc2pts(tc_inout[eid+1][0], bdn.fps)
+                #Technically DTS(DSn+1[EPOCH_START]) >= PTS(DSn[-]). But a nice margin to next PTS is enough as this is optional.
+                #And since PTS(DSn) - DTS(DSn) cannot exceed 1 sec, this also suits any potential time stretching for decoding.
+                if pts_in_next - pts_out > 1.0:
+                    logger.debug(f"Appending plane wipe after palette update wipe at {tc_inout[eid][1]}.")
+                    ep_timeline[eid].ds.append(final_ds)
+        self._epochs = ep_timeline
+    ####
+
+    def optimise(self) -> None:
+        bdn = self.prepare()
+
+        if self.kwargs.get('threads', 1) == 1:
+            self._convert_single(bdn)
+            self.fix_composition_id(False)
+        else:
+            self._convert_mt(bdn)
+            logger.debug("Fixing PCS composition number.")
+            self.fix_composition_id(True)
+
+        self.test_output(bdn)
+    ####
+
+    def test_output(self, bdn: BDNXML) -> None:
         scaled_fps = self.kwargs.get('scale_fps', False) and self.scale_pcsfps()
 
-        # Final check
+        # Final checks
         logger.info("Checking stream consistency and compliancy...")
         final_fps = round(bdn.fps, 3) * int(1+scaled_fps)
         compliant, warnings = is_compliant(self._epochs, final_fps)
@@ -182,6 +307,17 @@ class BDNRender:
                 logger.warning("=> Excessive bandwidth detected, testing with mux required.")
         else:
             logger.error("=> Output PGS is not compliant. Expect display issues or decoder crash.")
+    ####
+
+    def fix_composition_id(self, replace: bool = False) -> None:
+        cnt = 0
+        for epoch in self._epochs:
+            for ds in epoch:
+                if replace:
+                    ds.pcs.composition_n = cnt & 0xFFFF
+                else:
+                    assert ds.pcs.composition_n == cnt & 0xFFFF
+                cnt += 1
     ####
 
     def scale_pcsfps(self) -> bool:
@@ -237,4 +373,112 @@ class BDNRender:
                     f.write(b''.join(map(bytes, self._epochs)))
         else:
             raise RuntimeError("No data to write.")
- ####
+####
+
+class EpochRenderer(mp.Process):
+    __threaded = True
+    _instance_cnt = 0
+    def __init__(self, bdn: BDNXML, kwargs: dict[str, Any], outfile: str, daemonize: bool = True) -> None:
+        self.bdn = bdn
+        self.outfile = outfile
+        self.kwargs = kwargs
+        self._iid = __class__._instance_cnt
+        __class__._instance_cnt += 1
+
+        if __class__.__threaded:
+            self._q_rx = mp.Queue()
+            self._q_tx = mp.Queue()
+            self._available = mp.Value('d', 0, lock=False)
+            super().__init__(daemon=daemonize)
+
+    @property
+    def iid(self) -> Optional[int]:
+        return self._iid
+
+    @classmethod
+    def set_mt(cls, enable: bool = False) -> None:
+        cls.__threaded = enable
+
+    @classmethod
+    def reset_module(cls) -> None:
+        cls._instance_cnt = 0
+
+    def setup_env(self) -> None:
+        if __class__.__threaded:
+            LogFacility.disable_tqdm()
+        file_logging_level = self.kwargs.get('log_to_file', False)
+        if file_logging_level > 0:
+            logfile = str(self.outfile) + (f"_{self.iid}" if __class__.__threaded else '') + ".txt"
+            LogFacility.set_file_log(logger, logfile, file_logging_level)
+            LogFacility.set_logger_level(logger.name, file_logging_level)
+
+        if (libs_params := self.kwargs.pop('ini_opts', {})):
+            logger.debug(f"INI parameters: {libs_params}")
+            if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) == Quantizer.Libs.PILIQ:
+                if (piq_params := libs_params.get('quant', None)) is not None:
+                    if not Quantizer.init_piliq(*piq_params):
+                        logger.info("Failed to initialise advanced image quantizer. Falling back to PIL+K-Means.")
+                        self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
+
+            if (sup_params := libs_params.get('super_cfg', None)) is not None:
+                SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
+                logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
+    ####
+
+    def convert(self, r_area: float, subgroup: list[BDNXMLEvent], pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
+        prefix = f"W{self.iid}: " if __class__.__threaded else ""
+        logger.info(prefix + f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s):")
+
+        n_groups = 2 if (len(subgroup) > 1 or r_area > 0.25) else 1
+        engine = GroupingEngine(Box.from_events(subgroup), container=Box.from_coords(0, 0, *self.bdn.format.value), n_groups=n_groups)
+        box = engine.pad_box()
+        windows = engine.group(subgroup)
+
+        if logger.level <= 10:
+            for w_id, wd in enumerate(windows):
+                logger.debug(f"Window {w_id}: X={wd.x+box.x}, Y={wd.y+box.y}, W={wd.dx}, H={wd.dy}")
+        else:
+            logger.info(prefix + f" => Screen layout: {len(windows)} window(s), processing...")
+
+        wds_analyzer = WindowsAnalyzer(windows, subgroup, box, self.bdn, pcs_id=pcs_id, **self.kwargs)
+        new_epoch, final_ds, pcs_id = wds_analyzer.analyze()
+
+        logger.info(prefix + f" => optimised as {len(new_epoch)} display sets.")
+        return new_epoch, final_ds, pcs_id
+
+    def is_available(self) -> bool:
+        assert __class__.__threaded
+        return bool(self._available.value)
+
+    def send(self, data: Any):
+        assert __class__.__threaded
+        self._q_rx.put(data)
+
+    def get(self, default: Optional[Any] = None) -> Any:
+        assert __class__.__threaded
+        try:
+            return self._q_tx.get_nowait()
+        except:
+            return None
+
+    def run(self):
+        assert not (self._q_rx is None or self._q_tx is None)
+        self.setup_env()
+        logger.info(f"Worker {self.iid} ready.")
+
+        self._available.value = 1
+        while True:
+            try:
+                in_data = self._q_rx.get(timeout=0.1)
+            except:
+                continue
+            else:
+                self._available.value = 0
+            if in_data is None:
+                break
+            rel_area, subgroup, epoch_id = in_data
+            logger.debug(f"WORKER {self.iid} on EPOCH {epoch_id}")
+            new_epoch, final_ds = self.convert(rel_area, subgroup)[:-1] #discard pcs_id
+            self._q_tx.put((bytes(new_epoch), None if final_ds is None else bytes(final_ds), epoch_id))
+            self._available.value = 1
+        ####

@@ -37,13 +37,14 @@ The config.ini file can be used to specify the relative or absolute path to a qu
  -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
  -q, --qmode         Set the image quantization mode. [1: PIL+K-Means on fades, 2: K-Means, 3: PILIQ, def: 1]
  -n, --allow-normal  Flag to allow normal case object redefinition, can reduce the number of dropped events on complex animations.
+ -t, --threads       Set the number of concurrent threads to use. Default is 1, maximum is 8.
  -b, --bt            Set the target BT matrix [601, 709, 2020, def: 709]
- -s, --subsampled    Flag to indicate BDNXML is subsampled (e.g 29.97 BDNXML for 59.94 output).
  -p, --palette       Flag to always write the full palette (enforced for PES).
  -y, --yes           Flag to overwrite output file if it already exists.
  -w, --withsup       Flag to write both SUP and PES+MUI files.
  -m, --max-kbps      Set the maximum bitrate to test the output against. Recommended range: [500-16000].
  -e, --extra-acq     Set the min count of palette update after which acquisitions should be inserted [0: off, default: 2]
+ -s, --subsampled    Flag to indicate BDNXML is subsampled (e.g 29.97 BDNXML for 59.94 output).
  -l, --log-to-file   Set (enable) logging to file and set logging level: [10: debug, 20: info, 25: iinf, 30: warnings]
  -v, --version       Print the version and exit.
  --ssim-tol          Adjust the SSIM tolerance threshold. This threshold is used for bitmaps classification in effects [-100; 100, def: 0] 

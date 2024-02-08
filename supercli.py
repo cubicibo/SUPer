@@ -63,18 +63,19 @@ if __name__ == '__main__':
 
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Set input BDNXML file.", default='', required=True)
-    parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=65, required=False)
+    parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=75, required=False)
     parser.add_argument('-a', '--acqrate', help="Set acquisition rate [int, 0-100] (def:  %(default)s)", type=int, default=100, required=False)
     parser.add_argument('-q', '--qmode', help="Set image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PNGQ/LIQ]  (def:  %(default)s)", type=int, default=1, required=False)
     parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object redefinition.", action='store_true', default=False, required=False)
     parser.add_argument('-b', '--bt', help="Set target BT matrix [601, 709, 2020]  (def:  %(default)s)", type=int, default=709, required=False)
     parser.add_argument('-s', '--subsampled', help="Flag to indicate BDNXML is subsampled", action='store_true', default=False, required=False)
     parser.add_argument('-p', '--palette', help="Flag to always write the full palette.", action='store_true', default=False, required=False)
-    parser.add_argument('-y', '--yes', help="Flag to overwrite output file", action='store_true', default=False, required=False)
+    parser.add_argument('-y', '--yes', help="Flag to overwrite an existing file with the same name.", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Flag to write both SUP and PES+MUI files.", action='store_true', default=False, required=False)
     parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: off] (def:  %(default)s)", type=int, default=2, required=False)
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=-1, required=False)
+    parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 8 supported. (def:  %(default)s)", type=int, default=1, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
     #parser.add_argument('--aheadoftime', help="Flag to allow ahead of time decoding. (NOT COMPLIANT)", action='store_true', default=False, required=False)
@@ -114,6 +115,9 @@ if __name__ == '__main__':
         logger.warning("Meaningless logging level, disabling file logging.")
         args.log_to_file = False
 
+    if args.threads < 1 or args.threads > 8:
+        exit_msg("Incorrect number of threads, aborting.")
+
     if args.aheadoftime and (ext == 'pes' or args.withsup):
         exit_msg("PES output without DTS or with ahead-of-time decoding is not allowed, aborting.")
     if (ext == 'pes' or args.withsup) and not args.palette:
@@ -134,19 +138,20 @@ if __name__ == '__main__':
           "                   @@YY@@   @@@\n")
     parameters = {}
 
-    if args.qmode == 3:
-        config_file = Path('config.ini')
-        exepath = None
-        if config_file.exists():
-            import configparser
-            def get_value_key(config, key: str):
-                try: return config[key]
-                except KeyError: return None
-            config = configparser.ConfigParser()
-            config.read(config_file)
-            if (super_cfg := get_value_key(config, 'SUPer')) is not None:
-                parameters['super_cfg'] = dict(super_cfg)
+    config_file = Path('config.ini')
+    if config_file.exists():
+        ini_opts = {}
+        import configparser
+        def get_value_key(config, key: str):
+            try: return config[key]
+            except KeyError: return None
+        config = configparser.ConfigParser()
+        config.read(config_file)
+        if (super_cfg := get_value_key(config, 'SUPer')) is not None:
+            ini_opts['super_cfg'] = dict(super_cfg)
 
+        if args.qmode == 3:
+            exepath = None
             if (piq_sect := get_value_key(config, 'PILIQ')) is not None:
                 exepath = get_value_key(piq_sect, 'quantizer')
                 if exepath is not None and not os.path.isabs(exepath):
@@ -155,10 +160,13 @@ if __name__ == '__main__':
                 piq_quality = get_value_key(piq_sect, 'quality')
                 if piq_quality is not None:
                     piq_quality = int(piq_quality)
-        if Quantizer.init_piliq(exepath, piq_quality):
-            logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
-        else:
-            exit_msg("Could not initialise advanced image quantizer, aborting.", True)
+                ini_opts['quant'] = (exepath, piq_quality)
+            if Quantizer.init_piliq(exepath, piq_quality):
+                logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
+            else:
+                exit_msg("Could not initialise advanced image quantizer, aborting.", True)
+        if len(ini_opts):
+            parameters['ini_opts'] = ini_opts
     ###
     parameters |= {
         'quality_factor': int(args.compression)/100,
@@ -174,6 +182,7 @@ if __name__ == '__main__':
         'log_to_file': args.log_to_file,
         'insert_acquisitions': args.extra_acq,
         'ssim_tol': args.ssim_tol/100,
+        'threads': args.threads,
     }
 
     bdnr = BDNRender(args.input, parameters, args.output)
