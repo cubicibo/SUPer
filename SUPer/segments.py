@@ -1025,6 +1025,15 @@ class DisplaySet:
         for seg in self.segments:
             seg.pts = new_pts
 
+    @classmethod
+    def from_bytes(cls, data) -> 'DisplaySet':
+        segs = []
+        while data:
+            pseg = PGSegment(data).specialise()
+            segs.append(pseg)
+            data = data[len(pseg):]
+        return cls(segs)
+
     def __bytes__(self) -> bytes:
         return bytes(b''.join([bytes(seg) for seg in self.segments]))
 
@@ -1106,6 +1115,22 @@ class Epoch:
 
     def append(self, ds: DisplaySet) -> None:
         self.ds.append(ds)
+
+    @classmethod
+    def from_bytes(cls, data: Union[bytes, bytearray]) -> 'Epoch':
+        segs = []
+        while data:
+            pseg = PGSegment(data).specialise()
+            segs.append(pseg)
+            data = data[len(pseg):]
+        lds = []
+        running_ds = []
+        for seg in segs:
+            running_ds.append(seg)
+            if isinstance(seg, ENDS):
+                lds.append(DisplaySet(running_ds))
+                running_ds = []
+        return cls(lds)
 
     def __lt__(self, other):
         self.t_out < other.t_in

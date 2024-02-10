@@ -29,6 +29,8 @@ from timecode import Timecode
 from dataclasses import dataclass
 from contextlib import nullcontext
 from functools import lru_cache
+from PIL import Image
+from SSIM_PIL import compare_ssim
 
 try:
     from tqdm import tqdm
@@ -318,10 +320,17 @@ class TimeConv:
     def add_frames(cls, tc: str, fps: float, nf: int) -> float:
         fps = round(fps, 2)
         return cls.tc2s(cls.add_framestc(tc, fps, nf), fps)
-    
+
     @classmethod
     def tc2pts(cls, tc: str, fps: float) -> float:
         return max(0, (cls.tc2s(tc, fps) - (1/3)/MPEGTS_FREQ)) * (1 if float(fps).is_integer() else 1.001)
+
+class SSIMPW:
+    use_gpu = True
+
+    @classmethod
+    def compare(cls, img1: Image.Image, img2: Image.Image) -> float:
+        return compare_ssim(img1, img2, GPU=cls.use_gpu)
 
 @lru_cache(maxsize=6)
 def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
@@ -373,6 +382,7 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
 class LogFacility:
     _logger = dict()
     _logpbar = dict()
+    _tqdm_off = False
 
     @classmethod
     def set_file_log(cls, logger: logging.Logger, fp: str, level: Optional[int] = None) -> None:
@@ -440,6 +450,10 @@ class LogFacility:
         logging.Logger.hdebug = high_debug
 
     @classmethod
+    def disable_tqdm(cls) -> None:
+        cls._tqdm_off = True
+
+    @classmethod
     def close_progress_bar(cls, logger: logging.Logger):
         if cls._logger.get(logger.name, None) != None and cls._logpbar.get(logger.name, None) is not None:
             cls._logpbar[logger.name].close()
@@ -451,7 +465,7 @@ class LogFacility:
             return None
         if cls._logpbar.get(logger.name, None) is not None:
             return cls._logpbar[logger.name]
-        if logger.getEffectiveLevel() >= logging.INFO:
+        if logger.getEffectiveLevel() >= logging.INFO and not cls._tqdm_off:
             pbar = tqdm(tot)
         else:
             pbar = nullcontext()

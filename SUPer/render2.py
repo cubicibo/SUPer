@@ -23,13 +23,12 @@ from itertools import chain, zip_longest
 from functools import reduce
 
 from PIL import Image
-from SSIM_PIL import compare_ssim
 from numpy import typing as npt
 import numpy as np
 import cv2
 
 #%%
-from .utils import LogFacility, BDVideo, TimeConv as TC, Box
+from .utils import LogFacility, BDVideo, TimeConv as TC, Box, SSIMPW
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise
@@ -49,15 +48,15 @@ class GroupingEngine:
 
     def coarse_grouping(self, group: list[Type[BaseEvent]], box: Box) -> tuple[npt.NDArray[np.uint8]]:
         (pxtl, pytl), (w, h) = box.posdim
-        gs_orig = np.zeros((1, h, w), dtype=np.uint8)
+        gs_orig = np.zeros((h, w), dtype=np.uint8)
 
         for k, event in enumerate(group):
             slice_x = slice(event.x-pxtl, event.x-pxtl+event.width)
             slice_y = slice(event.y-pytl, event.y-pytl+event.height)
             alpha = np.array(event.img.getchannel('A'), dtype=np.uint8)
 
-            alpha[alpha > 0] = 1
-            gs_orig[0, slice_y, slice_x] |= (alpha > 0)
+            #alpha[alpha > 0] = 1
+            gs_orig[slice_y, slice_x] |= (alpha > 0)
         return gs_orig
 
     @staticmethod
@@ -167,7 +166,7 @@ class GroupingEngine:
         return new_lwd
 
     def find_layout(self, gs_origs: npt.NDArray[np.uint8]) -> tuple[Box]:
-        xl, yl, xr, yr = Image.fromarray(gs_origs[0, :, :], 'L').getbbox(alpha_only=False)
+        xl, yl, xr, yr = Image.fromarray(gs_origs, 'L').getbbox()
         base_wds = self.directional_pad((Box(yl, yr-yl, xl, xr-xl),))
         best_wds = base_wds
         if self.n_groups == 1 or (gs_origs.shape[1] < 8 and gs_origs.shape[2] < 8):
@@ -175,14 +174,14 @@ class GroupingEngine:
             return best_wds
 
         for yj in range(yl+8, yr-8):
-            top_wd = Box.from_coords(*Image.fromarray(gs_origs[0, :yj, :]).getbbox(alpha_only=False))
-            xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[0, yj:, :]).getbbox(alpha_only=False)
+            top_wd = Box.from_coords(*Image.fromarray(gs_origs[:yj, :]).getbbox())
+            xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[yj:, :]).getbbox()
             bottom_wd = Box.from_coords(xt0, yt0+yj, xt1, yt1+yj)
             best_wds = __class__.check_best(self.directional_pad((top_wd, bottom_wd), True), best_wds)
 
         for xj in range(xl+8, xr-8):
-            left_wd = Box.from_coords(*Image.fromarray(gs_origs[0, :, :xj]).getbbox(alpha_only=False))
-            xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[0, :, xj:]).getbbox(alpha_only=False)
+            left_wd = Box.from_coords(*Image.fromarray(gs_origs[:, :xj]).getbbox())
+            xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[:, xj:]).getbbox()
             right_wd = Box.from_coords(xt0+xj, yt0, xt1+xj, yt1)
             best_wds = __class__.check_best(self.directional_pad((left_wd, right_wd), False), best_wds)
 
@@ -1112,7 +1111,7 @@ class WindowAnalyzer:
             mask = cv2.GaussianBlur(mask, (5,5), 0)
             mask[mask > 0] = 255
 
-            score = compare_ssim(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), Image.fromarray(a_current & mask[: , :, None]).convert('L'))
+            score = SSIMPW.compare(Image.fromarray(a_bitmap & mask[:, :, None]).convert('L'), Image.fromarray(a_current & mask[: , :, None]).convert('L'))
             cross_percentage = np.sum(mask > 0)/mask.size
 
             ksize = 3
@@ -1123,7 +1122,7 @@ class WindowAnalyzer:
             ksize = 5
             sobel_compo = cv2.Sobel(src=img_comp, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=ksize)
             sobel_curr = cv2.Sobel(src=img_curr, ddepth=cv2.CV_8U, dx=1, dy=1, ksize=ksize)
-            score_edge = compare_ssim(Image.fromarray(sobel_compo & mask), Image.fromarray(sobel_curr & mask))
+            score_edge = SSIMPW.compare(Image.fromarray(sobel_compo & mask), Image.fromarray(sobel_curr & mask))
 
             score = min(score, score_edge)
         else:

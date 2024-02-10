@@ -19,7 +19,6 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import os
-import re
 import xml.etree.ElementTree as ET
 import numpy as np
 
@@ -39,7 +38,7 @@ except ModuleNotFoundError:
     _has_numba = False
 
 from .segments import PGSegment, PCS, DisplaySet, Epoch
-from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Pos, Dim, Box)
+from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Box)
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -262,7 +261,7 @@ class BaseEvent:
     @property
     def tc_out(self) -> str:
         return self._outtc
-    
+
     @tc_out.setter
     def tc_out(self, tc_out: str) -> None:
         self._outtc = tc_out
@@ -336,7 +335,7 @@ class BDNXMLEvent(BaseEvent):
         assert self._img.height == self._height
 ####BDNXMLEvent
 
-if _has_numba:    
+if _has_numba:
     @njit(fastmath=True)
     def _compare_images(images: list[npt.NDArray[np.uint8]]) -> list[np.bool_]:
         diff_list = [np.bool_(1) for x in range(len(images)-1)]
@@ -364,7 +363,7 @@ def remove_dupes(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
         flags = _compare_images(imgs)
     else:
         flags = _compare_images([event.img for event in events])
-        
+
     output_events = [events[0]]
     for event, flag in zip(events[1:], flags):
         if flag or output_events[-1].tc_out != event.tc_in:
