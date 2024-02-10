@@ -36,17 +36,21 @@ SUPER_STRING = "Make it SUPer!"
 
 def from_bdnxml(queue: ...) -> None:
     from SUPer import BDNRender, LogFacility
+    import time
+    from datetime import timedelta
+
     #### This function runs in MP context, not main.
     logger = LogFacility.get_logger('SUPer')
     kwargs = queue.get()
     bdnf = queue.get()
     supo = queue.get()
 
+    ts_start = time.monotonic()
     logger.info(f"Loading input BDN: {bdnf}")
     sup_obj = BDNRender(bdnf, kwargs, supo)
     sup_obj.optimise()
     sup_obj.write_output()
-    logger.info("Finished, exiting...")
+    logger.info(f"Finished in {timedelta(seconds=round(time.monotonic() - ts_start, 3))}, exiting...")
 ####
 
 if __name__ == '__main__':

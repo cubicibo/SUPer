@@ -275,7 +275,7 @@ class WindowsAnalyzer:
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
         positions = cboxes[0].copy()
-        last_acq = 0
+        k = last_acq = 0
         for k, (acq, forced, margin, node) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:], nodes[1:]), 1):
             if not node.nc_refresh:
                 for wid in range(len(self.windows)):

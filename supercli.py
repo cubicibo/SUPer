@@ -30,6 +30,8 @@ import sys
 from pathlib import Path
 from argparse import ArgumentParser
 from typing import NoReturn, Union
+import time
+from datetime import timedelta
 
 #%% Main code
 if __name__ == '__main__':
@@ -184,9 +186,9 @@ if __name__ == '__main__':
         'ssim_tol': args.ssim_tol/100,
         'threads': args.threads,
     }
-
+    ts_start = time.monotonic()
     bdnr = BDNRender(args.input, parameters, args.output)
     bdnr.optimise()
     bdnr.write_output()
-    exit_msg("Success.", False)
+    exit_msg(f"Success. Duration: {timedelta(seconds=round(time.monotonic() - ts_start, 3))}", False)
 ####

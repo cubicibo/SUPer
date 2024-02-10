@@ -223,7 +223,7 @@ class BDNRender:
         logger.info("Done distributing events, waiting for jobs to finish.")
         time.sleep(0.2)
         #Todo: terminate workers that are idling while the last ones spin.
-        while not all(map(lambda renderer: renderer.is_available(), renderers)):
+        while not all(map(lambda renderer: renderer.is_available() or not renderer.is_alive(), renderers)):
             time.sleep(0.2)
         time.sleep(0.2)
 
@@ -271,8 +271,13 @@ class BDNRender:
 
     def optimise(self) -> None:
         bdn = self.prepare()
+        if (n_threads := self.kwargs.get('threads', 1)) > 1:
+            n_threads = min(n_threads, len(list(__class__.epoch_events(bdn))))
+            if n_threads != self.kwargs.get('threads'):
+                logger.info(f"Using only {n_threads} threads to match the number of epochs.")
+            self.kwargs['threads'] = n_threads
 
-        if self.kwargs.get('threads', 1) == 1:
+        if n_threads == 1:
             self._convert_single(bdn)
             self.fix_composition_id(False)
         else:
