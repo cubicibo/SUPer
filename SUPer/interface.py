@@ -350,8 +350,8 @@ class BDNRender:
             if self.kwargs.get('output_all_formats', False):
                 is_pes = is_sup = True
             if len(filepath := fp.split('.')) > 1:
-                fp_pes = ''.join(filepath[:-1]) + '.pes'
-                fp_sup = ''.join(filepath[:-1]) + '.sup'
+                fp_pes = '.'.join(filepath[:-1]) + '.pes'
+                fp_sup = '.'.join(filepath[:-1]) + '.sup'
             else:
                 fp_pes = filepath[0] + '.pes'
                 fp_sup = filepath[0] + '.sup'
