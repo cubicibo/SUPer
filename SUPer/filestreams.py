@@ -439,19 +439,23 @@ class SeqIO(ABC):
         if type(nf) is tuple or type(nf) is BDVideo.VideoFormat:
             self._format = BDVideo.VideoFormat(nf)
         elif type(nf) is str:
-            # reversed to alleviate the potential illegal entries key overwrites
-            dc = {vf.value[1]: vf.value[0] for vf in reversed(BDVideo.VideoFormat)}
+            # First try to parse WIDTHxHEIGHT format string
             try:
-                # Quick and dirty 16/9 look-up with appended scan format
-                if nf[-1].lower() not in ['i', 'p']:
-                    raise TypeError
-                nf_rs = int(nf[:-1])
-            except TypeError:
+                self._format = BDVideo.VideoFormat(tuple(map(int, nf.split("x", 1))))
+            except ValueError:
+                # reversed to alleviate the potential illegal entries key overwrites
+                dc = {vf.value[1]: vf.value[0] for vf in reversed(BDVideo.VideoFormat)}
                 try:
-                    nf_rs = int(nf)
-                except ValueError:
-                    raise TypeError("Don't know how to parse format string.")
-            self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
+                    # Quick and dirty 16/9 look-up with appended scan format
+                    if nf[-1].lower() not in ['i', 'p']:
+                        raise TypeError
+                    nf_rs = int(nf[:-1])
+                except TypeError:
+                    try:
+                        nf_rs = int(nf)
+                    except ValueError:
+                        raise TypeError("Don't know how to parse format string.")
+                self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
 
     @property
     def fps(self) -> float:
