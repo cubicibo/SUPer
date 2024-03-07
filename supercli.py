@@ -70,7 +70,6 @@ if __name__ == '__main__':
     parser.add_argument('-q', '--qmode', help="Set image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PNGQ/LIQ]  (def:  %(default)s)", type=int, default=1, required=False)
     parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object redefinition.", action='store_true', default=False, required=False)
     parser.add_argument('-b', '--bt', help="Set target BT matrix [601, 709, 2020]  (def:  %(default)s)", type=int, default=709, required=False)
-    parser.add_argument('-s', '--subsampled', help="Flag to indicate BDNXML is subsampled", action='store_true', default=False, required=False)
     parser.add_argument('-p', '--palette', help="Flag to always write the full palette.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Flag to overwrite an existing file with the same name.", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Flag to write both SUP and PES+MUI files.", action='store_true', default=False, required=False)
@@ -133,7 +132,7 @@ if __name__ == '__main__':
           "    &@@@@  @@@@  @@@@  @@@@                   NLScavenger\n"\
           "@@@P B@@@  @@@@  @@@&  &@@@                   Prince 7\n"\
           "@@@&!&@@@  B@@@G#&YY5  YJ5#                   Emulgator\n"\
-          " G&&@&&B    5#&@B  @@PB@&    @@&@\n"\
+          " G&&@&&B    5#&@B  @@PB@&    @@&@             Alllen\n"\
           "                  @@@ ,@@@  @@@&G5\n"\
           "                  @@@BP€    @@@\n"\
           " (c) cubicibo     @@@       @@@\n"\
@@ -173,7 +172,6 @@ if __name__ == '__main__':
     parameters |= {
         'quality_factor': int(args.compression)/100,
         'refresh_rate': int(args.acqrate)/100,
-        'scale_fps': args.subsampled,
         'quantize_lib': args.qmode,
         'bt_colorspace': f"bt{args.bt}",
         'no_overlap': not args.aheadoftime,

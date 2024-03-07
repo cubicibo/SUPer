@@ -67,7 +67,6 @@ def get_kwargs() -> dict[str, int]:
     return {
         'quality_factor': int(compression_txt.value)/100,
         'refresh_rate': int(refresh_txt.value)/100,
-        'scale_fps': bool(scale_fps.value),
         'quantize_lib': Quantizer.get_option_id(quantcombo.value),
         'bt_colorspace': colorspace.value,
         'no_overlap': True, #scenarist_checks.value,
@@ -315,6 +314,10 @@ if __name__ == '__main__':
     Text(bquant, "Quantization: ", grid=[0,0], align='left', size=11)
     quantcombo = Combo(bquant, options=list(map(lambda x: ' '.join(x), opts_quant.values())), grid=[1,0], align='left')
 
+    bthread = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1])
+    Text(bthread, "Threads: ", grid=[0,0], align='left', size=11)
+    threadscombo = Combo(bthread, options=list(range(1, 9)), grid=[1,0], align='left')
+
     normal_case_ok = CheckBox(app, text="Allow normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
     Hovertip(normal_case_ok.tk, "This option may reduce the number of dropped events on complicated animations.\n"\
                                 "When there are two objects on screen and one must be updated, it may be possible\n"\
@@ -331,12 +334,6 @@ if __name__ == '__main__':
 
     all_formats = CheckBox(app, text="Generate both SUP and PES+MUI files.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
 
-    scale_fps = CheckBox(app, text="Subsampled BDNXML (e.g. 29.97 BDNXML for 59.94 SUP, ignored if 24p)", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(scale_fps.tk, "A BDNXML generated at half the framerate will limit the pressure on the PG decoder\n"\
-                           "while ensuring synchronicity with the video footage. This is recommended for 50i/60i content.\n"\
-                           "E.g if the target is 59.94, the BDNXML would be generated at 29.97. SUPer would then write the PGS\n"\
-                           "as if it was 59.94. This flag is meaningless with 23.976 or 24p.")
-
     biacqs = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
     biacqs_val = TextBox(biacqs, width=2, height=1, grid=[0,0], text="2")
     Text(biacqs, "Insert acquisition after N palette updates. [0: off, 3: recommended].", grid=[1,0], align='left')
@@ -349,10 +346,6 @@ if __name__ == '__main__':
     Text(bssimtol, "SSIM tolerance offset [-100;100]", grid=[1,0], align='left')
     Hovertip(bssimtol.tk, "Higher sensitivity increases the needed structural similarity to classify two images as similar.\n"\
                         "similar images can be encoded as palette updates, while dissimilar ones require an acquisition.")
-
-    bthread = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1], align='left')
-    threadscombo = Combo(bthread, options=list(range(1, 9)), grid=[0,0], align='left')
-    Text(bthread, "Number of threads", grid=[1,0], align='left', size=11)
 
     bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
     max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="16000", align='left')

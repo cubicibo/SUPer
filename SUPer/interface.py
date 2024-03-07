@@ -63,10 +63,6 @@ class BDNRender:
             import sys
             sys.exit(1)
 
-        if self.kwargs.get('scale_fps', False) and bdn.fps > 30:
-            logger.error("Incorrect XML FPS for subsampling operation: flag ignored.")
-            self.kwargs['scale_fps'] = False
-
         self.kwargs['adjust_ntsc'] = isinstance(bdn.fps, float) and not bdn.dropframe
         if self.kwargs['adjust_ntsc']:
             logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
@@ -289,11 +285,9 @@ class BDNRender:
     ####
 
     def test_output(self, bdn: BDNXML) -> None:
-        scaled_fps = self.kwargs.get('scale_fps', False) and self.scale_pcsfps()
-
         # Final checks
         logger.info("Checking stream consistency and compliancy...")
-        final_fps = round(bdn.fps, 3) * int(1+scaled_fps)
+        final_fps = round(bdn.fps, 3)
         compliant, warnings = is_compliant(self._epochs, final_fps)
 
         if compliant:
@@ -323,20 +317,6 @@ class BDNRender:
                 else:
                     assert ds.pcs.composition_n == cnt & 0xFFFF
                 cnt += 1
-    ####
-
-    def scale_pcsfps(self) -> bool:
-        pcs_fps = self._epochs[0].ds[0].pcs.fps.value
-        real_fps = BDVideo.LUT_FPS_PCSFPS[pcs_fps]
-        if (new_pcs_fps := BDVideo.LUT_PCS_FPS.get(2*real_fps, None)):
-            for epoch in self._epochs:
-                for ds in epoch.ds:
-                    ds.pcs.fps = new_pcs_fps
-            logger.info(f"Overwrote origin FPS {real_fps:.3f} to {2*real_fps:.3f} in stream.")
-            return True
-        else:
-            logger.error(f"Expected input FPS of 25 or 29.97. Got '{BDVideo.LUT_FPS_PCSFPS[pcs_fps]}': no action taken.")
-        return False
     ####
 
     def write_output(self) -> None:

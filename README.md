@@ -44,7 +44,6 @@ The config.ini file can be used to specify the relative or absolute path to a qu
  -w, --withsup       Flag to write both SUP and PES+MUI files.
  -m, --max-kbps      Set the maximum bitrate to test the output against. Recommended range: [500-16000].
  -e, --extra-acq     Set the min count of palette update after which acquisitions should be inserted [0: off, default: 2]
- -s, --subsampled    Flag to indicate BDNXML is subsampled (e.g 29.97 BDNXML for 59.94 output).
  -l, --log-to-file   Set (enable) logging to file and set logging level: [10: debug, 20: info, 25: iinf, 30: warnings]
  -v, --version       Print the version and exit.
  --ssim-tol          Adjust the SSIM tolerance threshold. This threshold is used for bitmaps classification in effects [-100; 100, def: 0] 
@@ -62,7 +61,6 @@ Here are some additional informations on selected options, especially those that
 - Acquisition rate: Additional compression parameter, should be left at default (100 - no compression).
 - Quantization: image quantizer to use. PIL+K-Means is low quality but fast. K-Means and pngquant/libimagequant are high quality but slower.
 - Allow normal case object redefinition: whenever possible, update a single object out of two. The requirements are complex so this option may have no effect for some files. Also, the palette is split 50/50 in the vicinity of these events in the stream.
-- Subsampled BDN XML: Generate a 50/59.94 fps SUP for a 25/29.97 fps BDN input.
 - Insert acquisition: Palette effects are encoded in a single bitmap and the output of the last palette update may remain on screen for sufficiently long. Artifacts may come to the viewer attention if they remain visible long enough on the screen. Refreshing the screen will hide potential side effects and improve the perceived quality. You may lower the value if you feel like the filesize increases too significantly, or disable this behavior altogether.
 
 ### TL;DR Options
