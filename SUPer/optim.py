@@ -125,14 +125,22 @@ class Preprocess:
             return np.reshape(label.flatten(), ocv_img.shape[:-1]).astype(np.uint8), center[occs]
 
         elif Quantizer.Libs.PILIQ == quant_method:
-            if kwargs.get('single_bitmap', False):
+            single_bitmap = kwargs.get('single_bitmap', False)
+            if single_bitmap:
                 nc = colors
             else:
                 nc = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
 
             lib_piq = Quantizer.get_piliq()
             assert lib_piq is not None
+
+            if not single_bitmap:
+                original_quality = lib_piq.get_quality()
+                lib_piq.set_quality(max(1, int(np.ceil(original_quality*0.975))))
+
             pal, qtz_img = lib_piq.quantize(img, min(colors, int(np.ceil(20+nc*235/255))))
+            if not single_bitmap:
+                lib_piq.set_quality(original_quality)
             return qtz_img, pal
 
         else:
