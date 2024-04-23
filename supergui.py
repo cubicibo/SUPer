@@ -78,7 +78,7 @@ def get_kwargs() -> dict[str, int]:
         'max_kbps': int(max_kbps.value),
         'log_to_file': opts_log[logcombo.value],
         'ssim_tol': int(ssim_tolb.value)/100,
-        'threads': int(threadscombo.value),
+        'threads': int(threadscombo.value) if threadscombo.value.lower() != 'auto' else 'auto',
         'daemonize': False,
     }
 
@@ -96,7 +96,7 @@ def wrapper_mp() -> None:
         invalid |= not (0 <= kwargs['insert_acquisitions'])
         invalid |= not (0 <= kwargs['quality_factor'] <= 1)
         invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
-        invalid |= not (1 <= kwargs['threads'] <= 8)
+        invalid |= not (kwargs['threads'] == 'auto' or 1 <= kwargs['threads'] <= 8)
         invalid |= not (0 <= kwargs['max_kbps'] <= 48000)
         if invalid:
             logger.error("Invalid parameter found, aborting.")
@@ -316,7 +316,7 @@ if __name__ == '__main__':
 
     bthread = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1])
     Text(bthread, "Threads: ", grid=[0,0], align='left', size=11)
-    threadscombo = Combo(bthread, options=list(range(1, 9)), grid=[1,0], align='left')
+    threadscombo = Combo(bthread, options=['auto'] + list(range(1, 9)), grid=[1,0], align='left', selected='auto')
 
     normal_case_ok = CheckBox(app, text="Allow normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
     Hovertip(normal_case_ok.tk, "This option may reduce the number of dropped events on complicated animations.\n"\

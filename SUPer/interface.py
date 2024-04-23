@@ -172,7 +172,8 @@ class BDNRender:
         EpochRenderer.reset_module()
 
         as_deamon = self.kwargs.get('daemonize', True)
-        renderers = [EpochRenderer(bdn, self.kwargs, self.outfile, as_deamon) for _ in range(self.kwargs.get('threads', 2))]
+        n_threads = self.kwargs.get('threads', 2)
+        renderers = [EpochRenderer(bdn, self.kwargs, self.outfile, as_deamon) for _ in range(n_threads)]
 
         self._workers = renderers
         self._setup_mt_env()
@@ -267,11 +268,22 @@ class BDNRender:
 
     def optimise(self) -> None:
         bdn = self.prepare()
-        if (n_threads := self.kwargs.get('threads', 1)) > 1:
+        n_threads = n_threads_requested = self.kwargs.get('threads', 1)
+        if (n_threads_auto := isinstance(n_threads, str)):
+            try:
+                import psutil
+            except (ModuleNotFoundError, NameError):
+                n_threads = max(1, mp.cpu_count() >> 1) #commonplace: logical = 2*physical cores
+            else:
+                n_threads = psutil.cpu_count(logical=False)
+            n_threads_requested = n_threads
+        if n_threads > 1:
             n_threads = min(n_threads, len(list(__class__.epoch_events(bdn))))
-            if n_threads != self.kwargs.get('threads'):
+            if n_threads != n_threads_requested:
                 logger.info(f"Using only {n_threads} threads to match the number of epochs.")
-            self.kwargs['threads'] = n_threads
+        if n_threads_auto:
+            logger.info(f"Using {n_threads} thread(s).")
+        self.kwargs['threads'] = n_threads
 
         if n_threads == 1:
             self._convert_single(bdn)

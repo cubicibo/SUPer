@@ -76,7 +76,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: off] (def:  %(default)s)", type=int, default=2, required=False)
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=-1, required=False)
-    parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 8 supported. (def:  %(default)s)", type=int, default=1, required=False)
+    parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 8 supported. [0: auto] (def:  %(default)s)", type=int, default=0, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
     #parser.add_argument('--aheadoftime', help="Flag to allow ahead of time decoding. (NOT COMPLIANT)", action='store_true', default=False, required=False)
@@ -116,7 +116,7 @@ if __name__ == '__main__':
         logger.warning("Meaningless logging level, disabling file logging.")
         args.log_to_file = False
 
-    if args.threads < 1 or args.threads > 8:
+    if args.threads < 0 or args.threads > 8:
         exit_msg("Incorrect number of threads, aborting.")
 
     if args.aheadoftime and (ext == 'pes' or args.withsup):
@@ -182,7 +182,7 @@ if __name__ == '__main__':
         'log_to_file': args.log_to_file,
         'insert_acquisitions': args.extra_acq,
         'ssim_tol': args.ssim_tol/100,
-        'threads': args.threads,
+        'threads': 'auto' if args.threads == 0 else args.threads,
     }
     ts_start = time.monotonic()
     bdnr = BDNRender(args.input, parameters, args.output)
