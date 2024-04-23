@@ -34,6 +34,11 @@ from .utils import TimeConv as TC, LogFacility, get_matrix, SSIMPW
 
 logger = LogFacility.get_logger('SUPer')
 
+class EncodingPreset(IntEnum):
+    SLOW = -1
+    NORMAL = 0
+    FAST = 1
+
 class FadeCurve(IntEnum):
     LINEAR = auto()
     QUADRATIC = auto()
@@ -212,23 +217,14 @@ class Preprocess:
 
 class Optimise:
     @staticmethod
-    def solve_sequence_fast(events, colors: int = 256, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+    def solve_sequence_fast(sequences: npt.NDArray[np.uint8], colors: int = 256) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
         """
         This functions finds a solution for the provided subtitle animation.
-        :param events: PIL images, stacked one after the other
-        :param colors: max number of sequences usable
-        :param kmwans: enable kmeans quantization
+        :param sequences: RGBA images stacked one after the other, colors on the last dimension.
+        :param colors: max number of sequences (= palette entries) usable
 
         :return: bitmap, sequence of palette update to obtain the said input animation.
         """
-
-        sequences = []
-        single_bitmap = len(events) == 1
-        for event in events:
-            img, clut = Preprocess.quantize(event, colors, single_bitmap=single_bitmap, **kwargs)
-            sequences.append(clut[img])
-
-        sequences = np.stack(sequences, axis=2).astype(np.uint8)
         #catalog the sequences
         seq_occ: dict[int, tuple[int, npt.NDArray[np.uint8]]] = {}
         for i in range(sequences.shape[0]):
@@ -275,7 +271,58 @@ class Optimise:
 
 
     @classmethod
-    def solve_and_remap(cls, events: list[Image.Image], colors: int = 255, first_index: int = 1, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+    def quantize_sequence(cls, events: list[Image.Image], colors: int = 255, first_index: int = 1, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+        preset = EncodingPreset(kwargs.get('preset', EncodingPreset.NORMAL))
+        assert colors <= 256
+
+        if 1 == len(events) or preset >= EncodingPreset.NORMAL:
+            trials = [colors]
+            fast_exit = True
+        else:
+            min_colors = min(22, colors - 1)
+
+            #fixme: the min(11, ) suits well the "either 128 or 255" situation, not any other case.
+            trials = sorted(list(set(np.linspace(min_colors, colors, min(11, int((colors-min_colors)/12)), dtype=np.uint16))), reverse=True)
+            fast_exit = False
+
+        best = None
+        best_score = 0#np.inf
+        best_color_cnt = None
+
+        while trials:
+            current_max_colors = trials.pop(0)
+            sequences = []
+            for event in events:
+                img, clut = Preprocess.quantize(event, current_max_colors, single_bitmap=True, **kwargs)
+                sequences.append(clut[img])
+            sequences = np.stack(sequences, axis=2).astype(np.uint8)
+
+            #Always use the maximum number of sequence allocated to this bitmap (= colors)
+            bitmap, palettes, cluts_stack = cls.solve_and_remap(sequences, colors, first_index, **kwargs)
+
+            if fast_exit:
+                break
+
+            if len(cluts_stack) < 256:
+                cluts_stack = np.vstack((
+                    np.zeros((first_index, *cluts_stack.shape[1:]), np.uint8),
+                    cluts_stack,
+                    np.zeros((256-first_index-cluts_stack.shape[0], *cluts_stack.shape[1:]), np.uint8)
+                ))
+            rendered = cluts_stack[bitmap]
+            loss = sum([SSIMPW.compare(Image.fromarray(rendered[:, :, k, :]), Image.fromarray(sequences[:, :, k, :])) for k in range(len(events))])
+            #loss = np.linalg.norm(cluts_stack[bitmap].astype(np.int32) - sequences.astype(np.int32))#, axis=-1)
+            if loss > best_score:
+                best_score = loss
+                best_color_cnt = current_max_colors
+                best = bitmap, palettes
+        if best is not None:
+            logger.debug(f"Quantized with {best_color_cnt}/{colors} for {len(events)} events.")
+            return best
+        return bitmap, palettes
+
+    @classmethod
+    def solve_and_remap(cls, events: list[Image.Image], colors: int = 255, first_index: int = 1, **kwargs) -> tuple[npt.NDArray[np.uint8], list[Palette], npt.NDArray[np.uint8]]:
         """
         This function solves the input event sequence and perform ID remapping
         to optimise the distribution of colour indices wrt PGS constraints
@@ -287,7 +334,7 @@ class Optimise:
         assert 0 < first_index + colors <= 256, "8-bit ID out of range."
         assert first_index > 0, "Usage of palette ID zero."
 
-        bitmap, cluts = cls.solve_sequence_fast(events, colors, **kwargs)
+        bitmap, cluts = cls.solve_sequence_fast(events, colors)
         transparent_id = np.nonzero(np.all(cluts[:,:,-1] == 0, axis=1))[0]
 
         kwargs_diff = {'matrix': kwargs.get('bt_colorspace', 'bt709')}
@@ -297,7 +344,7 @@ class Optimise:
             #All colours used incl reserved transparent index. This is incorrect, requantize with colors-1
             if np.max(bitmap) == colors - 1:
                 logger.ldebug("Too many colours used, lowering count.")
-                bitmap, cluts = cls.solve_sequence_fast(events, colors-1, **kwargs)
+                bitmap, cluts = cls.solve_sequence_fast(events, colors-1)
             palettes = cls.diff_cluts(cluts, **kwargs_diff)
             bitmap += first_index
         else:
@@ -319,7 +366,7 @@ class Optimise:
         for pal in palettes:
             pal.offset(first_index)
         assert len(palettes[0]) < colors
-        return bitmap, palettes
+        return bitmap, palettes, cluts
     ####
 
     @staticmethod

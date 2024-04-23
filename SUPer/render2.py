@@ -615,7 +615,7 @@ class WindowsAnalyzer:
                 imgs_chain.append(a_img)
             ####
             #We have the "packed" object, the entire palette is usable
-            bitmap, palettes = Optimise.solve_and_remap(imgs_chain, 255, 1, **self.kwargs)
+            bitmap, palettes = Optimise.quantize_sequence(imgs_chain, 255, 1, **self.kwargs)
             pals.append(palettes)
 
             coords = np.zeros((2,), np.int32)
@@ -700,7 +700,8 @@ class WindowsAnalyzer:
                 # cobjs_cropped.append(CObject.from_scratch(oid, wid, self.windows[wid].x+self.box.x+cparams['hc_pos'], self.windows[wid].y+self.box.y+cparams['vc_pos'], False,
                 #                                           cropped=True, **cparams))
                 clut_offset = 1 + (n_colors - 1 + bias)*(wid == 1 and has_two_objs)
-                wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors + (-1 if wid == 1 else 1)*bias, clut_offset, **self.kwargs)
+                wd_bitmap, wd_pal = Optimise.quantize_sequence(imgs_chain, n_colors + (-1 if wid == 1 else 1)*bias, clut_offset, **self.kwargs)
+
                 wd_bitmap = wd_bitmap[oyl:oyl+node.slots[wid][0], oxl:oxl+node.slots[wid][1]]
                 pals.append(wd_pal)
                 ods_data = PGraphics.encode_rle(wd_bitmap)
