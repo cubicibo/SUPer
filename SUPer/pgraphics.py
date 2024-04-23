@@ -301,8 +301,7 @@ class PGObject:
     f:  int
 
     def __post_init__(self) -> None:
-        #gfx may have empty bitmaps trailing
-        assert len(self.mask) <= len(self.gfx)
+        assert len(self.mask) == len(self.gfx)
         assert self.box.area > 0
 
     @property
