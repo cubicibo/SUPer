@@ -219,12 +219,22 @@ class BDNRender:
         # Orchestrator is done distributing epochs, wait for everyone to finish
         logger.info("Done distributing events, waiting for jobs to finish.")
         time.sleep(0.2)
-        #Todo: terminate workers that are idling while the last ones spin.
+
         while not all(map(lambda renderer: renderer.is_available() or not renderer.is_alive(), renderers)):
+            for free_renderer in filter(lambda renderer: renderer.is_available() and renderer.is_alive(), renderers):
+                if (epoch_data := free_renderer.get()) is not None:
+                    add_data(ep_timeline, final_ds_l, epoch_data)
+                    busy_flags[free_renderer.iid] = False
+                if not busy_flags[free_renderer.iid]:
+                    free_renderer.send(None)
+                    time.sleep(0.2)
+                    logger.info(f"Worker {free_renderer.iid} closed.")
+                    free_renderer.terminate()
+                    free_renderer.join(0.2)
             time.sleep(0.2)
         time.sleep(0.2)
 
-        # All renderer are idling, get remaining data and close them all.
+        # Last workers are waiting for the orchestrator to pick up the data and close them.
         for renderer in renderers:
             if busy_flags[renderer.iid]:
                 trials = 6
@@ -236,19 +246,24 @@ class BDNRender:
                         time.sleep(0.2)
                 if epoch_data is None:
                     logger.critical("Failed to retrieve an epoch, SUPer will crash very soon!")
-            #Signal the worker to exit.
-            renderer.send(None)
+            #Signal the worker to close.
+            if renderer.is_alive():
+                renderer.send(None)
+                logger.info(f"Worker {renderer.iid} closed.")
 
-        logger.info("All jobs finished, gracefully stopping threads.")
+        logger.info("All jobs finished, cleaning-up processes.")
         time.sleep(0.01)
         for renderer in renderers:
-            renderer.terminate()
+            try: renderer.terminate()
+            except: ...
         time.sleep(0.05)
         for renderer in renderers:
-            renderer.kill()
+            try: renderer.kill()
+            except: ...
         time.sleep(0.05)
         for renderer in renderers:
-            renderer.join()
+            try: renderer.join()
+            except: ...
         self._workers.clear()
 
         logger.debug("Unserializing workers data.")
