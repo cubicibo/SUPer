@@ -220,36 +220,22 @@ class BDNRender:
         logger.info("Done distributing events, waiting for jobs to finish.")
         time.sleep(0.2)
 
-        while not all(map(lambda renderer: renderer.is_available() or not renderer.is_alive(), renderers)):
-            for free_renderer in filter(lambda renderer: renderer.is_available() and renderer.is_alive(), renderers):
-                if (epoch_data := free_renderer.get()) is not None:
+        while any(busy_flags.values()):
+            for free_renderer in filter(lambda renderer: busy_flags[renderer.iid] or renderer.is_available(), renderers):
+                if free_renderer.is_available() and (epoch_data := free_renderer.get()) is not None:
                     add_data(ep_timeline, final_ds_l, epoch_data)
                     busy_flags[free_renderer.iid] = False
-                if not busy_flags[free_renderer.iid]:
-                    free_renderer.send(None)
-                    time.sleep(0.2)
+                if not busy_flags[free_renderer.iid] or not free_renderer.is_alive():
+                    if free_renderer.is_alive():
+                        free_renderer.send(None)
+                        time.sleep(0.1)
+                    else:
+                        busy_flags[free_renderer.iid] = False
                     logger.info(f"Worker {free_renderer.iid} closed.")
                     free_renderer.terminate()
                     free_renderer.join(0.2)
+                    free_renderer.close()
             time.sleep(0.2)
-        time.sleep(0.2)
-
-        # Last workers are waiting for the orchestrator to pick up the data and close them.
-        for renderer in renderers:
-            if busy_flags[renderer.iid]:
-                trials = 6
-                while (trials := trials - 1) > 0:
-                    if (epoch_data := renderer.get()) is not None:
-                        add_data(ep_timeline, final_ds_l, epoch_data)
-                        break
-                    else:
-                        time.sleep(0.2)
-                if epoch_data is None:
-                    logger.critical("Failed to retrieve an epoch, SUPer will crash very soon!")
-            #Signal the worker to close.
-            if renderer.is_alive():
-                renderer.send(None)
-                logger.info(f"Worker {renderer.iid} closed.")
 
         logger.info("All jobs finished, cleaning-up processes.")
         time.sleep(0.01)
