@@ -139,8 +139,7 @@ if __name__ == '__main__':
           "                   @@YY@@   @@@\n")
     parameters = {}
 
-    config_file = Path('config.ini')
-    if config_file.exists():
+    if (config_file := Path('config.ini')).exists():
         ini_opts = {}
         import configparser
         def get_value_key(config, key: str):
@@ -153,19 +152,12 @@ if __name__ == '__main__':
 
         if args.qmode == 3:
             exepath = None
+            piq_values = {}
             if (piq_sect := get_value_key(config, 'PILIQ')) is not None:
-                exepath = get_value_key(piq_sect, 'quantizer')
-                if exepath is not None and not os.path.isabs(exepath):
-                    CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
-                    exepath = str(CWD.joinpath(exepath))
-                piq_quality = get_value_key(piq_sect, 'quality')
-                if piq_quality is not None:
-                    piq_quality = int(piq_quality)
-                ini_opts['quant'] = (exepath, piq_quality)
-            if Quantizer.init_piliq(exepath, piq_quality):
-                logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
-            else:
-                exit_msg("Could not initialise advanced image quantizer, aborting.", True)
+                if (exepath := piq_sect.pop('quantizer', None)) is not None and not os.path.isabs(exepath):
+                    exepath = str(Path(os.path.abspath(Path(sys.argv[0]).parent)).joinpath(exepath))
+                piq_values |= {k: int(v) for k, v in piq_sect.items()}
+            ini_opts['quant'] = {'qpath': exepath} | piq_values
         if len(ini_opts):
             parameters['ini_opts'] = ini_opts
     ###

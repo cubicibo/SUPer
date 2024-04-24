@@ -424,17 +424,18 @@ class EpochRenderer(mp.Process):
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
 
-        if (libs_params := self.kwargs.pop('ini_opts', {})):
-            logger.debug(f"INI parameters: {libs_params}")
-            if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) == Quantizer.Libs.PILIQ:
-                if (piq_params := libs_params.get('quant', None)) is not None:
-                    if not Quantizer.init_piliq(*piq_params):
-                        logger.info("Failed to initialise advanced image quantizer. Falling back to PIL+K-Means.")
-                        self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
+        libs_params = self.kwargs.pop('ini_opts', {})
+        logger.debug(f"INI parameters: {libs_params}")
+        if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) == Quantizer.Libs.PILIQ:
+            if not Quantizer.init_piliq(**libs_params.get('quant', {})):
+                logger.info("Failed to initialise advanced image quantizer. Falling back to PIL+K-Means.")
+                self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
+            else:
+                logger.debug(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
 
-            if (sup_params := libs_params.get('super_cfg', None)) is not None:
-                SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
-                logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
+        if (sup_params := libs_params.get('super_cfg', None)) is not None:
+            SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
+            logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
     ####
 
     def convert(self, r_area: float, subgroup: list[BDNXMLEvent], pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
@@ -494,3 +495,5 @@ class EpochRenderer(mp.Process):
             self._q_tx.put((bytes(new_epoch), None if final_ds is None else bytes(final_ds), epoch_id))
             self._available.value = 1
         ####
+    ####
+####

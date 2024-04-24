@@ -72,25 +72,31 @@ class Quantizer:
         #cls._opts[cls.Libs.PILLOW]    = ('PIL', '(average, fast)')
 
     @classmethod
-    def init_piliq(cls, fpath: Optional[Union[str, 'Path']] = None, quality: Optional[int] = None) -> bool:
+    def init_piliq(cls,
+        qpath: Optional[Union[str, 'Path']] = None,
+        quality: Optional[int] = 100,
+        speed: Optional[int] = 4,
+        dither: Optional[int] = 100,
+    ) -> bool:
+        piliq = None
         try:
-            piliq = PILIQ(fpath)
+            piliq = PILIQ(qpath)
         except (FileNotFoundError, AssertionError):
-            piliq = None
-            logger.debug(f"Failed to load advanced quantizer at '{fpath}'.")
-        if piliq is None and fpath is not None:
+            logger.debug(f"Failed to load advanced quantizer at '{qpath}'.")
+        if piliq is None and qpath is not None:
             #Perform auto-look up, likely to fail but can still find libs
             try:
                 piliq = PILIQ()
             except:
-                piliq = None
                 logger.debug("Failed to load advanced quantizer with auto look-up.")
         cls._piliq = piliq
-        if cls._piliq is not None and cls._piliq.is_ready():
+        if piliq is not None and piliq.is_ready():
             #Configure PILIQ
-            cls._piliq.return_pil = False
-            if quality is not None:
-                cls._piliq.set_quality(quality)
+            logger.debug(f"Configuring {piliq.lib_name} with: speed={speed}:quality={quality}:dither={dither/100.0}")
+            piliq.return_pil = False
+            piliq.set_speed(speed)
+            piliq.set_quality(quality)
+            piliq.set_dithering_level(dither/100.0)
             return True
         return False
 
@@ -136,10 +142,13 @@ class Preprocess:
 
             if not single_bitmap:
                 original_quality = lib_piq.get_quality()
+                original_dither = lib_piq.get_dithering_level()
                 lib_piq.set_quality(max(1, int(np.ceil(original_quality*0.975))))
+                lib_piq.set_dithering_level(original_dither*0.9)
 
             pal, qtz_img = lib_piq.quantize(img, min(colors, int(np.ceil(20+nc*235/255))))
             if not single_bitmap:
+                lib_piq.set_dithering_level(original_dither)
                 lib_piq.set_quality(original_quality)
             return qtz_img, pal
 
