@@ -558,10 +558,9 @@ class WindowsAnalyzer:
 
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
         # and then pass that to the optimiser. Colors are efficiently distributed on the objects.
-        # In the future, this will be the default behaviour unless there's a NORMAL CASE to update
-        # to redefine an object in the middle.
         if has_two_objs and normal_case_refresh is False:
             compositions = [pgo for _, pgo in pgobs_items if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]))]
+            #todo: stack using slot dimensions?
             offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x.box, compositions)))
             imgs_chain = []
 
@@ -615,6 +614,7 @@ class WindowsAnalyzer:
             n_colors = 255
             bias = 0
             if has_two_objs:
+                assert normal_case_refresh
                 assert not any(filter(lambda x: x[0] < 0 or x[0] > self.box.dy or x[1] < 0 or x[1] > self.box.dx, node.slots)) and sum(map(lambda x: x is not None, node.slots)) == 2
                 f_slot_area = lambda slot: int(slot[0])*int(slot[1])
                 #ratio_area = (self.windows[0].area - self.windows[1].area)/sum(map(lambda wd: wd.area, self.windows))
