@@ -22,7 +22,6 @@ import logging
 import numpy as np
 
 from typing import Optional, Callable, TypeVar, Union
-from collections import namedtuple
 from enum import Enum, IntEnum
 from numpy import (typing as npt)
 from timecode import Timecode
@@ -40,9 +39,60 @@ except ModuleNotFoundError:
 MPEGTS_FREQ = np.uint64(90e3)
 
 _BaseEvent = TypeVar('BaseEvent')
-Shape = namedtuple("Shape", "width height")
-Dim = namedtuple("Dim", "w h")
-Pos = namedtuple("Pos", "x y")
+
+@dataclass
+class Pos:
+    x: int
+    y: int
+
+    def __iter__(self):
+        return iter((self.x, self.y))
+
+@dataclass
+class Shape:
+    w: int
+    h: int
+
+    def __post_init__(self) -> None:
+        assert self.w >= 0 and self.h >= 0
+
+    @classmethod
+    def from_box(cls, box: 'Box') -> 'Shape':
+        return cls(box.dx, box.dy)
+
+    @classmethod
+    def union(cls, *shapes) -> 'Shape':
+        w = max(map(lambda dim: dim.w, shapes))
+        h = max(map(lambda dim: dim.h, shapes))
+        return cls(w, h)
+
+    @property
+    def area(self) -> int:
+        return self.w*self.h
+
+    @property
+    def width(self) -> int:
+        return self.w
+
+    @property
+    def height(self) -> int:
+        return self.h
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.w == other.w and self.h == other.h
+        elif isinstance(other, (tuple, list)) and len(other) == 2:
+            return self.w == other[0] and self.h == other[1]
+        return NotImplemented
+
+    def __ne__(self, other):
+        test_eq = self.__eq__(other)
+        if isinstance(test_eq, bool):
+            return not test_eq
+        return NotImplemented
+
+    def __iter__(self):
+        return iter((self.w, self.h))
 
 #%%
 @dataclass(frozen=True)
@@ -69,16 +119,19 @@ class Box:
         return (self.x, self.y, self.x2, self.y2)
 
     @property
-    def dims(self) -> Dim:
-        return Dim(self.dx, self.dy)
+    def dims(self) -> Shape:
+        return Shape(self.dx, self.dy)
 
     @property
     def shape(self) -> tuple[int, int]:
+        """
+        Return the numpy-like shape (col, row)
+        """
         return (self.dy, self.dx)
 
     @property
-    def posdim(self) -> tuple[Pos, Dim]:
-        return Pos(self.x, self.y), Dim(self.dx, self.dy)
+    def pos_shape(self) -> tuple[Pos, Shape]:
+        return Pos(self.x, self.y), Shape(self.dx, self.dy)
 
     @property
     def slice(self) -> tuple[slice]:
@@ -265,6 +318,21 @@ class BDVideo:
         else:
             self.format = __class__.VideoFormat((width, height))
 
+    @classmethod
+    def check_format_fps(cls, _format: 'BDVideo.VideoFormat', fps: float) -> bool:
+        valid = True
+        fps = cls.FPS(fps)
+        expected = [_fps for _fps in cls.FPS]
+        if _format == cls.VideoFormat.HD720:
+            expected = [cls.FPS.NTSCi, cls.FPS.PALi, cls.FPS.FILM, cls.FPS.FILM_NTSC]
+            valid &= fps in expected
+        elif _format == cls.VideoFormat.SD576_43:
+            expected = [cls.FPS.PALp]
+            valid &= fps in expected
+        elif _format == cls.VideoFormat.SD480_43:
+            expected = [cls.FPS.NTSCp]
+            valid &= fps in expected
+        return valid, list(map(lambda x: x.value, expected))
 
 class TimeConv:
     FORCE_NDF = True

@@ -424,6 +424,13 @@ class SeqIO(ABC):
                     except ValueError:
                         raise TypeError("Don't know how to parse format string.")
                 self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
+        valid_fmt, valid_fps = BDVideo.check_format_fps(self._format, self.fps)
+        if not valid_fmt:
+            logger.warning(f"Non standard VideoFormat-FPS ({self._format.value[1]}@{self._fps.value}) combination for a primary video stream!!")
+            logger.warning(f"Expected one of these framerate: {valid_fps}")
+        elif self._format == BDVideo.VideoFormat.HD1080:
+            if self.fps > BDVideo.FPS.NTSCp.value:
+                logger.info(f"UHD BD VideoFormat-FPS detected: 1080p@{self._fps.value} only exists with a HEVC video stream.")
 
     @property
     def fps(self) -> float:

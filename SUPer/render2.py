@@ -47,7 +47,7 @@ class GroupingEngine:
         self.n_groups = n_groups
 
     def coarse_grouping(self, group: list[Type[BaseEvent]], box: Box) -> tuple[npt.NDArray[np.uint8]]:
-        (pxtl, pytl), (w, h) = box.posdim
+        (pxtl, pytl), (w, h) = box.pos_shape
         gs_orig = np.zeros((h, w), dtype=np.uint8)
 
         for k, event in enumerate(group):
