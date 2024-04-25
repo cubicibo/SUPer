@@ -611,7 +611,19 @@ class WindowsAnalyzer:
             ####for wid, pgo
         else:
             # If in the chain there's a NORMAL CASE redefinition, we
-            # must work with separate palette for each object (127 colors per window)
+            # must work with separate palette for each object (127+1 colors per window by default)
+            n_colors = 255
+            bias = 0
+            if has_two_objs:
+                assert not any(filter(lambda x: x[0] < 0 or x[0] > self.box.dy or x[1] < 0 or x[1] > self.box.dx, node.slots)) and sum(map(lambda x: x is not None, node.slots)) == 2
+                f_slot_area = lambda slot: int(slot[0])*int(slot[1])
+                #ratio_area = (self.windows[0].area - self.windows[1].area)/sum(map(lambda wd: wd.area, self.windows))
+                ratio_area = (f_slot_area(node.slots[0]) - f_slot_area(node.slots[1]))/sum(map(f_slot_area, node.slots))
+                bias = 0 if abs(ratio_area) < 0.5 else int(67*(ratio_area-np.sign(ratio_area)*0.25))
+                n_colors = 128
+                assert n_colors > abs(bias) + 10
+                logger.debug(f"NC colour distribution: r={ratio_area:.03f}, b={bias} -> w0={n_colors+bias}, w1={n_colors-bias}")
+
             id_skipped = None
             for wid, pgo in pgobs_items:
                 if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
@@ -647,10 +659,8 @@ class WindowsAnalyzer:
                 # cparams = box_to_crop(pgo.box)
                 # cobjs_cropped.append(CObject.from_scratch(oid, wid, self.windows[wid].x+self.box.x+cparams['hc_pos'], self.windows[wid].y+self.box.y+cparams['vc_pos'], False,
                 #                                           cropped=True, **cparams))
-
-                n_colors = 128 if has_two_objs else 255
-                clut_offset = 1 + (127*(wid == 1 and has_two_objs))
-                wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors, clut_offset, **self.kwargs)
+                clut_offset = 1 + (n_colors - 1 + bias)*(wid == 1 and has_two_objs)
+                wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors + (-1 if wid == 1 else 1)*bias, clut_offset, **self.kwargs)
                 wd_bitmap = wd_bitmap[oyl:oyl+node.slots[wid][0], oxl:oxl+node.slots[wid][1]]
                 pals.append(wd_pal)
                 ods_data = PGraphics.encode_rle(wd_bitmap)
