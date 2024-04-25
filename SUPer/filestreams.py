@@ -30,13 +30,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Generator
 from typing import Union, Optional, Type, Any, Callable
 
-try:
-    from numba import njit, prange
-    from numba.typed import List
-    _has_numba = True
-except ModuleNotFoundError:
-    _has_numba = False
-
 from .segments import PGSegment, PCS, DisplaySet, Epoch
 from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Box)
 
@@ -335,41 +328,16 @@ class BDNXMLEvent(BaseEvent):
         assert self._img.height == self._height
 ####BDNXMLEvent
 
-if _has_numba:
-    @njit(fastmath=True)
-    def _compare_images(images: list[npt.NDArray[np.uint8]]) -> list[np.bool_]:
-        diff_list = [np.bool_(1) for x in range(len(images)-1)]
-        for i in prange(0, len(images)-1):
-            if images[i+1].shape != images[i].shape:
-                diff_list[i] = np.bool_(True)
-            else:
-                diff_list[i] = np.bool_(np.any(images[i+1] - images[i]))
-        return diff_list
-else:
-    def _compare_images(images: list[npt.NDArray[np.uint8]]) -> list[np.bool_]:
-        diff_list = []
-        for i in range(0, len(images)-1):
-            if images[i+1].shape != images[i].shape:
-                diff_list.append(True)
-            else:
-                diff_list.append(np.any(images[i+1] - images[i]))
-        return diff_list
-
 def remove_dupes(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
-    if _has_numba:
-        imgs = List()
-        for event in events:
-            imgs.append(np.asarray(event.img))
-        flags = _compare_images(imgs)
-    else:
-        flags = _compare_images([event.img for event in events])
-
     output_events = [events[0]]
-    for event, flag in zip(events[1:], flags):
-        if flag or output_events[-1].tc_out != event.tc_in:
-            output_events.append(event)
+    for i in range(0, len(events)-1):
+        is_diff = events[i+1].img.size != events[i].img.size
+        is_diff = is_diff or np.any(np.asarray(events[i+1].img) - np.asarray(events[i].img))
+
+        if is_diff or output_events[-1].tc_out != events[i+1].tc_in:
+            output_events.append(events[i+1])
         else:
-            output_events[-1].set_tc_out(event.tc_out)
+            output_events[-1].set_tc_out(events[i+1].tc_out)
     assert output_events[0].tc_in == events[0].tc_in and output_events[-1].tc_out == events[-1].tc_out
     logger.debug(f"Removed {len(events) - len(output_events)} duplicate event(s).")
     return output_events

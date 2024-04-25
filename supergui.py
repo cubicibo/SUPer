@@ -63,7 +63,7 @@ from SUPer.optim import Quantizer
 from SUPer.__metadata__ import __version__ as SUPVERS, __author__
 
 #### Functions, main at the end of the file
-def get_kwargs() -> dict[str, int]:
+def get_kwargs() -> dict[str, Any]:
     return {
         'quality_factor': int(compression_txt.value)/100,
         'refresh_rate': int(refresh_txt.value)/100,
