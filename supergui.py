@@ -33,6 +33,7 @@ filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
 
 ### CONSTS
 SUPER_STRING = "Make it SUPer!"
+MAX_NUM_THREADS = 8
 
 def from_bdnxml(queue: ...) -> None:
     from SUPer import BDNRender, LogFacility
@@ -103,7 +104,6 @@ def wrapper_mp() -> None:
             return
 
     do_super.enabled = False
-    do_abort.enabled = True #and (1 == kwargs['threads'])
     logger.info("Starting optimiser process.")
     do_super.text = "Generating (check console)..."
     while True:
@@ -117,6 +117,7 @@ def wrapper_mp() -> None:
     do_super.queue.put(bdnname.value)
     do_super.queue.put(supout.value)
     do_super.ts = time.time()
+    do_super.num_threads = kwargs['threads'] if isinstance(kwargs['threads'], int) else round(MAX_NUM_THREADS*3/4)
 
 def _tryfunc(f: Callable[[Any], None]) -> None:
     try: f()
@@ -177,6 +178,9 @@ def monitor_mp() -> None:
             do_super.ts = time.time()
             do_reset = True
             do_abort.enabled = False
+        #Prevent instantaneous abort: assume each thread takes one second to start
+        elif do_abort.enabled is False and time.time()-do_super.ts > do_super.num_threads:
+            do_abort.enabled = True
     if do_reset and bdnname.value and supout.value:
         do_super.enabled = True
         do_super.text = SUPER_STRING
@@ -317,7 +321,7 @@ if __name__ == '__main__':
 
     bthread = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1])
     Text(bthread, "Threads: ", grid=[0,0], align='left', size=11)
-    threadscombo = Combo(bthread, options=['auto'] + list(range(1, 9)), grid=[1,0], align='left', selected='auto')
+    threadscombo = Combo(bthread, options=['auto'] + list(range(1, MAX_NUM_THREADS+1)), grid=[1,0], align='left', selected='auto')
 
     normal_case_ok = CheckBox(app, text="Allow normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
     Hovertip(normal_case_ok.tk, "This option may reduce the number of dropped events on complicated animations.\n"\
