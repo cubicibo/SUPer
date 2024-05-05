@@ -257,6 +257,20 @@ class BDVideo:
         def __float__(self) -> float:
             return float(self.value)
 
+        def __gt__(self, other):
+            if isinstance(other, __class__):
+                return self.value > other.value
+            elif isinstance(other, (int, float)):
+                return self.value > other
+            return NotImplemented
+
+        def __lt__(self, other):
+            if isinstance(other, __class__):
+                return self.value < other.value
+            elif isinstance(other, (int, float)):
+                return self.value < other
+            return NotImplemented
+
         def __eq__(self, other) -> bool:
             if isinstance(other, (float, int)):
                 try:

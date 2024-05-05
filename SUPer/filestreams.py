@@ -429,7 +429,7 @@ class SeqIO(ABC):
             logger.warning(f"Non standard VideoFormat-FPS ({self._format.value[1]}@{self._fps.value}) combination for a primary video stream!!")
             logger.warning(f"Expected one of these framerate: {valid_fps}")
         elif self._format == BDVideo.VideoFormat.HD1080:
-            if self.fps > BDVideo.FPS.NTSCp.value:
+            if self._fps > BDVideo.FPS.NTSCp:
                 logger.info(f"UHD BD VideoFormat-FPS detected: 1080p@{self._fps.value} only exists with a HEVC video stream.")
 
     @property
