@@ -75,18 +75,18 @@ class BDNRender:
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
         #Round up to tick
-        epochstart_dd_fnr = lambda o_area: np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ)/PGDecoder.FREQ
+        epochstart_dd_fnr = lambda o_area: (np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ))/PGDecoder.FREQ
 
-        for group in bdn.groups(epochstart_dd_fn(screen_area)):
+        for group in bdn.groups(epochstart_dd_fnr(screen_area)):
             subgroups = []
             relative_areas = []
             offset = len(group)
             max_area = 0
 
             for k, event in enumerate(reversed(group)):
+                max_area = max(np.multiply(*event.shape), max_area)
                 if k == 0:
                     continue
-                max_area = max(np.multiply(*event.shape), max_area)
                 delay = TC.tc2s(group[len(group)-k].tc_in, bdn.fps) - TC.tc2s(event.tc_out, bdn.fps)
 
                 if delay > epochstart_dd_fnr(max_area):

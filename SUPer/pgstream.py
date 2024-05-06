@@ -340,10 +340,16 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     for k, epoch in enumerate(epochs):
         pts_delta = int(sum(map(lambda w: np.ceil(w.width*w.height*PGDecoder.FREQ/PGDecoder.RC), epoch[0].wds)))
         wipe_duration = int(np.ceil(epoch[0].pcs.width*epoch[0].pcs.height*PGDecoder.FREQ/PGDecoder.RC))
-        is_compliant &= (epoch[0].pcs.tpts - epoch[0].pcs.tdts) & PTS_MASK > wipe_duration
+        pts_dts_delta_epoch_start = (epoch[0].pcs.tpts - epoch[0].pcs.tdts) & PTS_MASK > wipe_duration
         #Must not decode epoch start before previous epoch is fully finished (at PTS)
         diff = (epoch[0].pcs.tdts - prev_pts) & PTS_MASK
-        is_compliant &= diff > 0 and diff < PTS_DIFF_BOUND
+        pts_last_dts_epoch_start = diff > 0 and diff < PTS_DIFF_BOUND
+        if not pts_last_dts_epoch_start:
+            logger.error(f"DTS of {to_tc(epoch[0].pcs.pts)} predates PTS of previous epoch by {epoch[0].pcs.tdts - prev_pts} ticks.")
+        if not pts_dts_delta_epoch_start:
+            logger.error(f"Incorrect PTS-DTS values for epoch start DS @ {to_tc(epoch[0].pcs.pts)}.")
+
+        is_compliant &= pts_last_dts_epoch_start & pts_dts_delta_epoch_start
 
         for l, ds in enumerate(epoch):
             ds_comply = (ds.pcs.tdts - prev_dts) & PTS_MASK <= PTS_DIFF_BOUND
