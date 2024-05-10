@@ -32,7 +32,7 @@ from .utils import LogFacility, BDVideo, TimeConv as TC, Box, SSIMPW
 from .filestreams import BDNXMLEvent, BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise
-from .pgraphics import PGraphics, PGDecoder, PGObject, PGObjectBuffer, PaletteManager
+from .pgraphics import PGraphics, PGDecoder, PGObjectBuffer, PaletteManager, ProspectiveObject
 from .palette import Palette, PaletteEntry
 
 logger = LogFacility.get_logger('SUPer')
@@ -559,19 +559,21 @@ class WindowsAnalyzer:
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
         # and then pass that to the optimiser. Colors are efficiently distributed on the objects.
         if has_two_objs and normal_case_refresh is False:
-            compositions = [pgo for _, pgo in pgobs_items if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]))]
+            compositions = [(wid, pgo) for wid, pgo in pgobs_items if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]))]
+            assert len(compositions) == 2
             #todo: stack using slot dimensions?
-            offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x.box, compositions)))
+            offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x[1].box, compositions)))
             imgs_chain = []
 
             for j in range(i, k):
                 coords = np.zeros((2,), np.int32)
                 a_img = Image.new('RGBA', dims, (0, 0, 0, 0))
                 multiplier = int(flags[j] >= 0)
-                for pgo in compositions:
+                for wid, pgo in compositions:
                     if len(pgo.mask[j-pgo.f:j+1-pgo.f]) == 1:
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
-                        a_img.paste(Image.fromarray(multiplier*pgo.gfx[j-pgo.f, :, : ,:], 'RGBA').crop(pgo.box.coords), paste_box)
+                        a_img.paste(Image.fromarray(multiplier*self.mask_event(self.windows[wid], self.events[j]), 'RGBA').crop(pgo.box.coords), paste_box)
+#                        a_img.paste(Image.fromarray(multiplier*pgo.gfx[j-pgo.f, :, : ,:], 'RGBA').crop(pgo.box.coords), paste_box)
                     coords += offset
                 imgs_chain.append(a_img)
             ####
@@ -652,8 +654,10 @@ class WindowsAnalyzer:
                 double_buffering[wid] = abs(len(self.windows) - double_buffering[wid])
                 oid = wid + double_buffering[wid]
 
-                assert len(flags[i:k]) >= len(pgo.gfx[i-pgo.f:k-pgo.f])
-                imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
+                assert len(flags[i:k]) >= len(pgo.mask[i-pgo.f:k-pgo.f])
+                assert len(pgo.mask[i-pgo.f:k-pgo.f]) == len(self.events[i:k])
+                #imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
+                imgs_chain = [Image.fromarray(self.mask_event(self.windows[wid], ev)*int(flag >= 0)) for ev, flag in zip(self.events[i:k], flags[i:k])]
 
                 cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                 # cparams = box_to_crop(pgo.box)
@@ -717,7 +721,7 @@ class WindowsAnalyzer:
         palette_manager = PaletteManager()
 
         ## Internal helper function
-        def get_obj(frame, pgobjs: dict[int, list[PGObject]]) -> dict[int, Optional[PGObject]]:
+        def get_obj(frame, pgobjs: dict[int, list[ProspectiveObject]]) -> dict[int, Optional[ProspectiveObject]]:
             objs = {k: None for k, objs in enumerate(pgobjs)}
 
             for wid, pgobj in enumerate(pgobjs):
@@ -1142,12 +1146,11 @@ class WindowAnalyzer:
 
     def analyze(self):
         bitmaps = []
-        alpha_compo = Image.fromarray(np.zeros((self.window.dy, self.window.dx, 4), np.uint8))
+        alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
-        mask = []
-        event_cnt = 0
+        unseen = event_cnt = 0
         pgo_yield = None
-        unseen = 0
+        containers, mask = [], []
 
         while True:
             rgba = yield pgo_yield
@@ -1159,8 +1162,9 @@ class WindowAnalyzer:
                     if unseen > 0:
                         mask = mask[:-unseen]
                         bitmaps = bitmaps[:-unseen]
-                    pgo_yield = PGObject(np.stack(bitmaps).astype(np.uint8), Box.from_coords(*bbox), mask, f_start)
-                    bitmaps, mask = [], []
+                        containers = containers[:-unseen]
+                    pgo_yield = ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
+                    bitmaps, mask, containers = [], [], []
                     continue
                 else:
                     break
@@ -1171,6 +1175,12 @@ class WindowAnalyzer:
                     f_start = event_cnt
 
                 rgba_i = Image.fromarray(rgba)
+
+                #If no content, bounding box keeps the last value
+                #TODO: maybe do NOT use the bbox when the object is masked!!
+                if has_content:
+                    event_container = Box.from_coords(*rgba_i.getbbox())
+
                 score, cross_percentage = self.compare(alpha_compo, rgba_i)
                 thr_score = min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333*(1.0-self.ssim_offset))
                 logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}")
@@ -1178,15 +1188,19 @@ class WindowAnalyzer:
                     bitmaps.append(rgba)
                     alpha_compo.alpha_composite(rgba_i)
                     mask.append(has_content)
+                    containers.append(event_container)
                 else:
+                    assert has_content, "New PGObject must have visible content!!"
                     bbox = alpha_compo.getbbox()
                     if unseen > 0:
                         mask = mask[:-unseen]
                         bitmaps = bitmaps[:-unseen]
-                    pgo_yield = PGObject(np.stack(bitmaps).astype(np.uint8), Box.from_coords(*bbox), mask, f_start)
+                        containers = containers[:-unseen]
+                    pgo_yield = ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
 
                     #new bitmap
                     mask = [has_content]
+                    containers = [event_container]
                     bitmaps = [rgba]
                     f_start = event_cnt
                     alpha_compo = Image.fromarray(rgba.copy())
@@ -1201,7 +1215,7 @@ class DSNode:
     bdn_fps = None
 
     def __init__(self,
-            objects: list[Optional[PGObject]],
+            objects: list[Optional[ProspectiveObject]],
             windows: list[Box],
             tc_pts: str,
             nc_refresh: bool = False,
