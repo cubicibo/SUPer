@@ -483,7 +483,7 @@ class WindowsAnalyzer:
                 ###event shift
             else:
                 #Filter the events
-                is_normal_case = normal_case_possible and dts_start_nc > dts_start and j_nc > j
+                is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
                 j_iter = j_nc if is_normal_case else j
                 dts_iter = dts_start_nc if is_normal_case else dts_start
 
@@ -511,7 +511,6 @@ class WindowsAnalyzer:
                     logger.info(f"Object refreshed with a Normal Case at {nodes[k].tc_pts} (tight timing).")
             k -= 1
         ####while k > 0
-
         #Allocate palettes as a test, this is essentially doing a final sanity check
         #on the selected display sets. The palette values generated here are not used.
         prev_idx = -1
@@ -573,7 +572,6 @@ class WindowsAnalyzer:
                     if len(pgo.mask[j-pgo.f:j+1-pgo.f]) == 1:
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
                         a_img.paste(Image.fromarray(multiplier*self.mask_event(self.windows[wid], self.events[j]), 'RGBA').crop(pgo.box.coords), paste_box)
-#                        a_img.paste(Image.fromarray(multiplier*pgo.gfx[j-pgo.f, :, : ,:], 'RGBA').crop(pgo.box.coords), paste_box)
                     coords += offset
                 imgs_chain.append(a_img)
             ####
@@ -655,7 +653,6 @@ class WindowsAnalyzer:
                 oid = wid + double_buffering[wid]
 
                 assert len(flags[i:k]) >= len(pgo.mask[i-pgo.f:k-pgo.f])
-                assert len(pgo.mask[i-pgo.f:k-pgo.f]) == len(self.events[i:k])
                 #imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
                 imgs_chain = [Image.fromarray(self.mask_event(self.windows[wid], ev)*int(flag >= 0)) for ev, flag in zip(self.events[i:k], flags[i:k])]
 
