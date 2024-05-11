@@ -292,46 +292,50 @@ class PGDecoder:
         return np.ceil(cls.FREQ*area/cls.RC)/cls.FREQ
 ####
 
-#%%
 @dataclass
-class PGObject:
-    gfx: npt.NDArray[np.uint8]
+class ProspectiveObject:
+    f:     int
+    mask:  list[bool]
+    boxes: list[Box]
     box: Box
-    mask: list[bool]
-    f:  int
 
     def __post_init__(self) -> None:
-        assert len(self.mask) == len(self.gfx)
+        assert len(self.mask) == len(self.boxes)
         assert self.box.area > 0
+        assert self.f >= 0
 
-    @property
-    def area(self) -> int:
-        return self.gfx.shape[1]*self.gfx.shape[2]
-
-    def get_bbox_at(self, frame: int) -> Optional[Box]:
-        if self.is_active(frame):
-            return self.__class__._bbox(self.gfx[frame-self.f])
-        return None
-
-    def is_active(self, frame) -> bool:
+    def is_active(self, frame: int) -> bool:
+        """
+        Returns if the object may be buffered at the given epoch event id.
+        """
         return frame in range(self.f, self.f+len(self.mask))
 
     def is_visible(self, frame: int) -> bool:
+        """
+        Returns if the object is visible at the given epoch event id.
+        """
         if self.is_active(frame):
             return self.mask[frame-self.f]
         return False
 
+    def get_bbox_at(self, frame: int) -> Optional[Box]:
+        """
+        Return the bounding box at the given event frame.
+        """
+        if self.is_active(frame):
+            return self.boxes[frame-self.f]
+        return None
+
+
     def pad_left(self, padding: int) -> None:
+        """
+        Activate an object earlier by padding it to the left on the event grid.
+        All structures must be extended accordingly.
+        """
         assert padding > 0
         self.f -= padding
         self.mask[0:0] = [False] * padding
-        self.gfx = np.concatenate((np.zeros((padding, *self.gfx.shape[1:]), np.uint8), self.gfx), axis=0, dtype=np.uint8)
-
-    @staticmethod
-    def _bbox(img: npt.NDArray[np.uint8]) -> Box:
-        rmin, rmax = np.where(np.any(img, axis=1))[0][[0, -1]]
-        cmin, cmax = np.where(np.any(img, axis=0))[0][[0, -1]]
-        return Box.from_coords(cmin, rmin, cmax+1, rmax+1)
+        self.boxes[0:0] = [self.boxes[0]] * padding
 ####
 
 #%%
