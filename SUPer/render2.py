@@ -18,7 +18,7 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import Optional, Type, Callable
+from typing import Optional, Type, Callable, Iterable
 from itertools import chain, zip_longest
 from functools import reduce
 
@@ -225,17 +225,10 @@ class WindowsAnalyzer:
             return work_plane[window.y:window.y2, window.x:window.x2, :]
         return None
 
-    def analyze(self):
-        allow_normal_case = self.kwargs.get('normal_case_ok', False)
-        allow_overlaps = self.kwargs.get('allow_overlaps', False)
-
-        ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
-        DSNode.configure(self.bdn.fps)
-
-        pm = PaletteManager()
-
+    def _find_objects(self, iter_events: Iterable[BaseEvent]) -> list[list[ProspectiveObject]]:
         #Adjust slightly SSIM threshold depending of res
         ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480))
+        ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
 
         #Init
         gens = []
@@ -247,7 +240,7 @@ class WindowsAnalyzer:
         pbar.set_description("Analyzing", False)
         #get all windowed bitmaps
         pgobjs = [[] for k in range(len(self.windows))]
-        for event in chain(self.events, [None]*2):
+        for event in chain(iter_events, [None]*2):
             if event is not None:
                 logger.hdebug(f"Event TCin={event.tc_in}")
                 pbar.n += 1
@@ -262,9 +255,16 @@ class WindowsAnalyzer:
                     logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
                     pgobjs[wid].append(pgobj)
         pbar.clear()
-        pgobjs_proc = [objs.copy() for objs in pgobjs]
+        return pgobjs
 
-        acqs, absolutes, margins, durs, nodes, flags, bslots, cboxes = self.find_acqs(pgobjs_proc)
+    def _find_initial_states(self,
+         nodes: list['DSNode'],
+         acqs: list[bool],
+         absolutes: list[bool],
+         margins: list[float],
+         bslots: list[tuple[int, int]],
+         cboxes: list[list[Box]]
+    ) -> list[PCS.CompositionState]:
 
         states = [PCS.CompositionState.NORMAL] * len(acqs)
         states[0] = PCS.CompositionState.EPOCH_START
@@ -312,95 +312,120 @@ class WindowsAnalyzer:
                 last_acq = k
         for zk in range(last_acq, k+1):
             nodes[zk].pos = positions
+        return states
+
+    @staticmethod
+    def _group_object_updates(nodes: list['DSNode'], acqs: list[bool],
+        absolutes: list[bool], states: list[PCS.CompositionState],
+        allow_overlaps: bool, pts_delta: float,
+    ) -> None:
+        for k, node in enumerate(nodes):
+            if acqs[k] or node.objects == [] or sum(node.new_mask) != 1:
+                continue
+            assert absolutes[k]
+            future_obj_idx = node.new_mask.index(True)
+
+            scores = []
+            drop_pal_ups_def = 0
+            drop_abs_acq_def = False
+            j = k
+            while (j := j-1) and (nodes[j].dts_end() >= node.dts() or nodes[j].pts() + pts_delta >= node.pts()):
+                drop_abs_acq_def |= absolutes[j]
+                drop_pal_ups_def += int(not allow_overlaps and nodes[j].nc_refresh)
+
+            other_new_mask = 0
+            for pk, pnode in enumerate(reversed(nodes[:k]), 1):
+                if pnode.objects == []:
+                    continue
+                redefine_same_object = next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is not None
+                overlap_in_window = sum(map(lambda x: x is not None, [node.objects[future_obj_idx], pnode.objects[future_obj_idx]])) > 1
+                other_new_mask += pnode.new_mask[1-future_obj_idx]
+                #Same object is redefined in the previous DS, give up
+                if redefine_same_object or overlap_in_window or other_new_mask > 1 or pk > 15:
+                    break
+
+                new_node = pnode.copy()
+                new_node.new_mask[future_obj_idx] = True
+                new_node.objects[future_obj_idx] = node.objects[future_obj_idx]
+                new_node.pos[future_obj_idx] = node.pos[future_obj_idx]
+                new_node.nc_refresh = False
+
+                drop_abs_acq = False
+                drop_pal_ups = 0
+                j = k - pk
+                while (j := j-1) and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()):
+                    drop_abs_acq |= absolutes[j]
+                    drop_pal_ups += int(not allow_overlaps and nodes[j].nc_refresh)
+
+                if not drop_abs_acq:
+                    #Shifting up to epoch start and acquisition at j=1 is not possible?
+                    if j == 0 and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()) and\
+                       next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is None:
+                        scores.append((0, drop_pal_ups, new_node, 0))
+                        break #Hit epoch start, can't go any closer
+
+                    elif nodes[j].dts_end() < new_node.dts() and nodes[j].pts() + pts_delta < new_node.pts():
+                        scores.append((k - pk, drop_pal_ups, new_node, j+1))
+
+                    #quick exit
+                    if 0 == drop_pal_ups or (allow_overlaps and len(scores)):
+                        break
+            ####for pk, node
+            if scores:
+                #jk: preceeding nodes, best_pk: promoted node
+                best_pk, drop_palups, new_node, jk = min(scores, key=lambda x: x[1] + 0.1249*(k - x[0]))
+                #Only do the shift if worthwile
+                if drop_pal_ups_def > drop_palups or drop_abs_acq_def:
+                    new_node.objects[future_obj_idx].pad_left(node.idx - new_node.idx)
+
+                    logger.debug(f"Merged acquisition at {nodes[best_pk].tc_pts} from {node.tc_pts}, NM={new_node.new_mask}, shift={node.idx - new_node.idx}")
+
+                    if best_pk > 0:
+                        states[best_pk] = PCS.CompositionState.ACQUISITION
+
+                    absolutes[best_pk]   =   True
+                    node.new_mask[future_obj_idx] = False
+
+                    for j in range(jk, best_pk):
+                        assert not absolutes[j]
+                        states[j] = PCS.CompositionState.NORMAL
+                        nodes[j].nc_refresh = True
+                    for j in range(best_pk+1, k+1):
+                        nodes[j].objects[future_obj_idx] = new_node.objects[future_obj_idx]
+                        nodes[j].pos[future_obj_idx] = new_node.pos[future_obj_idx]
+                        assert not absolutes[j] or j == k
+                        states[j] = PCS.CompositionState.NORMAL
+                        nodes[j].nc_refresh = True
+                        absolutes[j] = False
+                    #Apply new node to output
+                    nodes[best_pk] = new_node
+                ####if drop_pal_
+            ####if scores
+        ####for k, node
+
+
+    def analyze(self):
+        allow_normal_case = self.kwargs.get('normal_case_ok', False)
+        allow_overlaps = self.kwargs.get('allow_overlaps', False)
+
+        DSNode.configure(self.bdn.fps)
+
+        pgobjs = self._find_objects(self.events)
+        pgobjs_proc = [objs.copy() for objs in pgobjs]
+
+        #get the frame count between each screen update and find where we can do acqs
+        durs, nodes = self.get_durations()
+        flags = [0]*len(durs)
+        acqs, absolutes, margins, bslots, cboxes = self.find_acqs(pgobjs_proc, durs, nodes)
+
+        #This function modifies the absolutes vector
+        states = self._find_initial_states(nodes, acqs, absolutes, margins, bslots, cboxes)
 
         pts_delta = nodes[0].write_duration()/PGDecoder.FREQ
 
         #First backtrack: remove acquisitions to display one window after the other
         if 2 == len(self.windows):
-            for k, node in enumerate(nodes):
-                if acqs[k] or node.objects == [] or sum(node.new_mask) != 1:
-                    continue
-                assert absolutes[k]
-                future_obj_idx = node.new_mask.index(True)
-
-                scores = []
-                drop_pal_ups_def = 0
-                drop_abs_acq_def = False
-                j = k
-                while (j := j-1) and (nodes[j].dts_end() >= node.dts() or nodes[j].pts() + pts_delta >= node.pts()):
-                    drop_abs_acq_def |= absolutes[j]
-                    drop_pal_ups_def += int(not allow_overlaps and nodes[j].nc_refresh)
-
-                other_new_mask = 0
-                for pk, pnode in enumerate(reversed(nodes[:k]), 1):
-                    if pnode.objects == []:
-                        continue
-                    redefine_same_object = next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is not None
-                    overlap_in_window = sum(map(lambda x: x is not None, [node.objects[future_obj_idx], pnode.objects[future_obj_idx]])) > 1
-                    other_new_mask += pnode.new_mask[1-future_obj_idx]
-                    #Same object is redefined in the previous DS, give up
-                    if redefine_same_object or overlap_in_window or other_new_mask > 1 or pk > 15:
-                        break
-
-                    new_node = pnode.copy()
-                    new_node.new_mask[future_obj_idx] = True
-                    new_node.objects[future_obj_idx] = node.objects[future_obj_idx]
-                    new_node.pos[future_obj_idx] = node.pos[future_obj_idx]
-                    new_node.nc_refresh = False
-
-                    drop_abs_acq = False
-                    drop_pal_ups = 0
-                    j = k - pk
-                    while (j := j-1) and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()):
-                        drop_abs_acq |= absolutes[j]
-                        drop_pal_ups += int(not allow_overlaps and nodes[j].nc_refresh)
-
-                    if not drop_abs_acq:
-                        #Shifting up to epoch start and acquisition at j=1 is not possible?
-                        if j == 0 and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()) and\
-                           next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is None:
-                            scores.append((0, drop_pal_ups, new_node, 0))
-                            break #Hit epoch start, can't go any closer
-
-                        elif nodes[j].dts_end() < new_node.dts() and nodes[j].pts() + pts_delta < new_node.pts():
-                            scores.append((k - pk, drop_pal_ups, new_node, j+1))
-
-                        #quick exit
-                        if 0 == drop_pal_ups or (allow_overlaps and len(scores)):
-                            break
-                ####for pk, node
-                if scores:
-                    #jk: preceeding nodes, best_pk: promoted node
-                    best_pk, drop_palups, new_node, jk = min(scores, key=lambda x: x[1] + 0.1249*(k - x[0]))
-                    #Only do the shift if worthwile
-                    if drop_pal_ups_def > drop_palups or drop_abs_acq_def:
-                        new_node.objects[future_obj_idx].pad_left(node.idx - new_node.idx)
-
-                        logger.debug(f"Merged acquisition at {nodes[best_pk].tc_pts} from {node.tc_pts}, NM={new_node.new_mask}, shift={node.idx - new_node.idx}")
-
-                        if best_pk > 0:
-                            states[best_pk] = PCS.CompositionState.ACQUISITION
-
-                        absolutes[best_pk]   =   True
-                        node.new_mask[future_obj_idx] = False
-
-                        for j in range(jk, best_pk):
-                            assert not absolutes[j]
-                            states[j] = PCS.CompositionState.NORMAL
-                            nodes[j].nc_refresh = True
-                        for j in range(best_pk+1, k+1):
-                            nodes[j].objects[future_obj_idx] = new_node.objects[future_obj_idx]
-                            nodes[j].pos[future_obj_idx] = new_node.pos[future_obj_idx]
-                            assert not absolutes[j] or j == k
-                            states[j] = PCS.CompositionState.NORMAL
-                            nodes[j].nc_refresh = True
-                            absolutes[j] = False
-                        #Apply new node to output
-                        nodes[best_pk] = new_node
-                    ####if drop_pal_
-                ####if scores
-            ####for k, node
-        ####if len(self.windows)
+            __class__._group_object_updates(nodes, acqs, absolutes, states, allow_overlaps, pts_delta)
 
         #At this point, we have the stream acquisitions. Some may be impossible,
         # so we have to filter out some less relevant events.
@@ -511,9 +536,24 @@ class WindowsAnalyzer:
                     logger.info(f"Object refreshed with a Normal Case at {nodes[k].tc_pts} (tight timing).")
             k -= 1
         ####while k > 0
+        assert __class__.test_resources_allocation(nodes, states, flags, allow_overlaps)
+        r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
+        return self._convert(r_states, pgobjs, r_durs, r_flags, r_nodes)
+    ####
+
+    @staticmethod
+    def test_resources_allocation(
+        nodes: list['DSNode'],
+        states: list[PCS.CompositionState],
+        flags: list[int],
+        allow_overlaps: bool,
+    ) -> bool:
         #Allocate palettes as a test, this is essentially doing a final sanity check
         #on the selected display sets. The palette values generated here are not used.
         prev_idx = -1
+        valid = True
+
+        pm = PaletteManager()
         for k, (node, state, flag) in enumerate(zip(nodes, states, flags)):
             assert (node.objects == [] and node.idx == -1) or len(node.objects) and node.idx > prev_idx
             if len(node.objects):
@@ -533,13 +573,12 @@ class WindowsAnalyzer:
             if not pm.lock_palette(node.palette_id, node.pts(), node.dts()):
                 logger.error(f"Cannot acquire palette (rendering error) at {nodes[k].pts()}, discarding.")
                 flags[k] = -1
+                valid = False
             else:
                 node.pal_vn = pm.get_palette_version(node.palette_id)
             logger.debug(f"{state:02X} {flag} - {node.partial} DTS={node.dts():.05f}->{node.dts_end():.05f} PTS={node.pts():.05f} OM={node.new_mask} {node.palette_id} {node.pal_vn}")
         ####
-        r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
-        return self._convert(r_states, pgobjs, r_durs, r_flags, r_nodes)
-    ####
+        return valid
 
     @staticmethod
     def _get_stack_direction(*box) -> tuple[npt.NDArray[np.uint16], tuple[int, int]]:
@@ -962,14 +1001,15 @@ class WindowsAnalyzer:
         return Epoch(displaysets), final_ds, pcs_id
     ####
 
-    def find_acqs(self, pgobjs_proc: dict[..., list[...]]):
-        #get the frame count between each screen update and find where we can do acqs
-        durs, nodes = self.get_durations()
+    def find_acqs(self,
+            pgobjs_proc: list[list[ProspectiveObject]],
+            durs: list[int],
+            nodes: list['DSNode'],
+        ) -> tuple[...]:
 
         dtl = np.zeros((len(durs)), dtype=float)
         valid = np.zeros((len(durs),), dtype=np.bool_)
         absolutes = np.zeros_like(valid)
-        flags = [0] * len(durs)
 
         chain_boxes = []
         min_boxes = 8*np.ones((len(self.windows), 2), np.uint16)
@@ -1027,7 +1067,7 @@ class WindowsAnalyzer:
             valid[k] = (node.dts() > prev_dts and node.pts() - prev_pts > write_duration)
             dtl[k] = (node.dts() - prev_dts)/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
             prev_dt = dt
-        return valid, absolutes, dtl, durs, nodes, flags, min_boxes, chain_boxes
+        return valid, absolutes, dtl, min_boxes, chain_boxes
     ####
 
     def get_durations(self) -> npt.NDArray[np.uint32]:
@@ -1142,11 +1182,10 @@ class WindowAnalyzer:
         return score, cross_percentage
 
     def analyze(self):
-        bitmaps = []
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
         unseen = event_cnt = 0
-        pgo_yield = None
+        f_start = pgo_yield = None
         containers, mask = [], []
 
         while True:
@@ -1154,14 +1193,14 @@ class WindowAnalyzer:
             pgo_yield = None
 
             if rgba is None:
-                if len(bitmaps):
+                if len(mask):
                     bbox = alpha_compo.getbbox()
                     if unseen > 0:
                         mask = mask[:-unseen]
-                        bitmaps = bitmaps[:-unseen]
                         containers = containers[:-unseen]
+                    assert f_start is not None
                     pgo_yield = ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
-                    bitmaps, mask, containers = [], [], []
+                    mask, containers = [], []
                     continue
                 else:
                     break
@@ -1182,7 +1221,6 @@ class WindowAnalyzer:
                 thr_score = min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333*(1.0-self.ssim_offset))
                 logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}")
                 if score >= thr_score:
-                    bitmaps.append(rgba)
                     alpha_compo.alpha_composite(rgba_i)
                     mask.append(has_content)
                     containers.append(event_container)
@@ -1191,16 +1229,14 @@ class WindowAnalyzer:
                     bbox = alpha_compo.getbbox()
                     if unseen > 0:
                         mask = mask[:-unseen]
-                        bitmaps = bitmaps[:-unseen]
                         containers = containers[:-unseen]
                     pgo_yield = ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
 
                     #new bitmap
                     mask = [has_content]
                     containers = [event_container]
-                    bitmaps = [rgba]
                     f_start = event_cnt
-                    alpha_compo = Image.fromarray(rgba.copy())
+                    alpha_compo = rgba_i#Image.fromarray(rgba.copy())
                 unseen = (not has_content)*(unseen + 1)
             event_cnt += 1
         ####while
