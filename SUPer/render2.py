@@ -220,7 +220,6 @@ class WindowsAnalyzer:
             hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
             vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)
             work_plane[vsi, hsi, :] = np.array(event.img, dtype=np.uint8)
-            event.unload() #Help a bit to save on RAM
 
             return work_plane[window.y:window.y2, window.x:window.x2, :]
         return None
@@ -984,6 +983,7 @@ class WindowsAnalyzer:
             force_acq = False
             #NC palette updates don't need to know about the objects
             if not node.nc_refresh:
+                assert node.idx != -1
                 for wid, wd in enumerate(self.windows):
                     is_new[wid] = False
                     if objs[wid] and not objs[wid].is_active(node.idx):

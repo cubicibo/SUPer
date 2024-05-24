@@ -48,9 +48,6 @@ class BDNRender:
         self._first_pts = 0
 
     def prepare(self) -> BDNXML:
-        stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.get('ini_opts', {}).items()])
-        logger.debug(f"INI config: {stkw}")
-
         stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
         logger.iinfo(f"Parameters: {stkw}")
 
@@ -418,6 +415,9 @@ class EpochRenderer(mp.Process):
                 self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
             else:
                 logger.debug(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
+
+        from brule import Brule
+        logger.debug(f"Bitmap encoder capabilities: {Brule.get_capabilities()[:-1]}.")
 
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
