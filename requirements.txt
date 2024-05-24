@@ -7,7 +7,7 @@ timecode
 psutil ; sys_platform == 'win32'
 scenaristream @ git+https://github.com/cubicibo/ScenariStream.git
 piliq @ git+https://github.com/cubicibo/piliq.git
+brule @ git+https://github.com/cubicibo/brule.git
 # The following dependencies are optional:
-numba   # Used to compile selected numpy functions and improve perfs
 guizero # Used by supergui.py
 tqdm    # Used to display conversion progress.
