@@ -350,7 +350,7 @@ class WindowsAnalyzer:
                     drop_abs_acq = False
                     drop_pal_ups = 0
                     j = k - pk
-                    while (j := j-1) and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()):
+                    while (j := j-1) >= 0 and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()):
                         drop_abs_acq |= absolutes[j]
                         drop_pal_ups += int(not allow_overlaps and nodes[j].nc_refresh)
 
