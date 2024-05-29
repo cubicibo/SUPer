@@ -26,7 +26,7 @@ from PIL import Image, ImagePalette
 from typing import Optional, Union
 from collections.abc import Iterable
 from enum import IntEnum, auto
-from piliq import PILIQ
+from piliq import PILIQ, PNGQuantWrapper
 import cv2
 
 from .palette import Palette, PaletteEntry
@@ -45,9 +45,11 @@ class Quantizer:
         PIL_CV2KM = 1
         CV2KM  = 2
         PILIQ  = 3
+        PNGQNT = 4
 
     _opts = {}
     _piliq = None
+    _alt_piliq = None
     @classmethod
     def get_options(cls) -> dict[int, (str, str)]:
         if cls._opts == {}:
@@ -67,8 +69,10 @@ class Quantizer:
     def find_options(cls) -> None:
         if cls._piliq is not None:
             cls._opts[cls.Libs.PILIQ] = (cls.get_piliq().lib_name,'(best, avg)')
+        if cls._alt_piliq is not None:
+            cls._opts[cls.Libs.PNGQNT] = (cls._alt_piliq.lib_name,'(best, avg)')
         cls._opts[cls.Libs.PIL_CV2KM] = ('PIL+KMeans', '(good, fast)')
-        cls._opts[cls.Libs.CV2KM]     = ('KMeans', '(best, slow)')
+        cls._opts[cls.Libs.CV2KM]     = ('KMeans', '(better, slow)')
         #cls._opts[cls.Libs.PILLOW]    = ('PIL', '(average, fast)')
 
     @classmethod
@@ -90,15 +94,45 @@ class Quantizer:
             except:
                 logger.debug("Failed to load advanced quantizer with auto look-up.")
         cls._piliq = piliq
+        success = False
         if piliq is not None and piliq.is_ready():
-            #Configure PILIQ
             logger.debug(f"Configuring {piliq.lib_name} with: speed={speed}:quality={quality}:dither={dither/100.0}")
-            piliq.return_pil = False
-            piliq.set_speed(speed)
-            piliq.set_quality(quality)
-            piliq.set_dithering_level(dither/100.0)
-            return True
-        return False
+            cls.write_piliq_config(piliq, speed, quality, dither)
+            success = True
+        if success and piliq.lib_name != 'pngquant':
+            if PNGQuantWrapper.is_ready():
+                cls._alt_piliq = PILIQ(_wrapper=PNGQuantWrapper())
+                cls.write_piliq_config(cls._alt_piliq, speed, quality, dither)
+        return success
+
+    @staticmethod
+    def write_piliq_config(piq_inst: PILIQ, speed: int, quality: int, dither: float) -> None:
+        piq_inst.return_pil = False
+        piq_inst.set_speed(speed)
+        piq_inst.set_quality(quality)
+        piq_inst.set_dithering_level(dither/100.0)
+
+    @classmethod
+    def select_quantizer(cls, option_id: int) -> int:
+        if option_id > cls.Libs.PNGQNT:
+            logger.error("Unknown quantizer ID '{option_id}', attempting to use piliq library.")
+            option_id = cls.Libs.PILIQ
+
+        if option_id == cls.Libs.PNGQNT:
+            assert cls._piliq is not None
+            if cls._piliq.lib_name != 'pngquant':
+                if cls._alt_piliq is not None:
+                    cls._piliq.destroy()
+                    cls._piliq = cls._alt_piliq
+                else:
+                    logger.error("Requesting specifically pngquant, but executable not found.")
+            option_id = cls.Libs.PILIQ
+        if option_id == cls.Libs.PILIQ and not cls.get_piliq():
+            logger.error("Unable to find an advanced quantizer (pngquant, libimagequant, quantizr). Falling back to PIL+KMeans")
+            option_id = cls.Libs.PIL_CV2KM
+        if option_id == cls.Libs.CV2KM:
+            logger.warning("CV2KM Quantizer selected: this quantizer is very slow.")
+        return int(option_id)
 
     @classmethod
     def get_piliq(cls) -> Optional[PILIQ]:

@@ -143,14 +143,17 @@ class BDNRender:
 
         def sighandler(workers, snum, frame) -> NoReturn:
             for worker in workers:
-                if worker.is_alive():
-                    worker.kill()
+                try:
+                    if worker.is_alive():
+                        worker.kill()
+                except ValueError:
+                    pass
             import sys, time
             time.sleep(0.005)
             for worker in workers:
                 try:
                     worker.join()
-                except (RuntimeError, AssertionError):
+                except (ValueError, RuntimeError, AssertionError):
                     pass
             logger.critical("Terminated.")
             sys.exit(1)
@@ -409,15 +412,16 @@ class EpochRenderer(mp.Process):
 
         libs_params = self.kwargs.pop('ini_opts', {})
         logger.debug(f"INI parameters: {libs_params}")
-        if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) == Quantizer.Libs.PILIQ:
+        if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) >= Quantizer.Libs.PILIQ:
             if not Quantizer.init_piliq(**libs_params.get('quant', {})):
                 logger.info("Failed to initialise advanced image quantizer. Falling back to PIL+K-Means.")
                 self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
             else:
+                self.kwargs['quantize_lib'] = Quantizer.select_quantizer(self.kwargs['quantize_lib'])
                 logger.debug(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
 
         from brule import Brule
-        logger.debug(f"Bitmap encoder capabilities: {Brule.get_capabilities()[:-1]}.")
+        logger.debug(f"Bitmap encoder capabilities: {', '.join(Brule.get_capabilities())}.")
 
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))

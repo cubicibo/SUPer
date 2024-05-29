@@ -23,7 +23,6 @@ filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
 
 from SUPer import BDNRender, LogFacility
 from SUPer.__metadata__ import __author__, __version__ as LIB_VERSION
-from SUPer.optim import Quantizer
 
 import os
 import sys
@@ -92,7 +91,7 @@ if __name__ == '__main__':
     assert abs(args.ssim_tol) <= 100
     assert 0 <= args.compression <= 100
     assert 0 <= args.acqrate <= 100
-    if args.qmode not in range(1, 4):
+    if args.qmode not in range(1, 5):
         logger.warning("Unknown quantization mode, using PIL+K-Means (1).")
         args.qmode = 1
     if args.bt not in [601, 709, 2020]:
@@ -150,7 +149,7 @@ if __name__ == '__main__':
         if (super_cfg := get_value_key(config, 'SUPer')) is not None:
             ini_opts['super_cfg'] = dict(super_cfg)
 
-        if args.qmode == 3:
+        if args.qmode >= 3:
             exepath = None
             piq_values = {}
             if (piq_sect := get_value_key(config, 'PILIQ')) is not None:
