@@ -214,14 +214,17 @@ class WindowsAnalyzer:
 
     def mask_event(self, window, event) -> Optional[npt.NDArray[np.uint8]]:
         if event is not None:
-            #+8 for minimum object width and height
-            work_plane = np.zeros((self.box.dy+8, self.box.dx+8, 4), dtype=np.uint8)
-
-            hsi = slice(event.x-self.box.x, event.x-self.box.x+event.width)
-            vsi = slice(event.y-self.box.y, event.y-self.box.y+event.height)
-            work_plane[vsi, hsi, :] = np.array(event.img, dtype=np.uint8)
-
-            return work_plane[window.y:window.y2, window.x:window.x2, :]
+            bev = Box(event.y, event.height, event.x, event.width)
+            bwi = Box(self.box.y+window.y, window.dy, self.box.x+window.x, window.dx)
+            zone_overlap = Box.intersect(bev, bwi)
+            work_plane = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
+            if zone_overlap.area > 0:
+                vsi = slice(zone_overlap.y-window.y-self.box.y, zone_overlap.y2-window.y-self.box.y)
+                hsi = slice(zone_overlap.x-window.x-self.box.x, zone_overlap.x2-window.x-self.box.x)
+                ivsi = slice(zone_overlap.y-event.y, zone_overlap.y2-event.y)
+                ihsi = slice(zone_overlap.x-event.x, zone_overlap.x2-event.x)
+                work_plane[vsi, hsi, :] = np.asarray(event.img, dtype=np.uint8)[ivsi, ihsi, :]
+            return work_plane
         return None
 
     def analyze(self):

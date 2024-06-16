@@ -1118,18 +1118,17 @@ class Epoch:
 
     @classmethod
     def from_bytes(cls, data: Union[bytes, bytearray]) -> 'Epoch':
-        segs = []
-        while data:
-            pseg = PGSegment(data).specialise()
-            segs.append(pseg)
-            data = data[len(pseg):]
         lds = []
         running_ds = []
-        for seg in segs:
-            running_ds.append(seg)
-            if isinstance(seg, ENDS):
+        while data:
+            pseg = PGSegment(data).specialise()
+            running_ds.append(pseg)
+            data = data[len(pseg):]
+
+            if isinstance(pseg, ENDS):
                 lds.append(DisplaySet(running_ds))
                 running_ds = []
+        assert 0 == len(running_ds)
         return cls(lds)
 
     def __lt__(self, other):

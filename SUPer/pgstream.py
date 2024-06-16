@@ -30,6 +30,13 @@ from .utils import LogFacility, TimeConv as TC, Box
 logger = LogFacility.get_logger('SUPer')
 
 @dataclass
+class EpochContext:
+    box: Box
+    windows: list[Box]
+    events: list[...]
+    min_dts: float = -np.inf
+
+@dataclass
 class BufferStats:
     min: float = np.inf
     avg: float = 0

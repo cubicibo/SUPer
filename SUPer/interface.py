@@ -24,19 +24,81 @@ from os import path
 from typing import Any, Generator, Optional, NoReturn
 import multiprocessing as mp
 from itertools import chain
+from functools import partial
 
 from scenaristream import EsMuiStream
+from brule import LayoutEngine
 
 from .utils import TimeConv as TC, LogFacility, Box, BDVideo, SSIMPW
 from .pgraphics import PGDecoder
 from .filestreams import BDNXML, BDNXMLEvent, remove_dupes
 from .segments import Epoch, DisplaySet
 from .optim import Quantizer
-from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate
+from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext
 from .render2 import GroupingEngine, WindowsAnalyzer
 
 #%%
 logger = LogFacility.get_logger('SUPer')
+
+def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML) -> list[EpochContext]:
+    width, height = bdn.format.value
+    container = Box.from_coords(0, 0, width, height)
+
+    leng = LayoutEngine((width, height))
+    ectx = []
+
+    running_ev = []
+    assert len(events)
+    for k, ev in enumerate(reversed(events), 1):
+        channel = np.ascontiguousarray(ev.img.getchannel('A'), dtype=np.uint8)
+        if np.any(channel):
+            leng.add_to_layout(ev.x, ev.y, channel)
+            running_ev = [ev]
+            break
+
+    for ev in reversed(events[:-k]):
+        # Remove empty bitmaps
+        channel = np.ascontiguousarray(ev.img.getchannel('A'), dtype=np.uint8)
+        if not np.any(channel):
+            continue
+
+        if ev.tc_out != running_ev[0].tc_in:
+            cbox, w1, w2, is_vertical = leng.get_layout()
+            cbox, w1, w2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, w1, w2)))
+            cwd = (w1, w2) if w1 != w2 else (w1,)
+            cwd = GroupingEngine(cbox, container=container, n_groups=2).directional_pad(cwd, is_vertical)
+
+            scores = []
+            for cwdo in (cwd, reversed(cwd)):
+                dd = PGDecoder.copy_gp_duration(container.area)
+                t_dec = 0
+                for wd in cwdo:
+                    t_dec += PGDecoder.decode_obj_duration(wd.area)
+                    dd = max(t_dec, dd) + PGDecoder.copy_gp_duration(wd.area)
+                scores.append(dd)
+            if len(scores) > 1 and scores[0] > scores[1]:
+                cwd = tuple(reversed(cwd))
+                scores[0] = scores[1]
+
+            pts_out = TC.tc2pts(ev.tc_out, bdn.fps)
+            if pts_out + scores[0] < TC.tc2pts(running_ev[0].tc_in, bdn.fps):
+                ectx.append(EpochContext(cbox, cwd, running_ev, pts_out))
+                running_ev = []
+                leng.reset()
+        ####
+        leng.add_to_layout(ev.x, ev.y, channel)
+        running_ev.insert(0, ev)
+    ####for ev
+    assert len(running_ev)
+    cbox, w1, w2, is_vertical = leng.get_layout()
+    leng.destroy()
+
+    cbox, w1, w2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, w1, w2)))
+    cwd = (w1, w2) if w1 != w2 else (w1,)
+    cwd = GroupingEngine(cbox, container=container, n_groups=2).directional_pad(cwd, is_vertical)
+    ectx.append(EpochContext(cbox, cwd, running_ev, -np.inf))
+    return ectx[::-1]
+
 
 class BDNRender:
     def __init__(self, bdnf: str, kwargs: dict[str, Any], outfile: str) -> None:
@@ -66,42 +128,26 @@ class BDNRender:
         self._first_pts = TC.tc2pts(bdn.events[0].tc_in, bdn.fps)
         return bdn
 
-    @staticmethod
-    def epoch_events(bdn: BDNXML) -> Generator[tuple[float, list['BDNXMLEvent']], None, None]:
-        #In the worst case, there is a single composition object for the whole screen.
+    def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
-        #Round up to tick
-        epochstart_dd_fnr = lambda o_area: (np.ceil(epochstart_dd_fn(o_area)*PGDecoder.FREQ))/PGDecoder.FREQ
 
-        for group in bdn.groups(epochstart_dd_fnr(screen_area)):
-            subgroups = []
-            relative_areas = []
-            offset = len(group)
-            max_area = 0
+        ####
+        if self.kwargs['threads'] > 1:
+            p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn)
+            with mp.Pool(self.kwargs['threads']) as mpp:
+                lectx = mpp.map(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area)))
+            lectx = list(chain(*lectx))
+        else:
+            lectx = []
+            for grp in bdn.groups(epochstart_dd_fn(screen_area)):
+                lectx += _find_epochs_layouts(grp, bdn)
 
-            for k, event in enumerate(reversed(group)):
-                max_area = max(np.multiply(*event.shape), max_area)
-                if k == 0:
-                    continue
-                delay = TC.tc2s(group[len(group)-k].tc_in, bdn.fps) - TC.tc2s(event.tc_out, bdn.fps)
-
-                if delay > epochstart_dd_fnr(max_area):
-                    relative_areas.append(max_area/screen_area)
-                    max_area = 0
-                    subgroups.append(group[len(group)-k:offset])
-                    offset -= len(subgroups[-1])
-            if len(group[:offset]) > 0:
-                relative_areas.append(max_area/screen_area)
-                subgroups.append(group[:offset])
-            else:
-                assert offset == 0
-            assert sum(map(len, subgroups)) == len(group)
-            assert len(relative_areas) == len(subgroups)
-
-            for r_area, subgroup in zip(reversed(relative_areas), reversed(subgroups)):
-                yield (r_area, subgroup)
-    ####
+        if logger.level <= 10:
+            for ect in lectx:
+                logger.debug(f"Epoch Context: {ect.events[0].tc_in}->{ect.events[-1].tc_out} {len(ect.events)}, RC={ect.box}, WDS={ect.windows}")
+        return lectx
+    #####find_all
 
     def _convert_single(self, bdn: BDNXML) -> None:
         EpochRenderer.set_mt(False)
@@ -110,18 +156,20 @@ class BDNRender:
 
         pcs_id = 0
         final_ds = None
-        logger.info("Finding epochs...")
-        for r_area, subgroup in __class__.epoch_events(bdn):
+        epochs_ctx = self.find_all_layouts(bdn)
+        logger.info(f"Identified {len(epochs_ctx)} epochs to render individually.")
+
+        for ectx in epochs_ctx:
             if final_ds is not None:
-                if TC.tc2pts(subgroup[0].tc_in, bdn.fps) - last_pts_out > 1.1:
+                if TC.tc2pts(ectx.events[0].tc_in, bdn.fps) - last_pts_out > 1.1:
                     logger.debug("Adding screen wipe since there was enough time between two epochs.")
                     self._epochs[-1].ds.append(final_ds)
                 else:
                     #did not use an optional display set, subtract 1 to PCS id to have continuity
                     pcs_id -= 1
 
-            epoch, final_ds, pcs_id = renderer.convert(r_area, subgroup, pcs_id)
-            last_pts_out = TC.tc2pts(subgroup[-1].tc_out, bdn.fps)
+            epoch, final_ds, pcs_id = renderer.convert2(ectx, pcs_id)
+            last_pts_out = TC.tc2pts(ectx.events[-1].tc_out, bdn.fps)
 
             self._epochs.append(epoch)
             gc.collect()
@@ -134,12 +182,6 @@ class BDNRender:
 
     def _setup_mt_env(self) -> None:
         import signal, os
-
-        file_logging_level = self.kwargs.get('log_to_file', False)
-        if file_logging_level > 0:
-            logfile = str(self.outfile) + ".txt"
-            LogFacility.set_file_log(logger, logfile, file_logging_level)
-            LogFacility.set_logger_level(logger.name, file_logging_level)
 
         def sighandler(workers, snum, frame) -> NoReturn:
             for worker in workers:
@@ -166,10 +208,21 @@ class BDNRender:
         logger.debug("Registered signal handlers.")
     ####
 
+    def _setup_mt_main_logging(self) -> None:
+        file_logging_level = self.kwargs.get('log_to_file', False)
+        if file_logging_level > 0:
+            logfile = str(self.outfile) + ".txt"
+            LogFacility.set_file_log(logger, logfile, file_logging_level)
+            LogFacility.set_logger_level(logger.name, file_logging_level)
+
     def _convert_mt(self, bdn: BDNXML) -> None:
         import time
         EpochRenderer.set_mt(True)
         EpochRenderer.reset_module()
+        self._setup_mt_main_logging()
+
+        epochs_ctx = self.find_all_layouts(bdn)
+        logger.info(f"Identified {len(epochs_ctx)} epochs to render individually.")
 
         as_deamon = self.kwargs.get('daemonize', True)
         n_threads = self.kwargs.get('threads', 2)
@@ -193,7 +246,7 @@ class BDNRender:
 
         #Orchestrator starts here
         busy_flags = {renderer.iid: False for renderer in renderers}
-        g_epochs = enumerate(chain(__class__.epoch_events(bdn), (None,)))
+        g_epochs = enumerate(chain(epochs_ctx, (None,)))
         tc_inout, final_ds_l, ep_timeline = [], [], []
 
         group_data = True
@@ -208,9 +261,9 @@ class BDNRender:
                     if group_data is not None:
                         ep_timeline.append(None)
                         final_ds_l.append(None)
-                        tc_inout.append((group_data[1][0].tc_in, group_data[1][-1].tc_out))
+                        tc_inout.append((group_data.events[0].tc_in, group_data.events[-1].tc_out))
                         busy_flags[free_renderer.iid] = True
-                        free_renderer.send((*group_data, group_id))
+                        free_renderer.send((group_data, group_id))
                     else:
                         break
             ####for
@@ -257,7 +310,7 @@ class BDNRender:
             ep_timeline[eid] = Epoch.from_bytes(epoch)
             if final_ds is not None:
                 final_ds = DisplaySet.from_bytes(final_ds)
-                pts_out = TC.tc2pts(tc_inout[0][1], bdn.fps)
+                pts_out = TC.tc2pts(tc_inout[eid][1], bdn.fps)
                 pts_in_next = np.inf if (eid+1 == len(ep_timeline)) else TC.tc2pts(tc_inout[eid+1][0], bdn.fps)
                 #Technically DTS(DSn+1[EPOCH_START]) >= PTS(DSn[-]). But a nice margin to next PTS is enough as this is optional.
                 #And since PTS(DSn) - DTS(DSn) cannot exceed 1 sec, this also suits any potential time stretching for decoding.
@@ -278,14 +331,13 @@ class BDNRender:
             else:
                 n_threads = psutil.cpu_count(logical=False)
             n_threads_requested = n_threads
-        if n_threads > 1:
-            n_threads = min(n_threads, len(list(__class__.epoch_events(bdn))))
-            if n_threads != n_threads_requested:
-                logger.info(f"Using only {n_threads} threads to match the number of epochs.")
+
         if n_threads_auto:
             logger.info(f"Using {n_threads} thread(s).")
         self.kwargs['threads'] = n_threads
 
+
+        logger.info("Finding all epochs and their screen layout (this can take a while)...")
         if n_threads == 1:
             self._convert_single(bdn)
             self.fix_composition_id(False)
@@ -422,28 +474,25 @@ class EpochRenderer(mp.Process):
 
         from brule import Brule
         logger.debug(f"Bitmap encoder capabilities: {', '.join(Brule.get_capabilities())}.")
+        logger.debug(f"Layout engine capabilities: {', '.join(LayoutEngine.get_capabilities())}.")
 
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
             logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
     ####
 
-    def convert(self, r_area: float, subgroup: list[BDNXMLEvent], pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
+    def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
+        subgroup = ectx.events
         prefix = f"W{self.iid}: " if __class__.__threaded else ""
         logger.info(prefix + f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s):")
 
-        n_groups = 2 if (len(subgroup) > 1 or r_area > 0.25) else 1
-        engine = GroupingEngine(Box.from_events(subgroup), container=Box.from_coords(0, 0, *self.bdn.format.value), n_groups=n_groups)
-        box = engine.pad_box()
-        windows = engine.group(subgroup)
-
         if logger.level <= 10:
-            for w_id, wd in enumerate(windows):
-                logger.debug(f"Window {w_id}: X={wd.x+box.x}, Y={wd.y+box.y}, W={wd.dx}, H={wd.dy}")
+            for w_id, wd in enumerate(ectx.windows):
+                logger.debug(f"Window {w_id}: X={wd.x+ectx.box.x}, Y={wd.y+ectx.box.y}, W={wd.dx}, H={wd.dy}")
         else:
-            logger.info(prefix + f" => Screen layout: {len(windows)} window(s), processing...")
+            logger.info(prefix + f" => Screen layout: {len(ectx.windows)} window(s), processing...")
 
-        wds_analyzer = WindowsAnalyzer(windows, subgroup, box, self.bdn, pcs_id=pcs_id, **self.kwargs)
+        wds_analyzer = WindowsAnalyzer(ectx.windows, ectx.events, ectx.box, self.bdn, pcs_id=pcs_id, **self.kwargs)
         new_epoch, final_ds, pcs_id = wds_analyzer.analyze()
 
         logger.info(prefix + f" => optimised as {len(new_epoch)} display sets.")
@@ -479,9 +528,9 @@ class EpochRenderer(mp.Process):
                 self._available.value = 0
             if in_data is None:
                 break
-            rel_area, subgroup, epoch_id = in_data
+            ectx, epoch_id = in_data
             logger.debug(f"WORKER {self.iid} on EPOCH {epoch_id}")
-            new_epoch, final_ds = self.convert(rel_area, subgroup)[:-1] #discard pcs_id
+            new_epoch, final_ds = self.convert2(ectx)[:-1] #discard pcs_id
             self._q_tx.put((bytes(new_epoch), None if final_ds is None else bytes(final_ds), epoch_id))
             self._available.value = 1
         ####

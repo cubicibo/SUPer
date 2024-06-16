@@ -19,13 +19,15 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from distutils.util import convert_path
-from typing import Any, Dict
+from typing import Any
 
-from setuptools import setup
+import sys
+from setuptools import setup, Extension
 
 NAME = 'SUPer'
 
-meta: Dict[str, Any] = {}
+#%% metadata plumbing
+meta: dict[str, Any] = {}
 with open(convert_path(f"{NAME}/__metadata__.py"), encoding='utf-8') as f:
     exec(f.read(), meta)
 
@@ -35,24 +37,31 @@ with open('README.md', encoding='utf-8') as fh:
 with open('requirements.txt', encoding='utf-8') as fh:
     install_requires = fh.read()
 
-setup(
-    name=NAME,
-    version=meta['__version__'],
-    author=meta['__author__'],
-    description='Blu-ray SUP editor and optimiser.',
-    long_description=long_description,
-    long_description_content_type='text/markdown',
-    packages=[NAME,],
-    package_data={
-        NAME: ['py.typed'],
-    },
-    url='https://github.com/cubicibo/SUPer',
-    zip_safe=False,
-    classifiers=[
-        'Programming Language :: Python :: 3',
-        'License :: OSI Approved :: MIT License',
-        'Operating System :: OS Independent',
-    ],
-    python_requires='>=3.10',
-    install_requires=install_requires,
-)
+#%% Final setup
+def setup_pkg():
+    setup(
+        name=NAME,
+        version=meta['__version__'],
+        author=meta['__author__'],
+        description='Blu-ray HDMV PGS encoder.',
+        long_description=long_description,
+        long_description_content_type='text/markdown',
+        packages=[NAME,],
+        package_dir={NAME: '.'},
+        package_data={
+            NAME: ['py.typed'],
+        },
+        license="GPLv3",
+        url='https://github.com/cubicibo/SUPer',
+        zip_safe=False,
+        classifiers=[
+            'Programming Language :: Python :: 3',
+            'License :: OSI Approved :: MIT License',
+            'Operating System :: OS Independent',
+        ],
+        python_requires='>=3.10',
+        install_requires=install_requires,
+    )
+####
+if __name__ == "__main__":
+    setup_pkg()
