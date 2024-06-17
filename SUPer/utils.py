@@ -22,6 +22,7 @@ import logging
 import numpy as np
 
 from typing import Optional, Callable, TypeVar, Union
+import collections
 from enum import Enum, IntEnum
 from numpy import (typing as npt)
 from timecode import Timecode
@@ -34,7 +35,7 @@ from SSIM_PIL import compare_ssim
 try:
     from tqdm import tqdm
 except ModuleNotFoundError:
-    from contextlib import nullcontext as tqdm
+    tqdm = nullcontext
 
 MPEGTS_FREQ = np.uint64(90e3)
 

@@ -19,10 +19,13 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import gc
+import os
+import psutil
+import signal
 import numpy as np
-from os import path
-from typing import Any, Generator, Optional, NoReturn
 import multiprocessing as mp
+
+from typing import Any, Generator, Optional, NoReturn
 from itertools import chain
 from functools import partial
 
@@ -39,6 +42,20 @@ from .render2 import GroupingEngine, WindowsAnalyzer
 
 #%%
 logger = LogFacility.get_logger('SUPer')
+
+_parent_id = os.getpid()
+def _pool_worker_init():
+    if os.name == 'nt':
+        def sig_int(signal_num, frame):
+            parent = psutil.Process(_parent_id)
+            _cpid = os.getpid()
+            for child in parent.children():
+                if child.pid != _cpid:
+                    child.kill()
+            parent.kill()
+            psutil.Process(_cpid).kill()
+        signal.signal(signal.SIGINT, sig_int)
+    #else, do nothing
 
 def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML) -> list[EpochContext]:
     width, height = bdn.format.value
@@ -59,6 +76,7 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML) -> list[EpochCo
     for ev in reversed(events[:-k]):
         # Remove empty bitmaps
         channel = np.ascontiguousarray(ev.img.getchannel('A'), dtype=np.uint8)
+        ev.unload()
         if not np.any(channel):
             continue
 
@@ -113,7 +131,7 @@ class BDNRender:
         stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
         logger.iinfo(f"Parameters: {stkw}")
 
-        bdn = BDNXML(path.expanduser(self.bdn_file))
+        bdn = BDNXML(os.path.expanduser(self.bdn_file))
         fps_str = bdn.fps if float(bdn.fps).is_integer() else round(bdn.fps, 3)
         logger.iinfo(f"BDN metadata: {'x'.join(map(str, bdn.format.value))}, FPS={fps_str}, DF={bdn.dropframe}, {len(bdn.events)} valid events.")
 
@@ -132,20 +150,28 @@ class BDNRender:
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
 
+        pbar = LogFacility.get_progress_bar(logger, bdn.events)
+        pbar.set_description("Finding epochs and layouts", True)
         ####
         if self.kwargs['threads'] > 1:
             p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn)
-            with mp.Pool(self.kwargs['threads']) as mpp:
-                lectx = mpp.map(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area)))
-            lectx = list(chain(*lectx))
+            lectx = []
+            with mp.Pool(self.kwargs['threads'], _pool_worker_init) as mpp:
+                for r in mpp.imap_unordered(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
+                    pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
+                    lectx += r
+            lectx = sorted(lectx, key=lambda ctx: TC.tc2pts(ctx.events[0].tc_in, bdn.fps))
         else:
             lectx = []
             for grp in bdn.groups(epochstart_dd_fn(screen_area)):
                 lectx += _find_epochs_layouts(grp, bdn)
+                pbar.update(len(lectx[-1].events))
+        pbar.update(len(bdn.events)-pbar.n+1)
 
         if logger.level <= 10:
             for ect in lectx:
                 logger.debug(f"Epoch Context: {ect.events[0].tc_in}->{ect.events[-1].tc_out} {len(ect.events)}, RC={ect.box}, WDS={ect.windows}")
+        LogFacility.close_progress_bar(logger)
         return lectx
     #####find_all
 
@@ -156,8 +182,9 @@ class BDNRender:
 
         pcs_id = 0
         final_ds = None
+        logger.debug("Finding all epochs and their screen layout (this can take a while)...")
         epochs_ctx = self.find_all_layouts(bdn)
-        logger.info(f"Identified {len(epochs_ctx)} epochs to render individually.")
+        logger.info(f"Identified {len(epochs_ctx)} epochs.")
 
         for ectx in epochs_ctx:
             if final_ds is not None:
@@ -181,8 +208,6 @@ class BDNRender:
             self._epochs[-1].ds.append(final_ds)
 
     def _setup_mt_env(self) -> None:
-        import signal, os
-
         def sighandler(workers, snum, frame) -> NoReturn:
             for worker in workers:
                 try:
@@ -221,8 +246,9 @@ class BDNRender:
         EpochRenderer.reset_module()
         self._setup_mt_main_logging()
 
+        logger.debug("Finding all epochs and their screen layout (this can take a while)...")
         epochs_ctx = self.find_all_layouts(bdn)
-        logger.info(f"Identified {len(epochs_ctx)} epochs to render individually.")
+        logger.info(f"Identified {len(epochs_ctx)} epochs.")
 
         as_deamon = self.kwargs.get('daemonize', True)
         n_threads = self.kwargs.get('threads', 2)
@@ -336,8 +362,6 @@ class BDNRender:
             logger.info(f"Using {n_threads} thread(s).")
         self.kwargs['threads'] = n_threads
 
-
-        logger.info("Finding all epochs and their screen layout (this can take a while)...")
         if n_threads == 1:
             self._convert_single(bdn)
             self.fix_composition_id(False)
