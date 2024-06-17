@@ -371,19 +371,17 @@ class SeqIO(ABC):
         le = []
 
         for event in self.fetch():
-            if le == []:
+            if 0 == len(le):
                 le = [event]
                 continue
-            td = TC.tc2s(event.tc_in, self.fps) - TC.tc2s(le[-1].tc_out, self.fps)
-            if td < 0:
-                raise Exception(f"Events are not ordered in time: {event.tc_in}, "
-                                f"{event.gfxfile.split(os.path.sep)[-1]} predates previous event.")
-            if le == [] or abs(td) < dt_split:
+            td = TC.tc2pts(event.tc_in, self.fps) - TC.tc2pts(le[-1].tc_out, self.fps)
+            assert td >= 0, f"Events are not ordered in time: {event.tc_in}, {event.gfxfile.split(os.path.sep)[-1]} predates previous event."
+            if td < dt_split:
                 le.append(event)
             else:
                 yield le
                 le = [event]
-        if le != []:
+        if len(le):
             yield le
         return
 
