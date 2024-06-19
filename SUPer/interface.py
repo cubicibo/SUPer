@@ -20,7 +20,6 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 import gc
 import os
-import psutil
 import signal
 import numpy as np
 import multiprocessing as mp
@@ -46,6 +45,8 @@ logger = LogFacility.get_logger('SUPer')
 _parent_id = os.getpid()
 def _pool_worker_init():
     if os.name == 'nt':
+        import psutil
+
         def sig_int(signal_num, frame):
             parent = psutil.Process(_parent_id)
             _cpid = os.getpid()
