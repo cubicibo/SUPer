@@ -24,9 +24,10 @@ import signal
 import numpy as np
 import multiprocessing as mp
 
-from typing import Any, Generator, Optional, NoReturn
+from typing import Any, Generator, Optional, NoReturn, Union
 from itertools import chain
 from functools import partial
+from enum import IntEnum, auto as eauto
 
 from scenaristream import EsMuiStream
 from brule import LayoutEngine
@@ -39,6 +40,10 @@ from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext
 from .render2 import GroupingEngine, WindowsAnalyzer
 
+class LayoutPreset(IntEnum):
+    SAFE   = 0
+    NORMAL = 1
+    GREEDY = 2
 #%%
 logger = LogFacility.get_logger('SUPer')
 
@@ -58,12 +63,21 @@ def _pool_worker_init():
         signal.signal(signal.SIGINT, sig_int)
     #else, do nothing
 
-def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML) -> list[EpochContext]:
+def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[LayoutPreset, int] = LayoutPreset.GREEDY) -> list[EpochContext]:
+    preset = LayoutPreset(preset)
     width, height = bdn.format.value
     container = Box.from_coords(0, 0, width, height)
 
     leng = LayoutEngine((width, height))
     ectx = []
+
+    def decode_duration_base(cwdo, container_area) -> float:
+        dd = PGDecoder.copy_gp_duration(container_area)
+        t_dec = 0
+        for wd in cwdo:
+            t_dec += PGDecoder.decode_obj_duration(wd.area)
+            dd = max(t_dec, dd) + PGDecoder.copy_gp_duration(wd.area)
+        return dd
 
     running_ev = []
     assert len(events)
@@ -89,18 +103,50 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML) -> list[EpochCo
 
             scores = []
             for cwdo in (cwd, reversed(cwd)):
-                dd = PGDecoder.copy_gp_duration(container.area)
-                t_dec = 0
-                for wd in cwdo:
-                    t_dec += PGDecoder.decode_obj_duration(wd.area)
-                    dd = max(t_dec, dd) + PGDecoder.copy_gp_duration(wd.area)
-                scores.append(dd)
-            if len(scores) > 1 and scores[0] > scores[1]:
-                cwd = tuple(reversed(cwd))
-                scores[0] = scores[1]
+                scores.append(decode_duration_base(cwdo, container.area))
+
+            if len(scores) > 1:
+                flip_results = False
+                flip_results = flip_results or (preset == LayoutPreset.SAFE and scores[0] < scores[1])
+                flip_results = flip_results or (preset != LayoutPreset.SAFE and scores[0] > scores[1])
+
+                if flip_results:
+                    cwd = tuple(reversed(cwd))
+                    scores[0] = scores[1]
+
+            base_box = Box.from_coords(*leng.get_raw_container())
+            score_container = decode_duration_base((base_box,), container.area)
+            is_bad_split = scores[0] >= max(1/PGDecoder.FREQ, score_container-5/PGDecoder.FREQ)
+            #coded object buffer can fit at most 16 ODS: (0xFFFF-0xFFE4) + 15*(0xFFFF-0xFFEB) = 327
+            #note: technically we need to also consider the 2*height line-endings bytes, but let's assume there's *some* compression
+            may_not_fit_buffer = any(map(lambda b: b.area >= (1 << 20)-328, cwd))
+            is_greedysplit_worthwile = score_container*0.85 < scores[0] or may_not_fit_buffer
+            old_score = scores[0]
+
+            #With greedy mode, anytime we're dealing with very big objects we abuse the 1/2 1/2. This also prevents coded buffer overflow.
+            layout_modifier = 'N'
+            if (preset == LayoutPreset.GREEDY or is_bad_split) and is_greedysplit_worthwile:
+                cx, cy = (1, 0.5)
+                box1 = Box(base_box.y, int(round(cy*base_box.dy)), base_box.x, int(round(base_box.dx*cx)))
+                box2 = Box.from_coords(base_box.x, box1.y2, base_box.x2, base_box.y2)
+                assert base_box == (_union_box := Box.union(box1, box2)) and base_box.area == _union_box.area
+                assert abs(1-box1.area/box2.area) < 8e-2
+
+                greedy_wds = (box1, box2)
+                new_score = decode_duration_base(greedy_wds, container.area)
+                if scores[0] > new_score:
+                    cwd = greedy_wds
+                    scores[0] = new_score
+                    layout_modifier = 'G'
+                # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
+            if (layout_modifier == 'N' or scores[0] >= score_container) and not may_not_fit_buffer:
+                cwd = (base_box,)
+                scores[0] = score_container
+                layout_modifier = 'S'
 
             pts_out = TC.tc2pts(ev.tc_out, bdn.fps)
-            if pts_out + scores[0] < TC.tc2pts(running_ev[0].tc_in, bdn.fps):
+            if pts_out + scores[0] + 1e-8 < TC.tc2pts(running_ev[0].tc_in, bdn.fps):
+                logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with p={preset}:b={is_bad_split}:g={is_greedysplit_worthwile}.")
                 ectx.append(EpochContext(cbox, cwd, running_ev, pts_out))
                 running_ev = []
                 leng.reset()
