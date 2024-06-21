@@ -140,7 +140,6 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
                     layout_modifier = 'G'
                 # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
             if layout_modifier == 'N' and is_bad_split and not may_not_fit_buffer:
-                logger.info(f"{layout_modifier} {scores[0] >= score_container} {may_not_fit_buffer}")
                 cwd = (base_box_wd,)
                 scores[0] = score_container
                 layout_modifier = 'S'
