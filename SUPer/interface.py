@@ -558,13 +558,11 @@ class EpochRenderer(mp.Process):
     def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
         subgroup = ectx.events
         prefix = f"W{self.iid}: " if __class__.__threaded else ""
-        logger.info(prefix + f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s):")
+        logger.info(prefix + f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s), {len(ectx.windows)} window(s).")
 
         if logger.level <= 10:
             for w_id, wd in enumerate(ectx.windows):
                 logger.debug(f"Window {w_id}: X={wd.x+ectx.box.x}, Y={wd.y+ectx.box.y}, W={wd.dx}, H={wd.dy}")
-        else:
-            logger.info(prefix + f" => Screen layout: {len(ectx.windows)} window(s), processing...")
 
         wds_analyzer = WindowsAnalyzer(ectx.windows, ectx.events, ectx.box, self.bdn, pcs_id=pcs_id, **self.kwargs)
         new_epoch, final_ds, pcs_id = wds_analyzer.analyze()
