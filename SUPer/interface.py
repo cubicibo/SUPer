@@ -114,22 +114,23 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
                     scores[0] = scores[1]
 
             base_box = Box.from_coords(*leng.get_raw_container())
+            base_box_wd = Box(0, base_box.dy, 0, base_box.dx)
             score_container = decode_duration_base((base_box,), container.area)
-            is_bad_split = scores[0] >= max(1/PGDecoder.FREQ, score_container-5/PGDecoder.FREQ)
+            is_bad_split = scores[0] >= max(1/PGDecoder.FREQ, score_container-10/PGDecoder.FREQ)
             #coded object buffer can fit at most 16 ODS: (0xFFFF-0xFFE4) + 15*(0xFFFF-0xFFEB) = 327
             #note: technically we need to also consider the 2*height line-endings bytes, but let's assume there's *some* compression
             may_not_fit_buffer = any(map(lambda b: b.area >= (1 << 20)-328, cwd))
-            is_greedysplit_worthwile = score_container*0.85 < scores[0] or may_not_fit_buffer
+            is_greedysplit_worthwile = (score_container*0.85 < scores[0] and base_box_wd.area > 125000) or may_not_fit_buffer
             old_score = scores[0]
 
             #With greedy mode, anytime we're dealing with very big objects we abuse the 1/2 1/2. This also prevents coded buffer overflow.
             layout_modifier = 'N'
             if (preset == LayoutPreset.GREEDY or is_bad_split) and is_greedysplit_worthwile:
                 cx, cy = (1, 0.5)
-                box1 = Box(base_box.y, int(round(cy*base_box.dy)), base_box.x, int(round(base_box.dx*cx)))
-                box2 = Box.from_coords(base_box.x, box1.y2, base_box.x2, base_box.y2)
-                assert base_box == (_union_box := Box.union(box1, box2)) and base_box.area == _union_box.area
-                assert abs(1-box1.area/box2.area) < 8e-2
+                box1 = Box(0, int(round(cy*base_box.dy)), 0, int(round(base_box.dx*cx)))
+                box2 = Box.from_coords(0, box1.y2, base_box.dx, base_box.dy)
+                assert base_box.area == Box.union(box1, box2).area
+                assert abs(1-box1.area/box2.area) < 1e-1
 
                 greedy_wds = (box1, box2)
                 new_score = decode_duration_base(greedy_wds, container.area)
@@ -138,14 +139,15 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
                     scores[0] = new_score
                     layout_modifier = 'G'
                 # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
-            if (layout_modifier == 'N' or scores[0] >= score_container) and not may_not_fit_buffer:
-                cwd = (base_box,)
+            if layout_modifier == 'N' and is_bad_split and not may_not_fit_buffer:
+                logger.info(f"{layout_modifier} {scores[0] >= score_container} {may_not_fit_buffer}")
+                cwd = (base_box_wd,)
                 scores[0] = score_container
                 layout_modifier = 'S'
 
             pts_out = TC.tc2pts(ev.tc_out, bdn.fps)
             if pts_out + scores[0] + 1e-8 < TC.tc2pts(running_ev[0].tc_in, bdn.fps):
-                logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with p={preset}:b={is_bad_split}:g={is_greedysplit_worthwile}.")
+                logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with b={is_bad_split}:g={is_greedysplit_worthwile}, {old_score:.03f}->{scores[0]:.03f}.")
                 ectx.append(EpochContext(cbox, cwd, running_ev, pts_out))
                 running_ev = []
                 leng.reset()
