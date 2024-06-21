@@ -24,9 +24,10 @@ import signal
 import numpy as np
 import multiprocessing as mp
 
-from typing import Any, Generator, Optional, NoReturn
+from typing import Any, Generator, Optional, NoReturn, Union
 from itertools import chain
 from functools import partial
+from enum import IntEnum, auto as eauto
 
 from scenaristream import EsMuiStream
 from brule import LayoutEngine
@@ -39,6 +40,10 @@ from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext
 from .render2 import GroupingEngine, WindowsAnalyzer
 
+class LayoutPreset(IntEnum):
+    SAFE   = 0
+    NORMAL = 1
+    GREEDY = 2
 #%%
 logger = LogFacility.get_logger('SUPer')
 
@@ -58,12 +63,21 @@ def _pool_worker_init():
         signal.signal(signal.SIGINT, sig_int)
     #else, do nothing
 
-def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML) -> list[EpochContext]:
+def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[LayoutPreset, int] = LayoutPreset.GREEDY) -> list[EpochContext]:
+    preset = LayoutPreset(preset)
     width, height = bdn.format.value
     container = Box.from_coords(0, 0, width, height)
 
     leng = LayoutEngine((width, height))
     ectx = []
+
+    def decode_duration_base(cwdo, container_area) -> float:
+        dd = PGDecoder.copy_gp_duration(container_area)
+        t_dec = 0
+        for wd in cwdo:
+            t_dec += PGDecoder.decode_obj_duration(wd.area)
+            dd = max(t_dec, dd) + PGDecoder.copy_gp_duration(wd.area)
+        return dd
 
     running_ev = []
     assert len(events)
@@ -89,18 +103,49 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML) -> list[EpochCo
 
             scores = []
             for cwdo in (cwd, reversed(cwd)):
-                dd = PGDecoder.copy_gp_duration(container.area)
-                t_dec = 0
-                for wd in cwdo:
-                    t_dec += PGDecoder.decode_obj_duration(wd.area)
-                    dd = max(t_dec, dd) + PGDecoder.copy_gp_duration(wd.area)
-                scores.append(dd)
-            if len(scores) > 1 and scores[0] > scores[1]:
-                cwd = tuple(reversed(cwd))
-                scores[0] = scores[1]
+                scores.append(decode_duration_base(cwdo, container.area))
+
+            if len(scores) > 1:
+                flip_results = (preset == LayoutPreset.SAFE and scores[0] < scores[1])
+                flip_results = flip_results or (preset != LayoutPreset.SAFE and scores[0] > scores[1])
+
+                if flip_results:
+                    cwd = tuple(reversed(cwd))
+                    scores[0] = scores[1]
+
+            base_box = Box.from_coords(*leng.get_raw_container())
+            score_container = decode_duration_base((base_box,), container.area)
+            is_bad_split = scores[0] >= max(1/PGDecoder.FREQ, score_container-5/PGDecoder.FREQ)
+            #coded object buffer can fit at most 16 ODS: (0xFFFF-0xFFE4) + 15*(0xFFFF-0xFFEB) = 327
+            #note: technically we need to also consider the 2*height line-endings bytes, but let's assume there's *some* compression
+            may_not_fit_buffer = any(map(lambda b: b.area >= (1 << 20)-328, cwd))
+            is_greedysplit_worthwile = score_container*0.85 < scores[0] or may_not_fit_buffer
+            old_score = scores[0]
+
+            #With greedy mode, anytime we're dealing with very big objects we abuse the 1/2 1/2. This also prevents coded buffer overflow.
+            layout_modifier = 'N'
+            if (preset == LayoutPreset.GREEDY or is_bad_split) and is_greedysplit_worthwile:
+                cx, cy = (1, 0.5)
+                box1 = Box(base_box.y, int(round(cy*base_box.dy)), base_box.x, int(round(base_box.dx*cx)))
+                box2 = Box.from_coords(base_box.x, box1.y2, base_box.x2, base_box.y2)
+                assert base_box == (_union_box := Box.union(box1, box2)) and base_box.area == _union_box.area
+                assert abs(1-box1.area/box2.area) < 8e-2
+
+                greedy_wds = (box1, box2)
+                new_score = decode_duration_base(greedy_wds, container.area)
+                if scores[0] > new_score:
+                    cwd = greedy_wds
+                    scores[0] = new_score
+                    layout_modifier = 'G'
+                # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
+            if (layout_modifier == 'N' or scores[0] >= score_container) and not may_not_fit_buffer:
+                cwd = (base_box,)
+                scores[0] = score_container
+                layout_modifier = 'S'
 
             pts_out = TC.tc2pts(ev.tc_out, bdn.fps)
-            if pts_out + scores[0] < TC.tc2pts(running_ev[0].tc_in, bdn.fps):
+            if pts_out + scores[0] + 1e-8 < TC.tc2pts(running_ev[0].tc_in, bdn.fps):
+                logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with p={preset}:b={is_bad_split}:g={is_greedysplit_worthwile}.")
                 ectx.append(EpochContext(cbox, cwd, running_ev, pts_out))
                 running_ev = []
                 leng.reset()
@@ -148,6 +193,10 @@ class BDNRender:
         return bdn
 
     def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
+        layout_mode = self.kwargs.get('ini_opts', {}).get('super_cfg', {}).get('layout_mode', LayoutPreset.NORMAL)
+        layout_mode = int(layout_mode) if isinstance(layout_mode, LayoutPreset) or str.isnumeric(layout_mode) else LayoutPreset.NORMAL
+        logger.debug(f"Layout engine preset: {layout_mode}.")
+
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
 
@@ -155,7 +204,7 @@ class BDNRender:
         pbar.set_description("Finding epochs and layouts", True)
         ####
         if self.kwargs['threads'] > 1:
-            p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn)
+            p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn, preset=layout_mode)
             lectx = []
             with mp.Pool(self.kwargs['threads'], _pool_worker_init) as mpp:
                 for r in mpp.imap_unordered(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
@@ -165,7 +214,7 @@ class BDNRender:
         else:
             lectx = []
             for grp in bdn.groups(epochstart_dd_fn(screen_area)):
-                lectx += _find_epochs_layouts(grp, bdn)
+                lectx += _find_epochs_layouts(grp, bdn, preset=layout_mode)
                 pbar.update(len(lectx[-1].events))
         pbar.update(len(bdn.events)-pbar.n+1)
 
@@ -185,7 +234,7 @@ class BDNRender:
         final_ds = None
         logger.debug("Finding all epochs and their screen layout (this can take a while)...")
         epochs_ctx = self.find_all_layouts(bdn)
-        logger.info(f"Identified {len(epochs_ctx)} epochs.")
+        logger.info(f"Identified {len(epochs_ctx)} epochs to render.")
 
         for ectx in epochs_ctx:
             if final_ds is not None:
@@ -487,7 +536,7 @@ class EpochRenderer(mp.Process):
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
 
-        libs_params = self.kwargs.pop('ini_opts', {})
+        libs_params = self.kwargs.get('ini_opts', {})
         logger.debug(f"INI parameters: {libs_params}")
         if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) >= Quantizer.Libs.PILIQ:
             if not Quantizer.init_piliq(**libs_params.get('quant', {})):
@@ -509,13 +558,11 @@ class EpochRenderer(mp.Process):
     def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
         subgroup = ectx.events
         prefix = f"W{self.iid}: " if __class__.__threaded else ""
-        logger.info(prefix + f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s):")
+        logger.info(prefix + f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s), {len(ectx.windows)} window(s).")
 
         if logger.level <= 10:
             for w_id, wd in enumerate(ectx.windows):
                 logger.debug(f"Window {w_id}: X={wd.x+ectx.box.x}, Y={wd.y+ectx.box.y}, W={wd.dx}, H={wd.dy}")
-        else:
-            logger.info(prefix + f" => Screen layout: {len(ectx.windows)} window(s), processing...")
 
         wds_analyzer = WindowsAnalyzer(ectx.windows, ectx.events, ectx.box, self.bdn, pcs_id=pcs_id, **self.kwargs)
         new_epoch, final_ds, pcs_id = wds_analyzer.analyze()
