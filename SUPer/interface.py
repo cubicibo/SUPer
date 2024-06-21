@@ -106,8 +106,7 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
                 scores.append(decode_duration_base(cwdo, container.area))
 
             if len(scores) > 1:
-                flip_results = False
-                flip_results = flip_results or (preset == LayoutPreset.SAFE and scores[0] < scores[1])
+                flip_results = (preset == LayoutPreset.SAFE and scores[0] < scores[1])
                 flip_results = flip_results or (preset != LayoutPreset.SAFE and scores[0] > scores[1])
 
                 if flip_results:
@@ -194,6 +193,10 @@ class BDNRender:
         return bdn
 
     def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
+        layout_mode = self.kwargs.get('ini_opts', {}).get('super_cfg', {}).get('layout_mode', LayoutPreset.NORMAL)
+        layout_mode = int(layout_mode) if isinstance(layout_mode, LayoutPreset) or str.isnumeric(layout_mode) else LayoutPreset.NORMAL
+        logger.debug(f"Layout engine preset: {layout_mode}.")
+
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
 
@@ -201,7 +204,7 @@ class BDNRender:
         pbar.set_description("Finding epochs and layouts", True)
         ####
         if self.kwargs['threads'] > 1:
-            p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn)
+            p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn, preset=layout_mode)
             lectx = []
             with mp.Pool(self.kwargs['threads'], _pool_worker_init) as mpp:
                 for r in mpp.imap_unordered(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
@@ -211,7 +214,7 @@ class BDNRender:
         else:
             lectx = []
             for grp in bdn.groups(epochstart_dd_fn(screen_area)):
-                lectx += _find_epochs_layouts(grp, bdn)
+                lectx += _find_epochs_layouts(grp, bdn, preset=layout_mode)
                 pbar.update(len(lectx[-1].events))
         pbar.update(len(bdn.events)-pbar.n+1)
 
@@ -231,7 +234,7 @@ class BDNRender:
         final_ds = None
         logger.debug("Finding all epochs and their screen layout (this can take a while)...")
         epochs_ctx = self.find_all_layouts(bdn)
-        logger.info(f"Identified {len(epochs_ctx)} epochs.")
+        logger.info(f"Identified {len(epochs_ctx)} epochs to render.")
 
         for ectx in epochs_ctx:
             if final_ds is not None:
@@ -533,7 +536,7 @@ class EpochRenderer(mp.Process):
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
 
-        libs_params = self.kwargs.pop('ini_opts', {})
+        libs_params = self.kwargs.get('ini_opts', {})
         logger.debug(f"INI parameters: {libs_params}")
         if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) >= Quantizer.Libs.PILIQ:
             if not Quantizer.init_piliq(**libs_params.get('quant', {})):
