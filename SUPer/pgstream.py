@@ -186,12 +186,14 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
     for ke, epoch in enumerate(epochs):
         windows = {}
         ods_vn = {}
+        ods_hash = {}
         ods_filled = set()
         pds_vn = [-1] * 8
         pals = [Palette() for _ in range(8)]
         buffer = PGObjectBuffer()
 
-        compliant &= bool(epoch[0].pcs.composition_state & epoch[0].pcs.CompositionState.EPOCH_START)
+        compliant &= bool(epoch[0].pcs.composition_state & PCS.CompositionState.EPOCH_START)
+        #compliant &= not any(filter(lambda ds: ds.pcs.composition_state & PCS.CompositionState.EPOCH_START, epoch[1:]))
 
         if epoch[0].wds:
             for wd in epoch[0].wds.windows:
@@ -208,9 +210,6 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                 logger.warning(f"Two displaysets at {to_tc(current_pts)} (internal rendering error?)")
 
             for ks, seg in enumerate(ds.segments):
-                if (seg.tpts - seg.tdts) & ts_mask >= PGDecoder.FREQ:
-                    logger.warning(f"Too large PTS-DTS difference for seg._type at {to_tc(current_pts)}.")
-
                 if isinstance(seg, PCS):
                     if seg.composition_n != (prev_pcs_id + 1) & 0xFFFF and seg.composition_state != PCS.CompositionState.EPOCH_START:
                         logger.warning(f"Displayset does not increment composition number normally at {to_tc(current_pts)}.")
@@ -253,6 +252,8 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                         ods_data = bytearray()
                         ods_width = seg.width
                         ods_height = seg.height
+                        ods_object_id = seg.o_id
+                        ods_object_vn = seg.o_vn
                         if 8 > min(ods_width, ods_height) or 4096 < max(ods_width, ods_height):
                             logger.error(f"Illegal object dimensions at {to_tc(current_pts)}, object id={seg.o_id}: {ods_width}x{ods_height}.")
                             compliant = False
@@ -261,26 +262,33 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                             if not buffer.allocate_id(seg.o_id, seg.width, seg.height):
                                 logger.error(f"Object buffer overflow (not enough memory for all object slots) at {to_tc(current_pts)}.")
                                 compliant = False
-                            ods_vn[seg.o_id] = seg.o_vn
                         elif slot.shape != (seg.width, seg.height):
                             logger.error(f"Object-slot {seg.o_id} dimensions mismatch. Slot: {slot.shape}, object: {(seg.width, seg.height)} at {to_tc(current_pts)}.")
                             compliant = False
-                        elif ods_vn[seg.o_id] == seg.o_vn:
-                            logger.warning(f"Object version not incremented, will be discarded by decoder. ODS {seg.o_id} at {to_tc(current_pts)}.")
-                        ods_vn[seg.o_id] = seg.o_vn
                         if cumulated_ods_size > 0:
                             logger.error("A past ODS was not properly terminated! Stream is critically corrupted!")
                             compliant = False
+                    elif ods_object_id != seg.o_id or ods_object_vn != seg.o_vn:
+                        logger.error("Object definition header mismatch in a chain of segments! Stream is critically corrupted!")
+                        compliant = False
 
                     cumulated_ods_size += len(bytes(seg))
                     ods_data += seg.data
 
                     if seg.flags & ODS.ODSFlags.SEQUENCE_LAST:
+                        data_hash = hash(bytes(ods_data))
                         if cumulated_ods_size >= PGDecoder.CODED_BUF_SIZE:
                             logger.warning(f"Object size >1 MiB at {to_tc(current_pts)} is unsupported by oldest decoders. UHD BD will be OK.")
                             warnings += 1
                         cumulated_ods_size = 0
+
+                        if seg.o_id in ods_filled and ods_hash.get(seg.o_id, None) != data_hash:
+                            if ods_vn[seg.o_id] == seg.o_vn:
+                                logger.warning(f"Object {seg.o_id} at {to_tc(current_pts)} differs from previous but does not increment version number. It will be discarded.")
                         ods_filled.add(seg.o_id)
+                        ods_vn[seg.o_id] = seg.o_vn
+                        ods_hash[seg.o_id] = data_hash
+
                         #Hypothesis: the graphic controller processes one RLE command (byte) per Rd tick
                         # To avoid decode time > object write time, RLE line must be smaller or equal to width + marker.
                         try:
@@ -362,6 +370,13 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
             ds_comply = (ds.pcs.tdts - prev_dts) & PTS_MASK <= PTS_DIFF_BOUND
             ds_comply &= (ds.pcs.tpts - prev_pts) & PTS_MASK <= PTS_DIFF_BOUND
 
+            #PCS PTS is larger than everything else
+            ds_comply &= all(map(lambda s: (ds.pcs.tpts - s.tpts) & PTS_MASK <= PTS_DIFF_BOUND, ds.segments))
+            #PCS DTS is smaller than everything else
+            ds_comply &= all(map(lambda s: (s.tdts - ds.pcs.tdts) & PTS_MASK <= PTS_DIFF_BOUND, ds.segments))
+            #All PTS should be larger than the PCS DTS
+            ds_comply &= all(map(lambda s: (s.tpts - ds.pcs.tdts) & PTS_MASK <= PTS_DIFF_BOUND, ds.segments))
+
             if ds.wds:
                 # WDS action requires pts_delta margin from previous DS
                 diff = (ds.pcs.tpts - prev_pts) & PTS_MASK
@@ -370,11 +385,14 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
                 ds_comply &= (ds.pcs.tpts - ds.wds.tpts) & PTS_MASK <= pts_delta
                 #WDS decoding should be realistic (epoch start is worst case)
                 ds_comply &= (ds.wds.tpts - ds.wds.tdts) & PTS_MASK <= wipe_duration*2
+                ds_comply &= (ds.wds.tpts != ds.wds.tdts)
             else:
                 # Palette update and others requires one frame duration as margin
                 ds_comply &= (ds.pcs.tpts - prev_pts) & PTS_MASK >= frame_duration
             for pds in ds.pds:
                 ds_comply &= pds.tpts == pds.tdts
+            for ods in ds.ods:
+                ds_comply &= ods.tpts != ods.tdts
             for seg in ds:
                 diff = (seg.tdts - prev_dts) & PTS_MASK
                 ds_comply &= diff >= 0 and diff < PTS_DIFF_BOUND
