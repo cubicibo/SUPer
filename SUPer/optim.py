@@ -256,13 +256,13 @@ class Optimise:
         :return: bitmap, sequence of palette update to obtain the said input animation.
         """
 
-        sequences = []
+        sequences = np.zeros((len(events), *events[0].size[::-1], 4), np.uint8)
         single_bitmap = len(events) == 1
-        for event in events:
+        for ke, event in enumerate(events):
             img, clut = Preprocess.quantize(event, colors, single_bitmap=single_bitmap, **kwargs)
-            sequences.append(clut[img])
+            sequences[ke, :, :, :] = clut[img]
+        sequences = np.moveaxis(sequences, 0, 2)
 
-        sequences = np.stack(sequences, axis=2).astype(np.uint8)
         #catalog the sequences
         seq_occ: dict[int, tuple[int, npt.NDArray[np.uint8]]] = {}
         for i in range(sequences.shape[0]):
@@ -282,7 +282,7 @@ class Optimise:
         norm_mat = np.ndarray((colors, *sequences[i,j,:,:].shape[0:2]))
 
         #Match sequences to the most common ones (N[colors] kept)
-        remap = {}
+        remap: dict[int, int] = {}
         for cnt, v in enumerate(seq_sorted.values()):
             if cnt < colors:
                 norm_mat[cnt, :, :] = v
@@ -294,6 +294,7 @@ class Optimise:
 
                 best_fit = np.abs(id1 - id2[:, None])
                 remap[cnt] = id1[best_fit.argmin() % id1.size]
+        del norm_mat
 
         bitmap = np.zeros(sequences.shape[0:2], dtype=np.uint8)
         for i in range(sequences.shape[0]):
@@ -304,8 +305,8 @@ class Optimise:
                     bitmap[i, j] = seq_ids[hsh]
                 else:
                     bitmap[i, j] = remap[seq_ids[hsh]]
-        #retun bitmap and the color sequence.
-        return bitmap, np.asarray(list(seq_sorted.values()), dtype=np.uint8)[:colors]
+        #retun bitmap and the color sequence (copy only the kept sequences)
+        return bitmap, np.asarray([seq for seq, _ in zip(seq_sorted.values(), range(colors))], dtype=np.uint8)
 
 
     @classmethod
@@ -346,7 +347,7 @@ class Optimise:
                 bitmap[bitmap < transparent_id] += first_index
                 bitmap[bitmap > transparent_id] += (first_index - 1)
                 bitmap[tsp_mask] = 0xFF
-            logger.ldebug(f"Remapped fully transparent ID {transparent_id:02X} to FF.")
+            #logger.ldebug(f"Remapped fully transparent ID {transparent_id:02X} to FF.")
             cluts = np.delete(cluts, [transparent_id], axis=0)
             palettes = cls.diff_cluts(cluts, **kwargs_diff)
 

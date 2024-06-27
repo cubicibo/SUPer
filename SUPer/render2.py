@@ -263,6 +263,8 @@ class WindowsAnalyzer:
                 if pgobj is not None:
                     logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
                     pgobjs[wid].append(pgobj)
+            if event is not None:
+                event.unload()
         pbar.clear()
         pgobjs_proc = [objs.copy() for objs in pgobjs]
 
@@ -677,6 +679,7 @@ class WindowsAnalyzer:
 
                 o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, wd_bitmap.shape[1], wd_bitmap.shape[0], ods_data, pts=c_pts)
                 ods_reg[oid] += 1
+
             if id_skipped is not None:
                 assert isinstance(normal_case_refresh, list)
                 #The END segment tells the decoder to use whatever it has in the buffer
@@ -931,6 +934,8 @@ class WindowsAnalyzer:
                         displaysets.append(nds)
                     ####if nodes[k-1
                 ####if t_diff >
+            for ev in self.events[i:k]:
+                ev.unload()
             i = k
             last_cobjs = cobjs
             pbar.n = i
@@ -1145,7 +1150,6 @@ class WindowAnalyzer:
         return score, cross_percentage
 
     def analyze(self):
-        bitmaps = []
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
         unseen = event_cnt = 0
@@ -1157,14 +1161,13 @@ class WindowAnalyzer:
             pgo_yield = None
 
             if rgba is None:
-                if len(bitmaps):
+                if len(mask):
                     bbox = alpha_compo.getbbox()
                     if unseen > 0:
                         mask = mask[:-unseen]
-                        bitmaps = bitmaps[:-unseen]
                         containers = containers[:-unseen]
                     pgo_yield = ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
-                    bitmaps, mask, containers = [], [], []
+                    mask, containers = [], []
                     continue
                 else:
                     break
@@ -1185,7 +1188,6 @@ class WindowAnalyzer:
                 thr_score = min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333*(1.0-self.ssim_offset))
                 logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}")
                 if score >= thr_score:
-                    bitmaps.append(rgba)
                     alpha_compo.alpha_composite(rgba_i)
                     mask.append(has_content)
                     containers.append(event_container)
@@ -1194,14 +1196,12 @@ class WindowAnalyzer:
                     bbox = alpha_compo.getbbox()
                     if unseen > 0:
                         mask = mask[:-unseen]
-                        bitmaps = bitmaps[:-unseen]
                         containers = containers[:-unseen]
                     pgo_yield = ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
 
                     #new bitmap
                     mask = [has_content]
                     containers = [event_container]
-                    bitmaps = [rgba]
                     f_start = event_cnt
                     alpha_compo = Image.fromarray(rgba.copy())
                 unseen = (not has_content)*(unseen + 1)
@@ -1371,7 +1371,7 @@ class DSNode:
                 copy_dur = np.ceil(w*h*PGDecoder.FREQ/PGDecoder.RC)
                 decode_duration = max(decode_duration, t_decoding) + copy_dur
 
-        #Prevent PTS(WDS) = PTS(PCS)
+        #Prevent PTS(WDS) = DTS(WDS) (a WDS shall have a DTS and it shall differ from the PTS)
         decode_duration = max(decode_duration, sum(map(lambda w: np.ceil(PGDecoder.FREQ*w[0]*w[1]/PGDecoder.RC), windows.values())) + 1)
 
         mask = ((1 << 32) - 1)

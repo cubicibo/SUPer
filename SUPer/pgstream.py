@@ -193,7 +193,6 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
         buffer = PGObjectBuffer()
 
         compliant &= bool(epoch[0].pcs.composition_state & PCS.CompositionState.EPOCH_START)
-        #compliant &= not any(filter(lambda ds: ds.pcs.composition_state & PCS.CompositionState.EPOCH_START, epoch[1:]))
 
         if epoch[0].wds:
             for wd in epoch[0].wds.windows:
@@ -370,13 +369,6 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
             ds_comply = (ds.pcs.tdts - prev_dts) & PTS_MASK <= PTS_DIFF_BOUND
             ds_comply &= (ds.pcs.tpts - prev_pts) & PTS_MASK <= PTS_DIFF_BOUND
 
-            #PCS PTS is larger than everything else
-            ds_comply &= all(map(lambda s: (ds.pcs.tpts - s.tpts) & PTS_MASK <= PTS_DIFF_BOUND, ds.segments))
-            #PCS DTS is smaller than everything else
-            ds_comply &= all(map(lambda s: (s.tdts - ds.pcs.tdts) & PTS_MASK <= PTS_DIFF_BOUND, ds.segments))
-            #All PTS should be larger than the PCS DTS
-            ds_comply &= all(map(lambda s: (s.tpts - ds.pcs.tdts) & PTS_MASK <= PTS_DIFF_BOUND, ds.segments))
-
             if ds.wds:
                 # WDS action requires pts_delta margin from previous DS
                 diff = (ds.pcs.tpts - prev_pts) & PTS_MASK
@@ -394,6 +386,15 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
             for ods in ds.ods:
                 ds_comply &= ods.tpts != ods.tdts
             for seg in ds:
+                #All PTS shall be smaller than the PCS PTS
+                ds_comply &= (ds.pcs.tpts - seg.tpts) & PTS_MASK <= PTS_DIFF_BOUND
+                #All DTS shall be larger or equal to the PCS DTS
+                ds_comply &= (seg.tdts - ds.pcs.tdts) & PTS_MASK <= PTS_DIFF_BOUND
+                #All PTS shall be larger or equal to the PCS DTS
+                ds_comply &= (seg.tpts - ds.pcs.tdts) & PTS_MASK <= PTS_DIFF_BOUND
+                #All PTS shall be larger or equal to the DTS
+                ds_comply &= (seg.tpts - seg.tdts) & PTS_MASK <= PTS_DIFF_BOUND
+
                 diff = (seg.tdts - prev_dts) & PTS_MASK
                 ds_comply &= diff >= 0 and diff < PTS_DIFF_BOUND
                 #Segment lifetime in decoder should be less than one second
