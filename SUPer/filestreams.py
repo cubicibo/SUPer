@@ -331,16 +331,21 @@ class BDNXMLEvent(BaseEvent):
 def remove_dupes(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
     output_events = [events[0]]
     for i in range(0, len(events)-1):
-        is_diff = events[i+1].img.size != events[i].img.size
-        is_diff = is_diff or np.any(np.asarray(events[i+1].img) - np.asarray(events[i].img))
+        is_diff = events[i+1].pos != events[i].pos
+        is_diff = is_diff or events[i+1].shape != events[i].shape
+        #only diff the images if they have the same size and position.
+        is_diff = is_diff or (not np.array_equal(np.asarray(events[i+1].img), np.asarray(events[i].img)))
 
+        events[i].unload()
         if is_diff or output_events[-1].tc_out != events[i+1].tc_in:
             output_events.append(events[i+1])
         else:
             output_events[-1].set_tc_out(events[i+1].tc_out)
+    events[-1].unload()
     assert output_events[0].tc_in == events[0].tc_in and output_events[-1].tc_out == events[-1].tc_out
     logger.debug(f"Removed {len(events) - len(output_events)} duplicate event(s).")
     return output_events
+####
 
 class SeqIO(ABC):
     """

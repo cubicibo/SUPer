@@ -347,7 +347,7 @@ class BDNRender:
         ####while
 
         # Orchestrator is done distributing epochs, wait for everyone to finish
-        logger.info("Done distributing events, waiting for jobs to finish.")
+        logger.info("Done distributing epochs, waiting for renderers to finish.")
         time.sleep(0.2)
 
         while any(busy_flags.values()):
@@ -367,7 +367,7 @@ class BDNRender:
                     free_renderer.close()
             time.sleep(0.2)
 
-        logger.info("All jobs finished, cleaning-up processes.")
+        logger.info("All jobs finished, cleaning-up.")
         time.sleep(0.01)
         for renderer in renderers:
             try: renderer.terminate()
@@ -557,9 +557,9 @@ class EpochRenderer(mp.Process):
     ####
 
     def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
-        subgroup = ectx.events
+        subgroup = remove_dupes(ectx.events)
         prefix = f"W{self.iid}: " if __class__.__threaded else ""
-        logger.info(prefix + f"EPOCH {subgroup[0].tc_in}->{subgroup[-1].tc_out}, {len(subgroup)}->{len(subgroup := remove_dupes(subgroup))} event(s), {len(ectx.windows)} window(s).")
+        logger.info(prefix + f"Encoding epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out} with {len(subgroup)} event(s), {len(ectx.windows)} window(s).")
 
         if logger.level <= 10:
             for w_id, wd in enumerate(ectx.windows):
@@ -568,7 +568,7 @@ class EpochRenderer(mp.Process):
         wds_analyzer = WindowsAnalyzer(ectx.windows, subgroup, ectx.box, self.bdn, pcs_id=pcs_id, **self.kwargs)
         new_epoch, final_ds, pcs_id = wds_analyzer.analyze()
 
-        logger.info(prefix + f" => optimised as {len(new_epoch)} display sets.")
+        logger.debug(prefix + f" => optimised as {len(new_epoch)} display sets.")
         return new_epoch, final_ds, pcs_id
 
     def is_available(self) -> bool:

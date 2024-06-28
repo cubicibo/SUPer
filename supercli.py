@@ -34,7 +34,6 @@ from datetime import timedelta
 
 #%% Main code
 if __name__ == '__main__':
-    print()
     logger = LogFacility.get_logger('SUPer')
 
     def exit_msg(msg: str, is_error: bool = True) -> NoReturn:
@@ -124,18 +123,8 @@ if __name__ == '__main__':
         logger.warning("PES output requested, adding --palette to command.")
         args.palette = True
 
-    print("\n @@@@@@@   &@@@  @@@@   @@@@@@@\n"\
-          "@@@B &@@@  @@@@  @@@@  @@@@  @@@\n"\
-          "@@@@       @@@@  @@@@  @@@@  @@@      Special Thanks to:\n"\
-          "J&@@@@&G   @@@@  @@@@  @@@@&@@@               Masstock\n"\
-          "    &@@@@  @@@@  @@@@  @@@@                   NLScavenger\n"\
-          "@@@P B@@@  @@@@  @@@&  &@@@                   Prince 7\n"\
-          "@@@&!&@@@  B@@@G#&YY5  YJ5#                   Emulgator\n"\
-          " G&&@&&B    5#&@B  @@PB@&    @@&@             Alllen\n"\
-          "                  @@@ ,@@@  @@@&G5\n"\
-          "                  @@@BP€    @@@\n"\
-          " (c) cubicibo     @@@       @@@\n"\
-          "                   @@YY@@   @@@\n")
+    print(f"SUPer version {LIB_VERSION} - (c) 2024 cubicibo")
+    print("HDMV PGS encoder, with support from Masstock, Alllen and Emulgator.")
     parameters = {}
 
     if (config_file := Path('config.ini')).exists():

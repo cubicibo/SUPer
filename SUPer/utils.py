@@ -483,7 +483,7 @@ class LogFacility:
 
         if not logger.hasHandlers():
             handler = logging.StreamHandler()
-            formatter = logging.Formatter(' %(name)s: %(levelname).4s : %(message)s'.format(name))
+            formatter = logging.Formatter(' %(name)s %(levelname).4s : %(message)s'.format(name))
             handler.setFormatter(formatter)
             logger.addHandler(handler)
 

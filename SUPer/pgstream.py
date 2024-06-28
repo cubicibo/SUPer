@@ -136,7 +136,7 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
     logger.iinfo(f"Bitrate: AVG={avg_bitrate/(128*1024):.04f} Mbps, PEAK_1s={stats[2]:.03f} Mbps @ {leaky.stats.tsavg}.")
 
     f_log_fun = logger.iinfo if is_ok else logger.error
-    f_log_fun(f"Underflow margin (higher is better): AVG={stats[1]:.02f}%, MIN={stats[0]:.02f}% @ {leaky.stats.tsmin}")
+    f_log_fun(f"Target bitrate underflow margin (higher is better): AVG={stats[1]:.02f}%, MIN={stats[0]:.02f}% @ {leaky.stats.tsmin}")
     return is_ok
 ####
 #%%
@@ -276,8 +276,12 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
 
                     if seg.flags & ODS.ODSFlags.SEQUENCE_LAST:
                         data_hash = hash(bytes(ods_data))
-                        if cumulated_ods_size >= PGDecoder.CODED_BUF_SIZE:
-                            logger.warning(f"Object size >1 MiB at {to_tc(current_pts)} is unsupported by oldest decoders. UHD BD will be OK.")
+                        # +6 (PES header) +13 (Optional PES header), +1 (type) +2 (length) +2 (object_id) +1 (object_vn) +1 (flags) = 26
+                        # +13 (header(2) + PTS(4) + DTS(4) + type(1) + length(2)) +2 (object_id) +1 (object_vn) +1 (flags) = 17
+                        # The Coded Object Buffer can hold up to 1 MiB of raw PES data
+                        # This is roughly: "16 full PES packets" or "16 full b'PG' segments + 16*9 bytes"
+                        if cumulated_ods_size >= PGDecoder.CODED_BUF_SIZE-(16*9):
+                            logger.warning(f"Coded object size >1 MiB at {to_tc(current_pts)} is unsupported by old decoders. UHD BD will be OK.")
                             warnings += 1
                         cumulated_ods_size = 0
 
