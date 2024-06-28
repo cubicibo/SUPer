@@ -63,6 +63,65 @@ def _pool_worker_init():
         signal.signal(signal.SIGINT, sig_int)
     #else, do nothing
 
+def _decode_duration_base(cwdo, container_area) -> float:
+    dd = PGDecoder.copy_gp_duration(container_area)
+    t_dec = 0
+    for wd in cwdo:
+        t_dec += PGDecoder.decode_obj_duration(wd.area)
+        dd = max(t_dec, dd) + PGDecoder.copy_gp_duration(wd.area)
+    return dd
+
+def _find_modify_layout(leng: LayoutEngine, container: Box, preset: LayoutPreset):
+    cbox, w1, w2, is_vertical = leng.get_layout()
+    cbox, w1, w2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, w1, w2)))
+    cwd = (w1, w2) if w1 != w2 else (w1,)
+    cwd = GroupingEngine(cbox, container=container, n_groups=2).directional_pad(cwd, is_vertical)
+
+    scores = []
+    for cwdo in (cwd, reversed(cwd)):
+        scores.append(_decode_duration_base(cwdo, container.area))
+
+    if len(scores) > 1:
+        flip_results = (preset == LayoutPreset.SAFE and scores[0] < scores[1])
+        flip_results = flip_results or (preset != LayoutPreset.SAFE and scores[0] > scores[1])
+
+        if flip_results:
+            cwd = tuple(reversed(cwd))
+            scores[0] = scores[1]
+
+    base_box = Box.from_coords(*leng.get_raw_container())
+    base_box_wd = Box(0, base_box.dy, 0, base_box.dx)
+    score_container = _decode_duration_base((base_box,), container.area)
+    is_bad_split = scores[0] >= max(1/PGDecoder.FREQ, score_container-10/PGDecoder.FREQ)
+    #coded object buffer can fit at most 16 ODS: we need roughly +150 bytes in the buffer
+    #note: technically we need to also consider the 2*height line-endings bytes, but let's assume there's *some* compression
+    may_not_fit_buffer = any(map(lambda b: b.area >= (1 << 20)-150, cwd))
+    is_greedysplit_worthwile = (score_container*0.85 < scores[0] and base_box_wd.area > 125000) or may_not_fit_buffer
+    old_score = scores[0]
+
+    #With greedy mode, anytime we're dealing with very big objects we abuse the 1/2 1/2. This also prevents coded buffer overflow.
+    layout_modifier = 'N'
+    if (preset == LayoutPreset.GREEDY or is_bad_split) and is_greedysplit_worthwile:
+        cx, cy = (1, 0.5)
+        box1 = Box(0, int(round(cy*base_box.dy)), 0, int(round(base_box.dx*cx)))
+        box2 = Box.from_coords(0, box1.y2, base_box.dx, base_box.dy)
+        assert base_box.area == Box.union(box1, box2).area
+        assert abs(1-box1.area/box2.area) < 1e-1
+
+        greedy_wds = (box1, box2)
+        new_score = _decode_duration_base(greedy_wds, container.area)
+        if scores[0] > new_score:
+            cwd = greedy_wds
+            scores[0] = new_score
+            layout_modifier = 'G'
+        # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
+    if layout_modifier == 'N' and is_bad_split and not may_not_fit_buffer:
+        cwd = (base_box_wd,)
+        cbox = base_box
+        scores[0] = score_container
+        layout_modifier = 'S'
+    return (cbox, cwd, layout_modifier, is_bad_split, is_greedysplit_worthwile, scores, old_score)
+
 def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[LayoutPreset, int] = LayoutPreset.GREEDY) -> list[EpochContext]:
     preset = LayoutPreset(preset)
     width, height = bdn.format.value
@@ -70,14 +129,6 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
 
     leng = LayoutEngine((width, height))
     ectx = []
-
-    def decode_duration_base(cwdo, container_area) -> float:
-        dd = PGDecoder.copy_gp_duration(container_area)
-        t_dec = 0
-        for wd in cwdo:
-            t_dec += PGDecoder.decode_obj_duration(wd.area)
-            dd = max(t_dec, dd) + PGDecoder.copy_gp_duration(wd.area)
-        return dd
 
     running_ev = []
     assert len(events)
@@ -96,55 +147,7 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
             continue
 
         if ev.tc_out != running_ev[0].tc_in:
-            cbox, w1, w2, is_vertical = leng.get_layout()
-            cbox, w1, w2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, w1, w2)))
-            cwd = (w1, w2) if w1 != w2 else (w1,)
-            cwd = GroupingEngine(cbox, container=container, n_groups=2).directional_pad(cwd, is_vertical)
-
-            scores = []
-            for cwdo in (cwd, reversed(cwd)):
-                scores.append(decode_duration_base(cwdo, container.area))
-
-            if len(scores) > 1:
-                flip_results = (preset == LayoutPreset.SAFE and scores[0] < scores[1])
-                flip_results = flip_results or (preset != LayoutPreset.SAFE and scores[0] > scores[1])
-
-                if flip_results:
-                    cwd = tuple(reversed(cwd))
-                    scores[0] = scores[1]
-
-            base_box = Box.from_coords(*leng.get_raw_container())
-            base_box_wd = Box(0, base_box.dy, 0, base_box.dx)
-            score_container = decode_duration_base((base_box,), container.area)
-            is_bad_split = scores[0] >= max(1/PGDecoder.FREQ, score_container-10/PGDecoder.FREQ)
-            #coded object buffer can fit at most 16 ODS: (0xFFFF-0xFFE4) + 15*(0xFFFF-0xFFEB) = 327
-            #note: technically we need to also consider the 2*height line-endings bytes, but let's assume there's *some* compression
-            may_not_fit_buffer = any(map(lambda b: b.area >= (1 << 20)-328, cwd))
-            is_greedysplit_worthwile = (score_container*0.85 < scores[0] and base_box_wd.area > 125000) or may_not_fit_buffer
-            old_score = scores[0]
-
-            #With greedy mode, anytime we're dealing with very big objects we abuse the 1/2 1/2. This also prevents coded buffer overflow.
-            layout_modifier = 'N'
-            if (preset == LayoutPreset.GREEDY or is_bad_split) and is_greedysplit_worthwile:
-                cx, cy = (1, 0.5)
-                box1 = Box(0, int(round(cy*base_box.dy)), 0, int(round(base_box.dx*cx)))
-                box2 = Box.from_coords(0, box1.y2, base_box.dx, base_box.dy)
-                assert base_box.area == Box.union(box1, box2).area
-                assert abs(1-box1.area/box2.area) < 1e-1
-
-                greedy_wds = (box1, box2)
-                new_score = decode_duration_base(greedy_wds, container.area)
-                if scores[0] > new_score:
-                    cwd = greedy_wds
-                    scores[0] = new_score
-                    layout_modifier = 'G'
-                # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
-            if layout_modifier == 'N' and is_bad_split and not may_not_fit_buffer:
-                cwd = (base_box_wd,)
-                cbox = base_box
-                scores[0] = score_container
-                layout_modifier = 'S'
-
+            cbox, cwd, layout_modifier, is_bad_split, is_greedysplit_worthwile, scores, old_score = _find_modify_layout(leng, container, preset)
             pts_out = TC.tc2pts(ev.tc_out, bdn.fps)
             if pts_out + scores[0] + 1e-8 < TC.tc2pts(running_ev[0].tc_in, bdn.fps):
                 logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with b={is_bad_split}:g={is_greedysplit_worthwile}, {old_score:.03f}->{scores[0]:.03f}.")
@@ -156,15 +159,14 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
         running_ev.insert(0, ev)
     ####for ev
     assert len(running_ev)
-    cbox, w1, w2, is_vertical = leng.get_layout()
-    leng.destroy()
+    cbox, cwd, layout_modifier, is_bad_split, is_greedysplit_worthwile, scores, old_score = _find_modify_layout(leng, container, preset)
 
-    cbox, w1, w2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, w1, w2)))
-    cwd = (w1, w2) if w1 != w2 else (w1,)
-    cwd = GroupingEngine(cbox, container=container, n_groups=2).directional_pad(cwd, is_vertical)
+    leng.destroy() #Done with the layout engine
+    logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with b={is_bad_split}:g={is_greedysplit_worthwile}, {old_score:.03f}->{scores[0]:.03f}.")
+
     ectx.append(EpochContext(cbox, cwd, running_ev, -np.inf))
     return ectx[::-1]
-
+####
 
 class BDNRender:
     def __init__(self, bdnf: str, kwargs: dict[str, Any], outfile: str) -> None:
@@ -197,7 +199,7 @@ class BDNRender:
     def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
         layout_mode = self.kwargs.get('ini_opts', {}).get('super_cfg', {}).get('layout_mode', LayoutPreset.NORMAL)
         layout_mode = int(layout_mode) if isinstance(layout_mode, LayoutPreset) or str.isnumeric(layout_mode) else LayoutPreset.NORMAL
-        logger.debug(f"Layout engine preset: {layout_mode}.")
+        logger.debug(f"Layout engine preset: {layout_mode}, with capabilities: {', '.join(LayoutEngine.get_capabilities())}.")
 
         screen_area = np.multiply(*bdn.format.value)
         epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
@@ -550,7 +552,6 @@ class EpochRenderer(mp.Process):
 
         from brule import Brule
         logger.debug(f"Bitmap encoder capabilities: {', '.join(Brule.get_capabilities())}.")
-        logger.debug(f"Layout engine capabilities: {', '.join(LayoutEngine.get_capabilities())}.")
 
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
