@@ -513,7 +513,6 @@ class BDNXML(SeqIO):
         #BDNXML have 2>=n>=1 graphical object in each event but we don't want to
         # have subgroup for a given timestamp to not break the SeqIO class
         # so, we merge sub-evnets on the same plane.
-        prev_f_out = -1
         self.events = []
         split_seen = False
 
@@ -538,10 +537,15 @@ class BDNXML(SeqIO):
                 self.events.append(ea)
             else:
                 logger.warning(f"Ignored zero-duration graphic: '{ea.gfxfile.split(os.path.sep)[-1]}' @ '{ea.tc_in}'.")
-            new_out = TC.tc2f(ea.tc_out, self.fps)
-            assert prev_f_out <= new_out, "Event ahead finish before last event!"
-            prev_f_out = new_out
         # for event
+        def sort_events_func(e):
+            return TC.tc2f(e.tc_in, self.fps)
+        
+        self.events.sort(key=sort_events_func)
+        
+        for k, ev in enumerate(self.events):
+            assert TC.tc2f(ev.tc_in, self.fps) < TC.tc2f(ev.tc_out, self.fps), f"Event at InTC={ev.tc_in} has a zero duration."
+            assert 0 == k or TC.tc2f(self.events[k-1].tc_out, self.fps) <= TC.tc2f(ev.tc_in, self.fps), f"Two events overlap in time around InTC={ev.tc_in}."
 
     @property
     def dropframe(self) -> bool:
