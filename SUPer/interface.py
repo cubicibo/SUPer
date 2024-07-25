@@ -131,13 +131,16 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
     ectx = []
 
     running_ev = []
-    assert len(events)
     for k, ev in enumerate(reversed(events), 1):
         channel = np.ascontiguousarray(ev.img.getchannel('A'), dtype=np.uint8)
         if np.any(channel):
             leng.add_to_layout(ev.x, ev.y, channel)
             running_ev = [ev]
             break
+
+    # All events in list are fully transparent, return empty context list.
+    if 0 == len(running_ev):
+        return ectx
 
     for ev in reversed(events[:-k]):
         # Remove empty bitmaps
@@ -206,20 +209,19 @@ class BDNRender:
 
         pbar = LogFacility.get_progress_bar(logger, bdn.events)
         pbar.set_description("Finding epochs and layouts", True)
-        ####
+
+        p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn, preset=layout_mode)
+        lectx = []
         if self.kwargs['threads'] > 1:
-            p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn, preset=layout_mode)
-            lectx = []
             with mp.Pool(self.kwargs['threads'], _pool_worker_init) as mpp:
                 for r in mpp.imap_unordered(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
                     pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
                     lectx += r
             lectx = sorted(lectx, key=lambda ctx: TC.tc2pts(ctx.events[0].tc_in, bdn.fps))
         else:
-            lectx = []
-            for grp in bdn.groups(epochstart_dd_fn(screen_area)):
-                lectx += _find_epochs_layouts(grp, bdn, preset=layout_mode)
-                pbar.update(len(lectx[-1].events))
+            for r in map(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
+                pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
+                lectx += r
         pbar.update(len(bdn.events)-pbar.n+1)
 
         if logger.level <= 10:
@@ -310,7 +312,7 @@ class BDNRender:
 
         self._workers = renderers
         self._setup_mt_env()
-        
+
         logger.info("Starting workers...")
         for renderer in renderers:
             renderer.start()
@@ -544,7 +546,7 @@ class EpochRenderer(mp.Process):
         logger.debug(f"INI parameters: {libs_params}")
         if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) >= Quantizer.Libs.PILIQ:
             if not Quantizer.init_piliq(**libs_params.get('quant', {})):
-                logger.info("Failed to initialise advanced image quantizer. Falling back to PIL+K-Means.")
+                logger.warning("Failed to initialise an advanced image quantizer. Falling back to lower quality PIL+K-Means.")
                 self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
             else:
                 self.kwargs['quantize_lib'] = Quantizer.select_quantizer(self.kwargs['quantize_lib'])

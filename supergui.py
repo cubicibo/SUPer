@@ -257,6 +257,8 @@ def init_extra_libs(verbose: bool = True):
         if verbose:
             logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
         params['quant'] = {'qpath': exepath} | piq_values
+    else:
+        logger.warning("No good image quantizer found. Falling back to low quality embedded one.")
     return params
 
 if __name__ == '__main__':
