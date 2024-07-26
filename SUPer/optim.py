@@ -337,15 +337,17 @@ class Optimise:
             bitmap += first_index
         else:
             # Transparent ID is the last one and will be mapped to 0xFF by the first_index shift.
-            if (0xFF - first_index) in transparent_id:
+            if max(transparent_id) == (0xFF - first_index):
                 transparent_id = 0xFF - first_index
                 bitmap += first_index
             else:
                 #Shift only IDs
                 transparent_id = int(transparent_id[0])
                 tsp_mask = (bitmap == transparent_id)
-                bitmap[bitmap < transparent_id] += first_index
-                bitmap[bitmap > transparent_id] += (first_index - 1)
+                smaller = bitmap < transparent_id
+                larger = bitmap > transparent_id
+                bitmap[smaller] += first_index
+                bitmap[larger] += (first_index - 1)
                 bitmap[tsp_mask] = 0xFF
             #logger.ldebug(f"Remapped fully transparent ID {transparent_id:02X} to FF.")
             cluts = np.delete(cluts, [transparent_id], axis=0)
