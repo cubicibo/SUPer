@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, Epoch, DisplaySet
-from .pgraphics import PGDecoder, PGraphics, PGObjectBuffer, PaletteManager
+from .pgraphics import PGDecoder, PGraphics, PGObjectBuffer
 from .palette import Palette
 from .utils import LogFacility, TimeConv as TC, Box
 
@@ -35,6 +35,7 @@ class EpochContext:
     windows: list[Box]
     events: list[...]
     min_dts: float = -np.inf
+    max_pts: float = np.inf
 
 @dataclass
 class BufferStats:
@@ -192,7 +193,9 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
         pals = [Palette() for _ in range(8)]
         buffer = PGObjectBuffer()
 
-        compliant &= bool(epoch[0].pcs.composition_state & PCS.CompositionState.EPOCH_START)
+        if epoch[0].pcs.composition_state & PCS.CompositionState.EPOCH_START == 0:
+            logger.warning(f"First display set in epoch is not an Epoch Start at {to_tc(current_pts)}.")
+            compliant = False
 
         if epoch[0].wds:
             for wd in epoch[0].wds.windows:
@@ -206,7 +209,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
             if epoch.ds[kd-1].pcs.pts != prev_pts and current_pts != epoch.ds[kd-1].pcs.pts:
                 prev_pts = epoch.ds[kd-1].pcs.pts
             else:
-                logger.warning(f"Two displaysets at {to_tc(current_pts)} (internal rendering error?)")
+                logger.warning(f"Two display sets at {to_tc(current_pts)}.")
 
             for ks, seg in enumerate(ds.segments):
                 if isinstance(seg, PCS):

@@ -18,21 +18,20 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import gc
 import os
 import signal
 import numpy as np
 import multiprocessing as mp
 
-from typing import Any, Generator, Optional, NoReturn, Union
+from typing import Any, Optional, NoReturn, Union
 from itertools import chain
 from functools import partial
-from enum import IntEnum, auto as eauto
+from enum import IntEnum
 
 from scenaristream import EsMuiStream
 from brule import LayoutEngine
 
-from .utils import TimeConv as TC, LogFacility, Box, BDVideo, SSIMPW
+from .utils import TimeConv as TC, LogFacility, Box, SSIMPW
 from .pgraphics import PGDecoder
 from .filestreams import BDNXML, BDNXMLEvent, remove_dupes
 from .segments import Epoch, DisplaySet
@@ -223,11 +222,19 @@ class BDNRender:
                 pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
                 lectx += r
         pbar.update(len(bdn.events)-pbar.n+1)
+        LogFacility.close_progress_bar(logger)
+
+        wipe_margin = np.ceil(PGDecoder.copy_gp_duration(bdn.format.area)*bdn.fps + 1/bdn.fps/2)/bdn.fps
+        for ctx, ctx_next in zip(lectx, lectx[1:]):
+            event_max_pts = TC.tc2pts(ctx.events[-1].tc_out, bdn.fps)
+            if np.isinf(ctx_next.min_dts):
+                ctx_next.min_dts = max(event_max_pts, (TC.tc2pts(ctx_next.events[0].tc_in, bdn.fps) - _decode_duration_base(ctx_next.windows, bdn.format.area)) - wipe_margin)
+            ctx.max_pts = min(event_max_pts + wipe_margin, ctx_next.min_dts)
+            ctx_next.min_dts += 1/PGDecoder.FREQ #safe: add one tick to min dts
 
         if logger.level <= 10:
             for ect in lectx:
-                logger.debug(f"Epoch Context: {ect.events[0].tc_in}->{ect.events[-1].tc_out} {len(ect.events)}, RC={ect.box}, WDS={ect.windows}")
-        LogFacility.close_progress_bar(logger)
+                logger.debug(f"Epoch Context: {ect.events[0].tc_in}->{ect.events[-1].tc_out} {len(ect.events)}, RC={ect.box}, WDS={ect.windows}, [{ect.min_dts:.04f};{ect.max_pts:.04f}]")
         return lectx
     #####find_all
 
@@ -237,31 +244,14 @@ class BDNRender:
         renderer.setup_env()
 
         pcs_id = 0
-        final_ds = None
         logger.debug("Finding all epochs and their screen layout (this can take a while)...")
         epochs_ctx = self.find_all_layouts(bdn)
         logger.info(f"Identified {len(epochs_ctx)} epochs to render.")
 
         for ectx in epochs_ctx:
-            if final_ds is not None:
-                if TC.tc2pts(ectx.events[0].tc_in, bdn.fps) - last_pts_out > 1.1:
-                    logger.debug("Adding screen wipe since there was enough time between two epochs.")
-                    self._epochs[-1].ds.append(final_ds)
-                else:
-                    #did not use an optional display set, subtract 1 to PCS id to have continuity
-                    pcs_id -= 1
-
-            epoch, final_ds, pcs_id = renderer.convert2(ectx, pcs_id)
-            last_pts_out = TC.tc2pts(ectx.events[-1].tc_out, bdn.fps)
-
+            epoch, pcs_id = renderer.convert2(ectx, pcs_id)
             self._epochs.append(epoch)
-            gc.collect()
-        ####
-
-        #Always add a screen wipe if the last epoch is terminated by a palette update. 
-        if final_ds is not None:
-            logger.debug("Adding final displayset to the last epoch.")
-            self._epochs[-1].ds.append(final_ds)
+    ####
 
     def _setup_mt_env(self) -> None:
         def sighandler(workers, snum, frame) -> NoReturn:
@@ -320,29 +310,27 @@ class BDNRender:
         while not all(map(lambda renderer: renderer.is_available(), renderers)):
             time.sleep(0.2)
 
-        def add_data(ep_timeline: list[bytes], final_ds_l: list[bytes], epoch_data: tuple[bytes, bytes, int]) -> None:
-            new_epoch, final_ds, epoch_id = epoch_data
+        def add_data(ep_timeline: list[bytes], epoch_data: tuple[bytes, int]) -> None:
+            new_epoch, epoch_id = epoch_data
             ep_timeline[epoch_id] = new_epoch
-            final_ds_l[epoch_id] = final_ds
         ###
 
         #Orchestrator starts here
         busy_flags = {renderer.iid: False for renderer in renderers}
         g_epochs = enumerate(chain(epochs_ctx, (None,)))
-        tc_inout, final_ds_l, ep_timeline = [], [], []
+        tc_inout, ep_timeline = [], []
 
         group_data = True
         while group_data is not None:
             time.sleep(0.05)
             for free_renderer in filter(lambda renderer: renderer.is_available(), renderers):
                 if (epoch_data := free_renderer.get()) is not None:
-                    add_data(ep_timeline, final_ds_l, epoch_data)
+                    add_data(ep_timeline, epoch_data)
                     busy_flags[free_renderer.iid] = False
                 if busy_flags[free_renderer.iid] is False:
                     group_id, group_data = next(g_epochs)
                     if group_data is not None:
                         ep_timeline.append(None)
-                        final_ds_l.append(None)
                         tc_inout.append((group_data.events[0].tc_in, group_data.events[-1].tc_out))
                         busy_flags[free_renderer.iid] = True
                         free_renderer.send((group_data, group_id))
@@ -358,7 +346,7 @@ class BDNRender:
         while any(busy_flags.values()):
             for free_renderer in filter(lambda renderer: busy_flags[renderer.iid] or renderer.is_available(), renderers):
                 if free_renderer.is_available() and (epoch_data := free_renderer.get()) is not None:
-                    add_data(ep_timeline, final_ds_l, epoch_data)
+                    add_data(ep_timeline, epoch_data)
                     busy_flags[free_renderer.iid] = False
                 if not busy_flags[free_renderer.iid] or not free_renderer.is_alive():
                     if free_renderer.is_alive():
@@ -388,17 +376,8 @@ class BDNRender:
         self._workers.clear()
 
         logger.debug("Unserializing workers data.")
-        for eid, (final_ds, epoch) in enumerate(zip(final_ds_l, ep_timeline)):
+        for eid, epoch in enumerate(ep_timeline):
             ep_timeline[eid] = Epoch.from_bytes(epoch)
-            if final_ds is not None:
-                final_ds = DisplaySet.from_bytes(final_ds)
-                pts_out = TC.tc2pts(tc_inout[eid][1], bdn.fps)
-                pts_in_next = np.inf if (eid+1 == len(ep_timeline)) else TC.tc2pts(tc_inout[eid+1][0], bdn.fps)
-                #Technically DTS(DSn+1[EPOCH_START]) >= PTS(DSn[-]). But a nice margin to next PTS is enough as this is optional.
-                #And since PTS(DSn) - DTS(DSn) cannot exceed 1 sec, this also suits any potential time stretching for decoding.
-                if pts_in_next - pts_out > 1.0:
-                    logger.debug(f"Appending plane wipe after palette update wipe at {tc_inout[eid][1]}.")
-                    ep_timeline[eid].ds.append(final_ds)
         self._epochs = ep_timeline
     ####
 
@@ -561,19 +540,19 @@ class EpochRenderer(mp.Process):
     ####
 
     def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
-        subgroup = remove_dupes(ectx.events)
+        ectx.events = remove_dupes(ectx.events)
         prefix = f"W{self.iid}: " if __class__.__threaded else ""
-        logger.info(prefix + f"Encoding epoch {subgroup[0].tc_in}->{subgroup[-1].tc_out} with {len(subgroup)} event(s), {len(ectx.windows)} window(s).")
+        logger.info(prefix + f"Encoding epoch {ectx.events[0].tc_in}->{ectx.events[-1].tc_out} with {len(ectx.events)} event(s), {len(ectx.windows)} window(s).")
 
         if logger.level <= 10:
             for w_id, wd in enumerate(ectx.windows):
                 logger.debug(f"Window {w_id}: X={wd.x+ectx.box.x}, Y={wd.y+ectx.box.y}, W={wd.dx}, H={wd.dy}")
 
-        wds_analyzer = WindowsAnalyzer(ectx.windows, subgroup, ectx.box, self.bdn, pcs_id=pcs_id, **self.kwargs)
-        new_epoch, final_ds, pcs_id = wds_analyzer.analyze()
+        wds_analyzer = WindowsAnalyzer(ectx, self.bdn, pcs_id=pcs_id, **self.kwargs)
+        new_epoch, pcs_id = wds_analyzer.analyze()
 
         logger.debug(prefix + f" => optimised as {len(new_epoch)} display sets.")
-        return new_epoch, final_ds, pcs_id
+        return new_epoch, pcs_id
 
     def is_available(self) -> bool:
         assert __class__.__threaded
@@ -607,8 +586,8 @@ class EpochRenderer(mp.Process):
                 break
             ectx, epoch_id = in_data
             logger.debug(f"WORKER {self.iid} on EPOCH {epoch_id}")
-            new_epoch, final_ds = self.convert2(ectx)[:-1] #discard pcs_id
-            self._q_tx.put((bytes(new_epoch), None if final_ds is None else bytes(final_ds), epoch_id))
+            new_epoch, _ = self.convert2(ectx) #discard pcs_id
+            self._q_tx.put((bytes(new_epoch), epoch_id))
             self._available.value = 1
         ####
     ####

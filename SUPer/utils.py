@@ -289,6 +289,10 @@ class BDVideo:
         SD576_43  = (720,  576)
         SD480_43  = (720,  480)
 
+        @property
+        def area(self) -> int:
+            return self.value[0]*self.value[1]
+
         @classmethod
         def from_height(cls, height: int) -> 'BDVideo.VideoFormat':
             for fmt in cls:
