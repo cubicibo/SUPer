@@ -539,7 +539,13 @@ class WindowsAnalyzer:
                 dts_iter = dts_start_nc if is_normal_case else dts_start
 
                 num_pcs_buffered = 0
-                objs = list(map(lambda x: x is not None, nodes[j_iter].objects))
+                if len(nodes[j_iter].objects):
+                    objs = nodes[j_iter].objects
+                else:
+                    #screen wipes don't contain objects, take the previous list
+                    assert j_iter > 0
+                    objs = nodes[j_iter-1].objects
+                objs = list(map(lambda x: x is not None, objs))
                 for l in range(j_iter+1, k):
                     if allow_overlaps:
                         for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):

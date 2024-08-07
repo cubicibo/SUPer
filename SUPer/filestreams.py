@@ -76,11 +76,13 @@ class SUPFile:
                 except (BufferError, EOFError):
                     renew = True
                 except ValueError:
-                    buff = buff[buff.find(PGSegment.MAGIC):]
+                    next_seg_pos = buff.find(PGSegment.MAGIC)
+                    if next_seg_pos >= 0:
+                        buff = buff[next_seg_pos:]
                     #if b'P' is not at pos 0, then we can discard the last byte.
-                    if buff[0] != PGSegment.MAGIC[0]:
+                    elif buff[0] != PGSegment.MAGIC[0]:
                         buff = bytearray()
-                if renew or not buff:
+                if renew or len(buff) < 2:
                     if not (new_data := f.read(self.bytes_per_read)):
                         break
                     buff = buff + new_data
