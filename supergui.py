@@ -69,10 +69,10 @@ def get_kwargs() -> dict[str, Any]:
         'refresh_rate': int(refresh_txt.value)/100,
         'quantize_lib': Quantizer.get_option_id(quantcombo.value),
         'bt_colorspace': colorspace.value,
-        'no_overlap': True, #scenarist_checks.value,
-        'full_palette': bool(scenarist_fullpal.value),
+        'allow_overlaps': bool(allow_overlaps.value),
+        'full_palette': bool(fullpalette.value),
         'output_all_formats': bool(all_formats.value),
-        'normal_case_ok': bool(normal_case_ok.value),
+        'allow_normal_case': bool(normal_case_ok.value),
         'insert_acquisitions': int(biacqs_val.value),
         'ini_opts': init_extra_libs(verbose=False),
         'max_kbps': int(max_kbps.value),
@@ -183,13 +183,10 @@ def monitor_mp() -> None:
 
 def hide_chkbox() -> None:
     if all_formats.value:
-        scenarist_fullpal.value = True
-        #scenarist_checks.value = True
-        scenarist_fullpal.enabled = False
-        #scenarist_checks.enabled = False
+        fullpalette.value = True
+        fullpalette.enabled = False
     elif not supout.value.lower().endswith('pes'):
-        scenarist_fullpal.enabled = True
-        #scenarist_checks.enabled = True
+        fullpalette.enabled = True
 
 def get_bdnxml() -> None:
     bdn_xml_types = ("*.xml", "*.XML")
@@ -209,14 +206,11 @@ def set_outputsup() -> None:
         supout.value += '.sup'
 
     if supout.value.lower().endswith('pes'):
-        #scenarist_checks.value = True
-        #scenarist_checks.enabled = False
-        scenarist_fullpal.value = True
-        scenarist_fullpal.enabled = False
+        fullpalette.value = True
+        fullpalette.enabled = False
     else:
         if not all_formats.value:
-            #scenarist_checks.enabled = True
-            scenarist_fullpal.enabled = True
+            fullpalette.enabled = True
 
     if bdnname.value != '' and do_super.text == SUPER_STRING:
         do_super.enabled = True
@@ -326,14 +320,13 @@ if __name__ == '__main__':
                                 "When there are two objects on screen and one must be updated, it may be possible\n"\
                                 "to update the given object in a tighter time window than in an acquisition (both objects refreshed).")
 
-    #scenarist_checks = CheckBox(app, text="Apply additional compliancy rules for Scenarist BD", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    #scenarist_checks.value = 1
-    #Hovertip(scenarist_checks.tk, "Scenarist BD has additional hard rules. This checkbox enforces them\n"\
-    #                              "and the generated stream shall pass all Scenarist checks.")
+    allow_overlaps = CheckBox(app, text="Allow palette update buffering (experimental).", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(allow_overlaps.tk, "Buffer palette updates whenever possible to drop fewer events.\n"\
+                                "Stream shall NOT be Built or Rebuilt at the authoring stage.")
 
-    scenarist_fullpal = CheckBox(app, text="Always write the full palette", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(scenarist_fullpal.tk, "Scenarist BD mendles with the imported files and may mess up the palette assignments.\n"\
-                                   "Writing the full palette everytime ensures palette data consistency throughout the stream.")
+    fullpalette = CheckBox(app, text="Always write the full palette", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(fullpalette.tk, "Scenarist BD mendles with the imported files and may mess up the palette assignments.\n"\
+                             "Writing the full palette everytime ensures palette data consistency throughout the stream.")
 
     all_formats = CheckBox(app, text="Generate both SUP and PES+MUI files.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
 

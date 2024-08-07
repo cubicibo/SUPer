@@ -69,6 +69,7 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object redefinition.", action='store_true', default=False, required=False)
     parser.add_argument('-b', '--bt', help="Set target BT matrix [601, 709, 2020]  (def:  %(default)s)", type=int, default=709, required=False)
     parser.add_argument('-p', '--palette', help="Flag to always write the full palette.", action='store_true', default=False, required=False)
+    parser.add_argument('-d', '--ahead', help="Flag to enable ahead of time palette update decoding.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Flag to overwrite an existing file with the same name.", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Flag to write both SUP and PES+MUI files.", action='store_true', default=False, required=False)
     parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: off] (def:  %(default)s)", type=int, default=2, required=False)
@@ -77,12 +78,12 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 8 supported. [0: auto] (def:  %(default)s)", type=int, default=0, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
-    #parser.add_argument('--aheadoftime', help="Flag to allow ahead of time decoding. (NOT COMPLIANT)", action='store_true', default=False, required=False)
-
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
     parser.add_argument("output", type=str)
     args = parser.parse_args()
-    args.aheadoftime = False
+
+    print(f"SUPer version {LIB_VERSION} - (c) 2024 cubicibo")
+    print("HDMV PGS encoder, with support from Masstock, Alllen and Emulgator.")
 
     #### Sanity checks and conversion
     args.output, ext = check_output(args.output, args.yes)
@@ -117,16 +118,16 @@ if __name__ == '__main__':
     if args.threads < 0 or args.threads > 8:
         exit_msg("Incorrect number of threads, aborting.")
 
-    if args.aheadoftime and (ext == 'pes' or args.withsup):
-        exit_msg("PES output without DTS or with ahead-of-time decoding is not allowed, aborting.")
-    if (ext == 'pes' or args.withsup) and not args.palette:
-        logger.warning("PES output requested, adding --palette to command.")
-        args.palette = True
+    if ext == 'pes' or args.withsup:
+        if args.ahead:
+            logger.warning("PES output + buffering: PES shall NOT be Built or Rebuilt at authoring!")
+        if args.allow_normal:
+            logger.warning("PES output + Normal Case: PES shall NOT be Built or Rebuilt at authoring!")
+        if not args.palette:
+            logger.warning("PES output requires --palette, forcefully enabling this flag.")
+            args.palette = True
 
-    print(f"SUPer version {LIB_VERSION} - (c) 2024 cubicibo")
-    print("HDMV PGS encoder, with support from Masstock, Alllen and Emulgator.")
     parameters = {}
-
     if (config_file := Path('config.ini')).exists():
         ini_opts = {}
         import configparser
@@ -154,10 +155,10 @@ if __name__ == '__main__':
         'refresh_rate': int(args.acqrate)/100,
         'quantize_lib': args.qmode,
         'bt_colorspace': f"bt{args.bt}",
-        'no_overlap': not args.aheadoftime,
+        'allow_overlaps': args.ahead,
         'full_palette': args.palette,
         'output_all_formats': args.withsup,
-        'normal_case_ok': args.allow_normal,
+        'allow_normal_case': args.allow_normal,
         'max_kbps': args.max_kbps,
         'log_to_file': args.log_to_file,
         'insert_acquisitions': args.extra_acq,

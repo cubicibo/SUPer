@@ -262,10 +262,13 @@ class WindowsAnalyzer:
             if event is not None:
                 event.unload()
         pbar.clear()
-        pgobjs_proc = [objs.copy() for objs in pgobjs]
 
         durs, nodes = self.get_durations()
-        states, flags = self.shape_stream(durs, nodes, pgobjs_proc)
+        states, flags, cboxes = self.shape_stream(durs, nodes, pgobjs)
+
+        #if there's a discarded event, perform buffer layout optimisation.
+        #if next(filter(lambda f: f < 0, flags), None) is not None:
+        #    ...
 
         r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
         return self._convert(r_states, pgobjs, r_durs, r_flags, r_nodes)
@@ -274,8 +277,10 @@ class WindowsAnalyzer:
          durs: list[int],
          nodes: list['DSNode'],
          pgobjs_proc: list[list[ProspectiveObject]],
-    ) -> tuple[list[PCS.CompositionState], list[int]]:
-        allow_normal_case = self.kwargs.get('normal_case_ok', False)
+    ) -> tuple[list[PCS.CompositionState], list[int], list[list[Box]]]:
+        pgobjs_proc = [objs.copy() for objs in pgobjs_proc]
+
+        allow_normal_case = self.kwargs.get('allow_normal_case', False)
         allow_overlaps = self.kwargs.get('allow_overlaps', False)
 
         acqs, absolutes, margins, bslots, cboxes = self.find_acqs(durs, nodes, pgobjs_proc)
@@ -335,7 +340,7 @@ class WindowsAnalyzer:
 
         self.filter_events(nodes, states, flags, absolutes, durs, pts_delta, allow_normal_case, allow_overlaps)
         __class__.verify_palette_usage(nodes, states, flags, allow_overlaps)
-        return states, flags
+        return states, flags, cboxes
 
     def shift_forward_overlay(self,
           nodes: list['DSNode'],
@@ -500,24 +505,31 @@ class WindowsAnalyzer:
                     flags[k] = -1
 
                     ze = k
+                    f_log_warn = lambda tc_pts: f"Discarded event at {tc_pts} tied to the dropped event at {nodes[k].tc_pts}."
+                    drop_from = np.inf
                     #We may have discarded an acquisition followed by NCs, we must find the new acquisition point.
                     while (ze := ze+1) < len(states) and states[ze] != PCS.CompositionState.ACQUISITION:
                         #Screen wipes do not define any composition
                         if nodes[ze].objects == [] and nodes[ze].nc_refresh:
                             continue
                         #Cancels a possible past NORMAL CASE promotion
+                        if nodes[ze].partial:
+                            assert flags[ze] == 1
+                            drop_from = min(ze, drop_from)
+                            flags[ze] = 0
                         nodes[ze].nc_refresh = nodes[ze].partial = False
 
                         if flags[ze] != -1 and (nodes[ze].dts() > dts_start and nodes[ze].pts() - pts_delta > nodes[0].pts()):
                             logger.info(f"Epoch start collision: promoted normal case to acquisition at {nodes[ze].tc_pts}.")
                             states[ze] = PCS.CompositionState.ACQUISITION
                             flags[ze] = 0
-
-                            for zek in range(k+1, ze):
-                                if nodes[zek].dts_end() >= nodes[ze].dts() or nodes[zek].pts() + pts_delta >= nodes[ze].pts():
-                                    flags[zek] = -1
-                                    logger.warning(f"Dropped event at {nodes[zek].tc_pts} as it hinders the promoted acquisition point.")
+                            f_log_warn = lambda tc_pts: f"Discarded event at {tc_pts} as it preceeds the promoted NC at {nodes[ze].tc_pts}."
                             break
+                    for zek in range(k+1, ze):
+                        if flags[zek] == 0 and (nodes[zek].dts_end() >= nodes[ze].dts() or nodes[zek].pts() + pts_delta >= nodes[ze].pts() or zek >= drop_from):
+                            flags[zek] = -1
+                            logger.warning(f_log_warn(nodes[zek].tc_pts))
+
                     ###while ze
                 ###event shift
             else:
@@ -536,11 +548,13 @@ class WindowsAnalyzer:
                     if not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or nodes[l].pts() + pts_delta >= nodes[k].pts():
                         logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
                         flags[l] = -1
-                    else:
+                    elif flags[l] == 0:
+                        absolutes[l] = False
                         num_pcs_buffered += 1
                         nodes[l].nc_refresh = True
                         if nodes[l].dts() >= dts_iter:
                             nodes[l].set_dts(dts_iter - 1/PGDecoder.FREQ)
+                    assert flags[l] != 1
                     states[l] = PCS.CompositionState.NORMAL
 
                 states[k] = PCS.CompositionState.NORMAL if is_normal_case else PCS.CompositionState.ACQUISITION
@@ -1292,8 +1306,9 @@ class DSNode:
 
     def dts_end(self) -> float:
         if self._dts is not None:
-            return (self.get_dts_markers()[1] + self._dts)/PGDecoder.FREQ
-        return sum(self.get_dts_markers())/PGDecoder.FREQ
+            return (sum(self.get_dts_markers()[1]) + self._dts)/PGDecoder.FREQ
+        decode_ts, t_dec = self.get_dts_markers()
+        return (decode_ts + sum(t_dec))/PGDecoder.FREQ
 
     def dts(self) -> float:
         if self._dts is not None:
@@ -1301,7 +1316,7 @@ class DSNode:
         return self.get_dts_markers()[0]/PGDecoder.FREQ
 
     def delta_dts(self) -> float:
-        return self.get_dts_markers()[1]/PGDecoder.FREQ
+        return sum(self.get_dts_markers()[1])/PGDecoder.FREQ
 
     def pts(self) -> float:
         return TC.tc2pts(self.tc_pts, __class__.bdn_fps)
@@ -1310,7 +1325,7 @@ class DSNode:
         return not (self._dts is None)
 
     def get_decode_duration(self) -> tuple[int, int]:
-        t_decoding = 0
+        t_decoding = []
 
         if not self.nc_refresh:
             assigned_wd = list(map(lambda x: x is not None, self.objects))
@@ -1329,14 +1344,14 @@ class DSNode:
                     #no slot -> buffer is sized to the window
                     read = write
                 if not self.partial or (self.partial and self.new_mask[wid]):
-                    t_decoding += np.ceil(read/PGDecoder.RD)
+                    t_decoding.append(np.ceil(read/PGDecoder.RD))
                 elif self.partial and not self.new_mask[wid]:
                     #the other object is copied at the end.
                     assert sum(self.new_mask) == 1 and t_other_copy == 0
                     t_other_copy += np.ceil(write/PGDecoder.RC)
                     continue
 
-                decode_duration = max(decode_duration, t_decoding) + np.ceil(write/PGDecoder.RC)
+                decode_duration = max(decode_duration, sum(t_decoding)) + np.ceil(write/PGDecoder.RC)
             ####
             assert t_other_copy == 0 or self.partial
             decode_duration += t_other_copy

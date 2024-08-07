@@ -297,7 +297,7 @@ class BDNRender:
         logger.info(f"Identified {len(epochs_ctx)} epochs.")
 
         as_deamon = self.kwargs.get('daemonize', True)
-        n_threads = self.kwargs.get('threads', 2)
+        n_threads = min(self.kwargs.get('threads', 2), len(epochs_ctx))
         renderers = [EpochRenderer(bdn, self.kwargs, self.outfile, as_deamon) for _ in range(n_threads)]
 
         self._workers = renderers
