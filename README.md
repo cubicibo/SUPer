@@ -21,7 +21,7 @@ Both the released standalone executables and `python3 supergui.py` will display 
 - "Make it SUPer" starts the conversion process. The actual progress is printed in the command line window.
 
 #### GUI config.ini
-The config.ini file can be used to specify the relative or absolute path to a quantizer binary (either pngquant[.exe] or libimagequant[.dll, .so]). If pngquant is in PATH, the name is sufficient. An external quantizer will offer higher quality than the internal one. 
+The config.ini file can be used to specify the relative or absolute path to a quantizer binary (either pngquant[.exe] or libimagequant[.dll, .so]). If pngquant is in PATH, the name is sufficient. An external quantizer will offer higher quality than the internal one.
 
 ### Command line client
 `supercli.py` is essentially the command line equivalent to `supergui.py`.
@@ -44,7 +44,7 @@ The config.ini file can be used to specify the relative or absolute path to a qu
  -w, --withsup       Flag to write both SUP and PES+MUI files.
  -m, --max-kbps      Set the maximum bitrate to test the output against. Recommended range: [500-16000].
  -e, --extra-acq     Set the min count of palette update after which acquisitions should be inserted [0: off, default: 2]
- -l, --log-to-file   Set (enable) logging to file and set logging level: [10: debug, 20: info, 25: iinf, 30: warnings]
+ -l, --log-to-file   Set (enable) logging to file and set logging level: [-10: main report, 10: debug, 20: info, 25: iinf, 30: warnings]
  -v, --version       Print the version and exit.
  --ssim-tol          Adjust the SSIM tolerance threshold. This threshold is used for bitmaps classification in effects [-100; 100, def: 0] 
 ```
@@ -63,6 +63,7 @@ Here are some additional informations on selected options, especially those that
 - Allow normal case object redefinition: whenever possible, update a single object out of two. May lower the count of dropped events.
 - Palette update buffering: buffer palette updates before a new object is decoded to drop fewer events.
 - Insert acquisition: perform a screen refresh after a palette animation. Some palette animations may cause artifacts that remain on the display, a refresh will hide them. This can impact the bitrate as new bitmaps are inserted in the stream.
+- Logging: logging level -10 creates a single file listing the filtering decisions, if any (e.g. dropped events, normal case object redefinition).
 
 ### Example (recommended defaults)
 `python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --qmode 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`

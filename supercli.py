@@ -74,7 +74,7 @@ if __name__ == '__main__':
     parser.add_argument('-w', '--withsup', help="Flag to write both SUP and PES+MUI files.", action='store_true', default=False, required=False)
     parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: off] (def:  %(default)s)", type=int, default=2, required=False)
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
-    parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=-1, required=False)
+    parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=0, required=False)
     parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 8 supported. [0: auto] (def:  %(default)s)", type=int, default=0, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
@@ -109,9 +109,7 @@ if __name__ == '__main__':
     elif args.max_kbps < 10 and args.max_kbps != 0:
         exit_msg("Meaningless max bitrate, aborting.")
 
-    if args.log_to_file < 0:
-        args.log_to_file = False
-    elif args.log_to_file > 40:
+    if args.log_to_file > 40:
         logger.warning("Meaningless logging level, disabling file logging.")
         args.log_to_file = False
 

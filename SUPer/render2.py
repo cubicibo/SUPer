@@ -520,7 +520,7 @@ class WindowsAnalyzer:
                         nodes[ze].nc_refresh = nodes[ze].partial = False
 
                         if flags[ze] != -1 and (nodes[ze].dts() > dts_start and nodes[ze].pts() - pts_delta > nodes[0].pts()):
-                            logger.info(f"Epoch start collision: promoted normal case to acquisition at {nodes[ze].tc_pts}.")
+                            logger.einfo(f"Epoch start collision: promoted normal case to acquisition at {nodes[ze].tc_pts}.")
                             states[ze] = PCS.CompositionState.ACQUISITION
                             flags[ze] = 0
                             f_log_warn = lambda tc_pts: f"Discarded event at {tc_pts} as it preceeds the promoted NC at {nodes[ze].tc_pts}."
@@ -567,7 +567,7 @@ class WindowsAnalyzer:
                 nodes[k].partial = is_normal_case
                 flags[k] = int(is_normal_case)
                 if is_normal_case:
-                    logger.info(f"Object refreshed with a Normal Case at {nodes[k].tc_pts} (tight timing).")
+                    logger.einfo(f"Object refreshed with a Normal Case at {nodes[k].tc_pts} (tight timing).")
             k -= 1
         ####while k > 0
     ####filter_events

@@ -281,8 +281,13 @@ class BDNRender:
 
     def _setup_mt_main_logging(self) -> None:
         file_logging_level = self.kwargs.get('log_to_file', False)
-        if file_logging_level > 0:
-            logfile = str(self.outfile) + ".txt"
+        logfile = str(self.outfile) + ".txt"
+        self._report_log_hdl = None
+        if file_logging_level < 0:
+            self._report_log_hdl = LogFacility.get_logger('event_report', with_handler=False)
+            LogFacility.set_file_log(self._report_log_hdl, logfile)
+            LogFacility.set_logger_level('event_report', self._report_log_hdl.level)
+        elif file_logging_level > 0:
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
 
@@ -310,8 +315,12 @@ class BDNRender:
         while not all(map(lambda renderer: renderer.is_available(), renderers)):
             time.sleep(0.2)
 
-        def add_data(ep_timeline: list[bytes], epoch_data: tuple[bytes, int]) -> None:
-            new_epoch, epoch_id = epoch_data
+        def add_data(ep_timeline: list[bytes], epoch_data: tuple[bytes, int], hdl = None) -> None:
+            if hdl is None:
+                new_epoch, epoch_id = epoch_data
+            else:
+                new_epoch, epoch_id, fmsgs = epoch_data
+                for msg in filter(lambda x: x[0] > 20, fmsgs): hdl.info(msg[1])
             ep_timeline[epoch_id] = new_epoch
         ###
 
@@ -325,7 +334,7 @@ class BDNRender:
             time.sleep(0.05)
             for free_renderer in filter(lambda renderer: renderer.is_available(), renderers):
                 if (epoch_data := free_renderer.get()) is not None:
-                    add_data(ep_timeline, epoch_data)
+                    add_data(ep_timeline, epoch_data, self._report_log_hdl)
                     busy_flags[free_renderer.iid] = False
                 if busy_flags[free_renderer.iid] is False:
                     group_id, group_data = next(g_epochs)
@@ -346,7 +355,7 @@ class BDNRender:
         while any(busy_flags.values()):
             for free_renderer in filter(lambda renderer: busy_flags[renderer.iid] or renderer.is_available(), renderers):
                 if free_renderer.is_available() and (epoch_data := free_renderer.get()) is not None:
-                    add_data(ep_timeline, epoch_data)
+                    add_data(ep_timeline, epoch_data, self._report_log_hdl)
                     busy_flags[free_renderer.iid] = False
                 if not busy_flags[free_renderer.iid] or not free_renderer.is_alive():
                     if free_renderer.is_alive():
@@ -513,10 +522,15 @@ class EpochRenderer(mp.Process):
         cls._instance_cnt = 0
 
     def setup_env(self) -> None:
+        file_logging_level = self.kwargs.get('log_to_file', False)
+        self._buffering_logs = False
+
         if __class__.__threaded:
             LogFacility.disable_tqdm()
-        file_logging_level = self.kwargs.get('log_to_file', False)
-        if file_logging_level > 0:
+        if file_logging_level < 0 and __class__.__threaded:
+            LogFacility.set_logger_buffer(logger)
+            self._buffering_logs = True
+        elif file_logging_level > 0:
             logfile = str(self.outfile) + (f"_{self.iid}" if __class__.__threaded else '') + ".txt"
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
@@ -587,7 +601,10 @@ class EpochRenderer(mp.Process):
             ectx, epoch_id = in_data
             logger.debug(f"WORKER {self.iid} on EPOCH {epoch_id}")
             new_epoch, _ = self.convert2(ectx) #discard pcs_id
-            self._q_tx.put((bytes(new_epoch), epoch_id))
+            if self._buffering_logs:
+                self._q_tx.put((bytes(new_epoch), epoch_id, LogFacility.get_buffered_msgs(logger)))
+            else:
+                self._q_tx.put((bytes(new_epoch), epoch_id))
             self._available.value = 1
         ####
     ####

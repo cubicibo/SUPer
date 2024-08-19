@@ -262,7 +262,7 @@ if __name__ == '__main__':
     #Do not keep returned params, we just want to initialize PILIQ
     init_extra_libs()
     opts_quant = Quantizer.get_options()
-    opts_log = {'Disabled':  0, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30, 'Debug': 10, 'Max debug': 5}
+    opts_log = {'Disabled':  0, 'Succint': -10, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30, 'Debug': 10, 'Max debug': 5}
 
     pos_v = 0
 

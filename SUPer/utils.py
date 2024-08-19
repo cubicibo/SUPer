@@ -23,6 +23,7 @@ import numpy as np
 
 from typing import Optional, Callable, TypeVar, Union
 import collections
+from logging.handlers import BufferingHandler
 from enum import Enum, IntEnum
 from numpy import (typing as npt)
 from timecode import Timecode
@@ -472,20 +473,22 @@ class LogFacility:
 
     @classmethod
     def set_file_log(cls, logger: logging.Logger, fp: str, level: Optional[int] = None) -> None:
+        if level is None:
+            level = logger.level
         lfh = logging.FileHandler(fp, mode='w')
         formatter = logging.Formatter('%(levelname).8s: %(message)s')
         lfh.setFormatter(formatter)
         if logger.getEffectiveLevel() > level:
             cls.set_logger_level(logger.name, level)
-        lfh.setLevel(logging.WARNING if level is None else level)
+        lfh.setLevel(level)
         logger.addHandler(lfh)
 
     @classmethod
-    def _init_logger(cls, name: str) -> None:
+    def _init_logger(cls, name: str, with_handler: bool = True) -> None:
         cls._extend_logger()
         logger = cls._logger[name] = logging.getLogger(name)
 
-        if not logger.hasHandlers():
+        if not logger.hasHandlers() and with_handler:
             handler = logging.StreamHandler()
             formatter = logging.Formatter(' %(name)s %(levelname).4s : %(message)s'.format(name))
             handler.setFormatter(formatter)
@@ -499,7 +502,22 @@ class LogFacility:
             cls._logger[name].handlers[0].setLevel(level)
 
     @classmethod
-    def get_logger(cls, name: str, level: int = logging.INFO) -> logging.Logger:
+    def get_buffered_msgs(cls, logger: logging.Logger) -> Optional[list[str]]:
+        for hdl in logger.handlers:
+            if isinstance(hdl, BufferingHandler):
+                fmsgs = [(rec.levelno, f"{rec.levelname}: {rec.getMessage()}") for rec in hdl.buffer]
+                hdl.flush()
+                return fmsgs
+        return None
+
+    @classmethod
+    def set_logger_buffer(cls, logger: logging.Logger) -> None:
+        hdl = BufferingHandler(float('inf'))
+        hdl.setLevel(logging.INFO)
+        logger.addHandler(hdl)
+
+    @classmethod
+    def get_logger(cls, name: str, level: int = logging.INFO, with_handler: bool = True) -> logging.Logger:
         """
         This function takes in two parameters: name and level and logs to console.
         The place to log in this case is defined by the handler which we set
@@ -510,9 +528,8 @@ class LogFacility:
           level: Minimum level for messages to be logged
         """
         if cls._logger.get(name, None) is None:
-            cls._init_logger(name)
+            cls._init_logger(name, with_handler)
             cls.set_logger_level(name, level)
-
         return cls._logger[name]
 
     @staticmethod
@@ -522,6 +539,12 @@ class LogFacility:
         def info_out(self, message, *args, **kws):
             self._log(INFO_OUT, message, args, **kws)
         logging.Logger.iinfo = info_out
+
+        INFO_EXT = logging.INFO + 1
+        logging.addLevelName(INFO_EXT, "INFO")
+        def einfo_out(self, message, *args, **kws):
+            self._log(INFO_EXT, message, args, **kws)
+        logging.Logger.einfo = einfo_out
 
         LOW_DEBUG = logging.DEBUG - 5
         logging.addLevelName(LOW_DEBUG, "LDEBUG")
