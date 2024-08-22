@@ -472,11 +472,11 @@ class LogFacility:
     _tqdm_off = False
 
     @classmethod
-    def set_file_log(cls, logger: logging.Logger, fp: str, level: Optional[int] = None) -> None:
+    def set_file_log(cls, logger: logging.Logger, fp: str, level: Optional[int] = None, simple_format: bool = False) -> None:
         if level is None:
             level = logger.level
         lfh = logging.FileHandler(fp, mode='w')
-        formatter = logging.Formatter('%(levelname).8s: %(message)s')
+        formatter = logging.Formatter('%(message)s' if simple_format else '%(levelname).8s: %(message)s')
         lfh.setFormatter(formatter)
         if logger.getEffectiveLevel() > level:
             cls.set_logger_level(logger.name, level)
@@ -505,7 +505,7 @@ class LogFacility:
     def get_buffered_msgs(cls, logger: logging.Logger) -> Optional[list[str]]:
         for hdl in logger.handlers:
             if isinstance(hdl, BufferingHandler):
-                fmsgs = [(rec.levelno, f"{rec.levelname}: {rec.getMessage()}") for rec in hdl.buffer]
+                fmsgs = [(rec.levelno, rec.getMessage()) for rec in hdl.buffer]
                 hdl.flush()
                 return fmsgs
         return None

@@ -181,11 +181,26 @@ class BDNRender:
 
     def prepare(self) -> BDNXML:
         stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
+
+        self._report_log_hdl = None
+        if self.kwargs.get('log_to_file', False) < 0:
+            self._report_log_hdl = LogFacility.get_logger('event_report', with_handler=False)
+            LogFacility.set_file_log(self._report_log_hdl, str(self.outfile) + ".txt", simple_format=True)
+            LogFacility.set_logger_level('event_report', self._report_log_hdl.level)
+            logger.addHandler(self._report_log_hdl.handlers[0])
+
         logger.iinfo(f"Parameters: {stkw}")
 
         bdn = BDNXML(os.path.expanduser(self.bdn_file))
         fps_str = bdn.fps if float(bdn.fps).is_integer() else round(bdn.fps, 3)
         logger.iinfo(f"BDN metadata: {'x'.join(map(str, bdn.format.value))}, FPS={fps_str}, DF={bdn.dropframe}, {len(bdn.events)} valid events.")
+
+        # Pop succint handler
+        if self._report_log_hdl:
+            for ih, hdl in enumerate(logger.handlers):
+                if hdl == self._report_log_hdl.handlers[0]:
+                    logger.handlers.pop(ih)
+                    break
 
         if len(bdn.events) == 0:
             logger.error("No BDN event found, exiting.")
@@ -281,14 +296,8 @@ class BDNRender:
 
     def _setup_mt_main_logging(self) -> None:
         file_logging_level = self.kwargs.get('log_to_file', False)
-        logfile = str(self.outfile) + ".txt"
-        self._report_log_hdl = None
-        if file_logging_level < 0:
-            self._report_log_hdl = LogFacility.get_logger('event_report', with_handler=False)
-            LogFacility.set_file_log(self._report_log_hdl, logfile)
-            LogFacility.set_logger_level('event_report', self._report_log_hdl.level)
-        elif file_logging_level > 0:
-            LogFacility.set_file_log(logger, logfile, file_logging_level)
+        if file_logging_level > 0:
+            LogFacility.set_file_log(logger, str(self.outfile) + ".txt", file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
 
     def _convert_mt(self, bdn: BDNXML) -> None:
@@ -320,7 +329,7 @@ class BDNRender:
                 new_epoch, epoch_id = epoch_data
             else:
                 new_epoch, epoch_id, fmsgs = epoch_data
-                for msg in filter(lambda x: x[0] > 20, fmsgs): hdl.info(msg[1])
+                for msg in filter(lambda x: x[0] > 20, reversed(fmsgs)): hdl.info(msg[1])
             ep_timeline[epoch_id] = new_epoch
         ###
 
@@ -420,6 +429,11 @@ class BDNRender:
     def test_output(self, bdn: BDNXML) -> None:
         # Final checks
         logger.info("Checking stream consistency and compliancy...")
+
+        #inject succint log handler to append the stats.
+        if self._report_log_hdl:
+            logger.addHandler(self._report_log_hdl.handlers[0])
+
         final_fps = round(bdn.fps, 3)
         compliant, warnings = is_compliant(self._epochs, final_fps)
 
@@ -439,6 +453,11 @@ class BDNRender:
                 logger.warning("=> Excessive bandwidth detected, testing with mux required.")
         else:
             logger.error("=> Output PGS is not compliant. Expect display issues or decoder crash.")
+
+        if self._report_log_hdl:
+            for ih, hdl in enumerate(logger.handlers):
+                if hdl == self._report_log_hdl.handlers[0]:
+                    logger.handlers.pop(ih)
     ####
 
     def fix_composition_id(self, replace: bool = False) -> None:
