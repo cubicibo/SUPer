@@ -546,12 +546,13 @@ class WindowsAnalyzer:
                     assert j_iter > 0
                     objs = nodes[j_iter-1].objects
                 objs = list(map(lambda x: x is not None, objs))
+                expected_score = sum(objs)
                 for l in range(j_iter+1, k):
                     if allow_overlaps:
                         for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
                             objs[ko] &= (obj is not None) & (not mask)
                     # We ran out of PCS to buffer or the objects are too different or min delta PTS -> drop
-                    if not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or nodes[l].pts() + pts_delta >= nodes[k].pts():
+                    if not allow_overlaps or sum(objs) != expected_score or num_pcs_buffered >= 7 or nodes[l].pts() + pts_delta >= nodes[k].pts():
                         logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
                         flags[l] = -1
                     elif flags[l] == 0:
