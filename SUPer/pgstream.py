@@ -348,6 +348,29 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
     ####for epoch
     return compliant, warnings
 
+def debug_stats(epochs: list[Epoch]) -> str:
+    PTS_MASK = (1 << 32) - 1
+    cnt_acq = cnt_nc = cnt_es = 0
+    cnt_nc_ods = 0
+    cnt_pu = cnt_buffered_pu = 0
+    for epoch in epochs:
+        pts_delta_w = list(map(lambda w: int(np.ceil(w.width*w.height*PGDecoder.FREQ/PGDecoder.RC)), epoch[0].wds))
+        pts_delta = sum(pts_delta_w)
+        for ds in epoch:
+            if ds.pcs.composition_state == PCS.CompositionState.NORMAL:
+                cnt_nc += 1
+            elif ds.pcs.composition_state & PCS.CompositionState.ACQUISITION:
+                cnt_acq += 1
+            elif ds.pcs.composition_state & PCS.CompositionState.EPOCH_START:
+                cnt_es += 1
+            if ds.pcs.pal_flag:
+                cnt_pu += 1
+                if (ds.pcs.tpts - ds.pcs.tdts) & PTS_MASK > pts_delta+1:
+                    cnt_buffered_pu += 1
+            elif ds.wds and ds.pcs.composition_state == 0 and ds.ods:
+                cnt_nc_ods += 1
+    return f"n(ES)={cnt_es}, n(ACQ)={cnt_acq}, n(NC)={cnt_nc} (n(ODS)={cnt_nc_ods}, n(PU)={cnt_pu}). Buffered: n(PU)={cnt_buffered_pu}."
+
 def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     PTS_MASK = (1 << 32) - 1
     PTS_DIFF_BOUND = PTS_MASK >> 1

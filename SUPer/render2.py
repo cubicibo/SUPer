@@ -493,43 +493,111 @@ class WindowsAnalyzer:
 
                 #K-node are always a mandatory acquisition: do we have time to decode and compose this (worst case)?
                 if t_diff > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
-                    nodes[k].tc_shift = int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps))
-                    logger.warning(f"Shifted event at {nodes[k].tc_pts} by +{nodes[k].tc_shift} frames to account for epoch start and compliancy.")
+                    prev_tc = nodes[k].tc_pts
+                    nodes[k].tc_pts = TC.add_framestc(nodes[k].tc_pts, self.bdn.fps, int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps)))
+                    logger.warning(f"Shifted event at {prev_tc} to {nodes[k].tc_pts} to account for epoch start and compliancy.")
                     #wipe all events in between epoch start and this point
+                    can_buffer = allow_overlaps
                     for ze in range(j+1, k):
-                        logger.warning(f"Discarded event at {nodes[k].tc_pts} to perform a mendatory acquisition right after epoch start.")
-                        flags[ze] = -1
+                        can_buffer &= not any(nodes[ze].new_mask)
+                        pts_rule = nodes[ze].pts() + pts_delta < nodes[k].pts()
+                        dts_rule = nodes[ze].dts_end() < nodes[k].dts()
+                        if flags[ze] >= 0 and can_buffer and nodes[ze].nc_refresh and pts_rule:
+                            if not dts_rule:
+                                nodes[ze].set_dts(max(nodes[k].dts()-1/PGDecoder.FREQ, nodes[j].dts_end()))
+                            flags[ze] = 0
+                        elif flags[ze] >= 0 and (not dts_rule or not pts_rule or not can_buffer or not nodes[ze].nc_refresh):
+                            logger.warning(f"Discarded event at {nodes[k].tc_pts} to perform a mendatory acquisition right after epoch start.")
+                            flags[ze] = -1
                 else:
                     # event is short, we can't shift it so we just discard it.
                     logger.warning(f"Discarded event at {nodes[k].tc_pts} colliding with epoch start.")
                     flags[k] = -1
+                    # ... We're now in big trouble: this event may be followed by normal cases that are now orphaned
+                    # we need to find a new acquisition point, or drop all of these NCs until the next one.
+                    ze = ze_max = k
+                    while (ze_max := ze_max+1) < len(states) and states[ze_max] != PCS.CompositionState.ACQUISITION: pass
+                    # The next acquisition is known to be valid
+                    dts_next, pts_next = (nodes[ze_max].dts(), nodes[ze_max].pts()) if ze_max != len(states) else [np.inf]*2
+                    assert ze_max == len(states) or (flags[ze_max] == 0 and states[ze_max] > 0)
 
-                    ze = k
-                    f_log_warn = lambda tc_pts: f"Discarded event at {tc_pts} tied to the dropped event at {nodes[k].tc_pts}."
+                    #start over: we now need to try to promote a normal case in-between
+                    right = nodes[ze].dts_end() < dts_next and nodes[ze].pts() + pts_delta < pts_next
+                    left = nodes[ze].dts() > nodes[j].dts_end() and nodes[ze].pts() - pts_delta > nodes[j].pts()
                     drop_from = np.inf
-                    #We may have discarded an acquisition followed by NCs, we must find the new acquisition point.
-                    while (ze := ze+1) < len(states) and states[ze] != PCS.CompositionState.ACQUISITION:
-                        #Screen wipes do not define any composition
-                        if nodes[ze].objects == [] and nodes[ze].nc_refresh:
+                    while (ze := ze+1) < ze_max and nodes[ze].dts_end() < dts_next:
+                        # screen wipes are not usable for promotion
+                        if nodes[ze].objects == []:
+                            assert nodes[ze].nc_refresh
                             continue
-                        #Cancels a possible past NORMAL CASE promotion
+                        #unpromote normal case redefinition (excessively careful).
                         if nodes[ze].partial:
+                            logger.debug(f"Unpromoted NC with ODS in epoch start collision at {nodes[ze].tc_pts}.")
                             assert flags[ze] == 1
-                            drop_from = min(ze, drop_from)
                             flags[ze] = 0
-                        nodes[ze].nc_refresh = nodes[ze].partial = False
+                            nodes[ze].partial = False
+                            drop_from = min(drop_from, ze)
+                        elif any(nodes[ze].new_mask):
+                            drop_from = min(drop_from, ze)
+                        was_refresh = nodes[ze].nc_refresh
+                        keep_dts = nodes[ze].dts() if nodes[ze].is_custom_dts() else None
+                        nodes[ze].set_dts(None)
+                        #simplicity: assume we need a full acquisition
+                        nodes[ze].nc_refresh = False
 
-                        if flags[ze] != -1 and (nodes[ze].dts() > dts_start and nodes[ze].pts() - pts_delta > nodes[0].pts()):
-                            logger.einfo(f"Epoch start collision: promoted normal case to acquisition at {nodes[ze].tc_pts}.")
-                            states[ze] = PCS.CompositionState.ACQUISITION
-                            flags[ze] = 0
-                            f_log_warn = lambda tc_pts: f"Discarded event at {tc_pts} as it preceeds the promoted NC at {nodes[ze].tc_pts}."
+                        right = nodes[ze].dts_end() < dts_next and nodes[ze].pts() + pts_delta < pts_next
+                        left  = nodes[ze].dts() > nodes[j].dts_end() and nodes[ze].pts() - pts_delta > nodes[j].pts()
+
+                        #allow overlaps -> allow buffering -> try to buffer this acquisition
+                        if allow_overlaps and not right and left and nodes[ze].pts() + pts_delta < pts_next:
+                            margin_left = nodes[ze].dts() - nodes[j].dts_end()
+                            desired_margin = nodes[ze].dts_end() - dts_next + 4/PGDecoder.FREQ
+                            #shift entire acquisition by a few ticks.
+                            if margin_left > desired_margin:
+                                dts_start, dts_stop = nodes[ze].dts(), nodes[ze].dts_end()
+                                nodes[ze].set_dts(max(nodes[ze].dts()-desired_margin, nodes[j].dts_end()))
+                                logger.debug(f"Buffered acquisition at {nodes[ze].tc_pts}={nodes[ze].pts()}, DTS={dts_start}->{dts_stop}, now: {nodes[ze].dts()}->{nodes[ze].dts_end()}")
+                                right = True
+                        if left and right:
                             break
-                    for zek in range(k+1, ze):
-                        if flags[zek] == 0 and (nodes[zek].dts_end() >= nodes[ze].dts() or nodes[zek].pts() + pts_delta >= nodes[ze].pts() or zek >= drop_from):
-                            flags[zek] = -1
-                            logger.warning(f_log_warn(nodes[zek].tc_pts))
+                        else:
+                            nodes[ze].nc_refresh = was_refresh
+                            nodes[ze].set_dts(keep_dts)
 
+                    if left and right:
+                        states[ze] = PCS.CompositionState.ACQUISITION
+                        flags[ze] = 0
+                        f_log_warn = lambda tc_pts: f"Discarded event at {tc_pts} as it preceeds the promoted NC at {nodes[ze].tc_pts}."
+                        max_z = ze
+                    else:
+                        max_z = ze_max
+                    buffered = 0
+                    for zek in range(j+1, ze):
+                        if -1 == flags[zek]:
+                            continue
+                        pts_rule = nodes[zek].pts() + pts_delta < nodes[ze].pts()
+                        dts_rule = nodes[zek].dts_end() < nodes[ze].dts()
+                        if allow_overlaps and nodes[zek].nc_refresh and pts_rule and buffered < 6 and zek < drop_from:
+                            assert states[zek] == PCS.CompositionState.NORMAL and flags[zek] == 0 and not nodes[zek].partial
+                            if not dts_rule:
+                                if nodes[zek].is_custom_dts():
+                                    logger.debug(f"Encountered custom DTS in epoch start collision id={zek}, overwriting.")
+                                new_dts = max(nodes[j].dts_end(), nodes[ze].dts()-1/PGDecoder.FREQ)
+                                logger.debug(f"Buffered PU at {nodes[zek].tc_pts}={nodes[zek].pts()}, DTS={nodes[zek].dts()} to {new_dts}.")
+                                nodes[zek].set_dts(new_dts)
+                                buffered += 1
+                        elif (not pts_rule or not dts_rule or buffered >= 6 or zek >= drop_from or not nodes[zek].nc_refresh):
+                            flags[zek] = -1
+                            drop_from = -np.inf #Start dropping everything that follows
+                            logger.warning(f"Discarded event at {nodes[zek].tc_pts} hindering the promoted acquisition at {nodes[ze].tc_pts}.")
+                        else:
+                            assert False, f"S={states[zek]}, R={nodes[zek].nc_refresh} {nodes[zek].tc_pts}"
+
+                    #we iterate here only if left and right are never true -> we h
+                    for zek in range(ze+1, max_z):
+                        if -1 != flags[zek]:
+                            flags[zek] = -1
+                            logger.warning(f"Discarded event at {nodes[zek].tc_pts} tied to the dropped event at {nodes[k].tc_pts}.")
                     ###while ze
                 ###event shift
             else:
@@ -537,6 +605,7 @@ class WindowsAnalyzer:
                 is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
                 j_iter = j_nc if is_normal_case else j
                 dts_iter = dts_start_nc if is_normal_case else dts_start
+                dts_end_iter = nodes[max(j_iter-1, 0)].dts_end()
 
                 num_pcs_buffered = 0
                 if len(nodes[j_iter].objects):
@@ -545,25 +614,47 @@ class WindowsAnalyzer:
                     #screen wipes don't contain objects, take the previous list
                     assert j_iter > 0
                     objs = nodes[j_iter-1].objects
-                objs = list(map(lambda x: x is not None, objs))
-                expected_score = sum(objs)
+                objs = list(map(lambda obj: obj is not None, objs))
+                refs = [[obj] for obj in objs]
                 for l in range(j_iter+1, k):
                     if allow_overlaps:
-                        for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
-                            objs[ko] &= (obj is not None) & (not mask)
+                        for ko, obj in enumerate(nodes[l].objects):
+                            #an object was previously there, and there is still an object that is visible?
+                            #transitions from true to false in this list means perform a wipe
+                            refs[ko].append(refs[ko][-1] and obj is not None and obj.is_visible(nodes[l].idx))
                     # We ran out of PCS to buffer or the objects are too different or min delta PTS -> drop
-                    if not allow_overlaps or sum(objs) != expected_score or num_pcs_buffered >= 7 or nodes[l].pts() + pts_delta >= nodes[k].pts():
+                    #logger.debug(f"{l}, {j_iter+1}-{k}, {objs} {refs}, PTSR={nodes[l].pts() >= nodes[k].pts()-pts_delta-0.1/PGDecoder.FREQ}")
+                    if not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or (nodes[l].pts() + pts_delta + 0.1/PGDecoder.FREQ >= nodes[k].pts()):
                         logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
                         flags[l] = -1
                     elif flags[l] == 0:
                         absolutes[l] = False
                         num_pcs_buffered += 1
                         nodes[l].nc_refresh = True
+
                         if nodes[l].dts() >= dts_iter:
-                            nodes[l].set_dts(dts_iter - 1/PGDecoder.FREQ)
+                            #logger.debug(f"DTSS {dts_iter:.04f}, {nodes[l].dts():.04f}, {nodes[l].pts():.04f}={nodes[l].tc_pts}")
+                            nodes[l].set_dts(max(dts_iter - 1/PGDecoder.FREQ, dts_end_iter))
                     assert flags[l] != 1
                     states[l] = PCS.CompositionState.NORMAL
+                    #Update object mask on which PUs are performed.
+                    # evaluated at the end since the above could be a valid wipe
+                    if allow_overlaps:
+                        for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
+                            objs[ko] &= (obj is not None) and (not mask)
 
+                # Palette update needs to keep the screen consistency - empty windows shall be conveyed accurately
+                if allow_overlaps and max(map(len, refs)) > 1:
+                    #Seek back first NC with ODS or ACQ
+                    j_acq = j_iter
+                    while j_acq > 0 and ((states[j_acq] == 0 and flags[j_acq] != 1) or (states[j_acq] > 0 and flags[j_acq] == -1)): j_acq -= 1
+                    assert flags[j_acq] != -1 and (states[j_acq] != PCS.CompositionState.NORMAL or flags[j_acq] == 1)
+                    assert j_acq <= j_iter
+                    #Pad to size, visibility assumed to False as the object is properly set within these boundaries
+                    for rid in range(len(refs)):
+                        refs[rid] = [False]*(j_iter-j_acq) + refs[rid]
+                    nodes[j_acq].obj_carry = refs
+                    logger.hdebug(f"Visibility flags override for PUs tied to {nodes[j_acq].tc_pts}: {refs}.")
                 states[k] = PCS.CompositionState.NORMAL if is_normal_case else PCS.CompositionState.ACQUISITION
                 nodes[k].partial = is_normal_case
                 flags[k] = int(is_normal_case)
@@ -597,16 +688,17 @@ class WindowsAnalyzer:
                 #Normal Case redefinition
                 assert state == PCS.CompositionState.NORMAL
                 assert nodes[k].objects != [] and sum(nodes[k].new_mask) == 1
-            elif flag == -1:
-                #Deleted event are skipped
-                continue
-            node.palette_id = pm.get_palette(node.dts())
-            if not pm.lock_palette(node.palette_id, node.pts(), node.dts()):
-                logger.error(f"Cannot acquire palette (rendering error) at {nodes[k].pts()}, discarding.")
-                flags[k] = -1
+            if flag >= 0:
+                deb_hdlr = logger.debug
+                node.palette_id = pm.get_palette(node.dts())
+                if not pm.lock_palette(node.palette_id, node.pts(), node.dts()):
+                    logger.error(f"Cannot acquire palette (rendering error) at {nodes[k].pts()}, discarding.")
+                    flags[k] = -1
+                else:
+                    node.pal_vn = pm.get_palette_version(node.palette_id)
             else:
-                node.pal_vn = pm.get_palette_version(node.palette_id)
-            logger.debug(f"{state:02X} {flag} - {node.partial} DTS={node.dts():.05f}->{node.dts_end():.05f} PTS={node.pts():.05f} OM={node.new_mask} {node.palette_id} {node.pal_vn}")
+                deb_hdlr = logger.hdebug
+            deb_hdlr(f"{state:02X} {flag:02}-{node.partial} DTS={node.dts():.04f}->{node.dts_end():.04f} PTS={node.pts():.04f}={node.tc_pts} OM={node.new_mask} {node.palette_id} {node.pal_vn} cdts={node.is_custom_dts()}")
         ####
     ####
 
@@ -633,14 +725,21 @@ class WindowsAnalyzer:
             offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x[1].box, compositions)))
             imgs_chain = []
 
+            last_imgs = [None] * len(compositions)
             for j in range(i, k):
                 coords = np.zeros((2,), np.int32)
                 a_img = Image.new('RGBA', dims, (0, 0, 0, 0))
-                multiplier = int(flags[j] >= 0)
                 for wid, pgo in compositions:
+                    multiplier = int(flags[j] >= 0)
                     if len(pgo.mask[j-pgo.f:j+1-pgo.f]) == 1:
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
-                        a_img.paste(Image.fromarray(multiplier*self.mask_event(self.windows[wid], self.events[j]), 'RGBA').crop(pgo.box.coords), paste_box)
+                        last_imgs[wid] = (self.mask_event(self.windows[wid], self.events[j]), paste_box, pgo.box.coords)
+                    elif node.obj_carry is not None and len(node.obj_carry[wid]) > j-i and last_imgs[wid] is not None:
+                        assert j-i > 0
+                        multiplier &= node.obj_carry[wid][j-i]
+                    else:
+                        multiplier = 0
+                    a_img.paste(Image.fromarray(multiplier*last_imgs[wid][0], 'RGBA').crop(last_imgs[wid][2]), last_imgs[wid][1])
                     coords += offset
                 imgs_chain.append(a_img)
             ####
@@ -722,8 +821,18 @@ class WindowsAnalyzer:
                 oid = wid + double_buffering[wid]
 
                 assert len(flags[i:k]) >= len(pgo.mask[i-pgo.f:k-pgo.f])
-                #imgs_chain = [Image.fromarray(img*int(flag >= 0)) for img, flag in zip(pgo.gfx[i-pgo.f:k-pgo.f], flags[i:k])]
-                imgs_chain = [Image.fromarray(self.mask_event(self.windows[wid], ev)*int(flag >= 0)) for ev, flag in zip(self.events[i:k], flags[i:k])]
+
+                last_img = None
+                imgs_chain = []
+                for j in range(i, k):
+                    multiplier = int(flags[j] >= 0)
+                    if pgo.is_active(j):
+                        last_img = self.mask_event(self.windows[wid], self.events[j])
+                    elif node.obj_carry is not None and len(node.obj_carry[wid]) > j-i:
+                        multiplier &= node.obj_carry[wid][j-i]
+                    else:
+                        multiplier = 0
+                    imgs_chain.append(Image.fromarray(multiplier*last_img))
 
                 cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                 # cparams = box_to_crop(pgo.box)
@@ -853,16 +962,7 @@ class WindowsAnalyzer:
                     break
             assert k > i
 
-            if nodes[i].tc_shift == 0:
-                assert nodes[i].tc_pts == self.events[i].tc_in
-                c_pts = TC.tc2pts(self.events[i].tc_in, self.bdn.fps)
-            else:
-                nodes[i].tc_pts = TC.add_framestc(self.events[i].tc_in, self.bdn.fps, nodes[i].tc_shift)
-                c_pts = TC.tc2pts(nodes[i].tc_pts, self.bdn.fps)
-                logger.debug(f"Shifted event: {self.events[i].tc_in} -> {nodes[i].tc_pts}, {TC.tc2pts(self.events[i].tc_in, self.bdn.fps)} -> c_pts={c_pts}")
-
-            assert c_pts == TC.tc2pts(nodes[i].tc_pts, self.bdn.fps)
-
+            c_pts = TC.tc2pts(nodes[i].tc_pts, self.bdn.fps)
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
@@ -1289,8 +1389,8 @@ class DSNode:
 
         self.new_mask = []
         self.partial = False
-        self.tc_shift = 0
         self.idx = 0
+        self.obj_carry = None
 
         self.parent = None
         self.palette_id = None
@@ -1371,7 +1471,6 @@ class DSNode:
         new_node.slots = self.slots.copy()
         new_node.pos = self.pos.copy()
         new_node.new_mask = self.new_mask.copy()
-        new_node.tc_shift = self.tc_shift
         new_node.partial = self.partial
         new_node.idx = self.idx
         return new_node
@@ -1442,7 +1541,7 @@ class DSNode:
 
             if node.is_custom_dts():
                 new_dts = round(node.dts()*PGDecoder.FREQ)
-                assert new_dts <= dts
+                assert new_dts <= dts, f"new={new_dts}, min={dts}, {node.tc_pts}"
                 dts = new_dts
 
         #PCS always exist
