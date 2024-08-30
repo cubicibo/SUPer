@@ -485,16 +485,12 @@ class WindowsAnalyzer:
             nc_not_ok = normal_case_possible and j_nc == 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts())
             #Impossible normal case (could be disabled) or Not a normal case and collide with epoch start
             if nc_not_ok or (not normal_case_possible and j == 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts())):
-                t_diff = durs[k]/self.bdn.fps
-                #If this event is long enough, we shift it forward in time.
-                wipe_area = nodes[j].wipe_duration()
-                #worst possible decode duration + small margin
-                worst_dur = (np.ceil(wipe_area*2) + 3)
+                needed_shift_f = max(1, int(np.ceil((5 + PGDecoder.FREQ*max(nodes[j].dts_end() - dts_start, nodes[j].pts() + pts_delta - nodes[k].pts()))/(PGDecoder.FREQ/self.bdn.fps))))
 
                 #K-node are always a mandatory acquisition: do we have time to decode and compose this (worst case)?
-                if t_diff > np.ceil(worst_dur*2+PGDecoder.FREQ/self.bdn.fps)/PGDecoder.FREQ:
+                if needed_shift_f < (durs[k] - 1) >> 1 and (durs[k] - 1 - needed_shift_f)/self.bdn.fps > pts_delta:
                     prev_tc = nodes[k].tc_pts
-                    nodes[k].tc_pts = TC.add_framestc(nodes[k].tc_pts, self.bdn.fps, int(np.ceil(worst_dur/PGDecoder.FREQ*self.bdn.fps)))
+                    nodes[k].tc_pts = TC.add_framestc(nodes[k].tc_pts, self.bdn.fps, needed_shift_f)
                     logger.warning(f"Shifted event at {prev_tc} to {nodes[k].tc_pts} to account for epoch start and compliancy.")
                     #wipe all events in between epoch start and this point
                     can_buffer = allow_overlaps
@@ -507,7 +503,7 @@ class WindowsAnalyzer:
                                 nodes[ze].set_dts(max(nodes[k].dts()-1/PGDecoder.FREQ, nodes[j].dts_end()))
                             flags[ze] = 0
                         elif flags[ze] >= 0 and (not dts_rule or not pts_rule or not can_buffer or not nodes[ze].nc_refresh):
-                            logger.warning(f"Discarded event at {nodes[k].tc_pts} to perform a mendatory acquisition right after epoch start.")
+                            logger.warning(f"Discarded event at {nodes[ze].tc_pts} to perform a mendatory acquisition right after epoch start.")
                             flags[ze] = -1
                 else:
                     # event is short, we can't shift it so we just discard it.
@@ -572,6 +568,7 @@ class WindowsAnalyzer:
                     else:
                         max_z = ze_max
                     buffered = 0
+
                     for zek in range(j+1, ze):
                         if -1 == flags[zek]:
                             continue
@@ -599,67 +596,68 @@ class WindowsAnalyzer:
                             flags[zek] = -1
                             logger.warning(f"Discarded event at {nodes[zek].tc_pts} tied to the dropped event at {nodes[k].tc_pts}.")
                     ###while ze
+                    k -= 1
+                    continue
                 ###event shift
+            #Filter the events
+            is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
+            j_iter = j_nc if is_normal_case else j
+            dts_iter = dts_start_nc if is_normal_case else dts_start
+            dts_end_iter = nodes[max(j_iter-1, 0)].dts_end()
+
+            num_pcs_buffered = 0
+            if len(nodes[j_iter].objects):
+                objs = nodes[j_iter].objects
             else:
-                #Filter the events
-                is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
-                j_iter = j_nc if is_normal_case else j
-                dts_iter = dts_start_nc if is_normal_case else dts_start
-                dts_end_iter = nodes[max(j_iter-1, 0)].dts_end()
+                #screen wipes don't contain objects, take the previous list
+                assert j_iter > 0
+                objs = nodes[j_iter-1].objects
+            objs = list(map(lambda obj: obj is not None, objs))
+            refs = [[obj] for obj in objs]
+            for l in range(j_iter+1, k):
+                if allow_overlaps:
+                    for ko, obj in enumerate(nodes[l].objects):
+                        #an object was previously there, and there is still an object that is visible?
+                        #transitions from true to false in this list means perform a wipe
+                        refs[ko].append(refs[ko][-1] and obj is not None and obj.is_visible(nodes[l].idx))
+                # We ran out of PCS to buffer or the objects are too different or min delta PTS -> drop
+                #logger.debug(f"{l}, {j_iter+1}-{k}, {objs} {refs}, PTSR={nodes[l].pts() >= nodes[k].pts()-pts_delta-0.1/PGDecoder.FREQ}")
+                if not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or (nodes[l].pts() + pts_delta + 0.1/PGDecoder.FREQ >= nodes[k].pts()):
+                    logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
+                    flags[l] = -1
+                elif flags[l] == 0:
+                    absolutes[l] = False
+                    num_pcs_buffered += 1
+                    nodes[l].nc_refresh = True
 
-                num_pcs_buffered = 0
-                if len(nodes[j_iter].objects):
-                    objs = nodes[j_iter].objects
-                else:
-                    #screen wipes don't contain objects, take the previous list
-                    assert j_iter > 0
-                    objs = nodes[j_iter-1].objects
-                objs = list(map(lambda obj: obj is not None, objs))
-                refs = [[obj] for obj in objs]
-                for l in range(j_iter+1, k):
-                    if allow_overlaps:
-                        for ko, obj in enumerate(nodes[l].objects):
-                            #an object was previously there, and there is still an object that is visible?
-                            #transitions from true to false in this list means perform a wipe
-                            refs[ko].append(refs[ko][-1] and obj is not None and obj.is_visible(nodes[l].idx))
-                    # We ran out of PCS to buffer or the objects are too different or min delta PTS -> drop
-                    #logger.debug(f"{l}, {j_iter+1}-{k}, {objs} {refs}, PTSR={nodes[l].pts() >= nodes[k].pts()-pts_delta-0.1/PGDecoder.FREQ}")
-                    if not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or (nodes[l].pts() + pts_delta + 0.1/PGDecoder.FREQ >= nodes[k].pts()):
-                        logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
-                        flags[l] = -1
-                    elif flags[l] == 0:
-                        absolutes[l] = False
-                        num_pcs_buffered += 1
-                        nodes[l].nc_refresh = True
+                    if nodes[l].dts() >= dts_iter:
+                        logger.debug(f"DTSS {dts_iter:.04f}, {nodes[l].dts():.04f}, {nodes[l].pts():.04f}={nodes[l].tc_pts} {dts_end_iter}")
+                        nodes[l].set_dts(max(dts_iter - 1/PGDecoder.FREQ, dts_end_iter))
+                assert flags[l] != 1
+                states[l] = PCS.CompositionState.NORMAL
+                #Update object mask on which PUs are performed.
+                # evaluated at the end since the above could be a valid wipe
+                if allow_overlaps:
+                    for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
+                        objs[ko] &= (obj is not None) and (not mask)
 
-                        if nodes[l].dts() >= dts_iter:
-                            #logger.debug(f"DTSS {dts_iter:.04f}, {nodes[l].dts():.04f}, {nodes[l].pts():.04f}={nodes[l].tc_pts}")
-                            nodes[l].set_dts(max(dts_iter - 1/PGDecoder.FREQ, dts_end_iter))
-                    assert flags[l] != 1
-                    states[l] = PCS.CompositionState.NORMAL
-                    #Update object mask on which PUs are performed.
-                    # evaluated at the end since the above could be a valid wipe
-                    if allow_overlaps:
-                        for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
-                            objs[ko] &= (obj is not None) and (not mask)
-
-                # Palette update needs to keep the screen consistency - empty windows shall be conveyed accurately
-                if allow_overlaps and max(map(len, refs)) > 1:
-                    #Seek back first NC with ODS or ACQ
-                    j_acq = j_iter
-                    while j_acq > 0 and ((states[j_acq] == 0 and flags[j_acq] != 1) or (states[j_acq] > 0 and flags[j_acq] == -1)): j_acq -= 1
-                    assert flags[j_acq] != -1 and (states[j_acq] != PCS.CompositionState.NORMAL or flags[j_acq] == 1)
-                    assert j_acq <= j_iter
-                    #Pad to size, visibility assumed to False as the object is properly set within these boundaries
-                    for rid in range(len(refs)):
-                        refs[rid] = [False]*(j_iter-j_acq) + refs[rid]
-                    nodes[j_acq].obj_carry = refs
-                    logger.hdebug(f"Visibility flags override for PUs tied to {nodes[j_acq].tc_pts}: {refs}.")
-                states[k] = PCS.CompositionState.NORMAL if is_normal_case else PCS.CompositionState.ACQUISITION
-                nodes[k].partial = is_normal_case
-                flags[k] = int(is_normal_case)
-                if is_normal_case:
-                    logger.einfo(f"Object refreshed with a Normal Case at {nodes[k].tc_pts} (tight timing).")
+            # Palette update needs to keep the screen consistency - empty windows shall be conveyed accurately
+            if allow_overlaps and max(map(len, refs)) > 1:
+                #Seek back first NC with ODS or ACQ
+                j_acq = j_iter
+                while j_acq > 0 and ((states[j_acq] == 0 and flags[j_acq] != 1) or (states[j_acq] > 0 and flags[j_acq] == -1)): j_acq -= 1
+                assert flags[j_acq] != -1 and (states[j_acq] != PCS.CompositionState.NORMAL or flags[j_acq] == 1)
+                assert j_acq <= j_iter
+                #Pad to size, visibility assumed to False as the object is properly set within these boundaries
+                for rid in range(len(refs)):
+                    refs[rid] = [False]*(j_iter-j_acq) + refs[rid]
+                nodes[j_acq].obj_carry = refs
+                logger.hdebug(f"Visibility flags override for PUs tied to {nodes[j_acq].tc_pts}: {refs}.")
+            states[k] = PCS.CompositionState.NORMAL if is_normal_case else PCS.CompositionState.ACQUISITION
+            nodes[k].partial = is_normal_case
+            flags[k] = int(is_normal_case)
+            if is_normal_case:
+                logger.einfo(f"Object refreshed with a Normal Case at {nodes[k].tc_pts} (tight timing).")
             k -= 1
         ####while k > 0
     ####filter_events
@@ -1211,11 +1209,11 @@ class WindowsAnalyzer:
             tic = TC.tc2f(event.tc_in, self.bdn.fps)
             toc = TC.tc2f(event.tc_out,self.bdn.fps)
             clear_duration = tic-top
-            delays += [toc-tic]
             if clear_duration > 0:
                 delays += [clear_duration]
                 nodes.append(DSNode([], self.windows, self.events[ne-1].tc_out, nc_refresh=True))
                 nodes[-1].idx = -1
+            delays += [toc-tic]
             nodes.append(DSNode([], self.windows, event.tc_in))
             nodes[-1].idx = ne
             top = toc
@@ -1235,7 +1233,6 @@ class WindowsAnalyzer:
             nodes[k].parent = parent
 
             assert parent is None or self.events[ne-1].tc_out == nodes[k].parent.tc_pts
-            assert nodes[k].tc_pts == event.tc_in
 
             r_durs.append((durs[k], 0 if not valid_parent else durs[k-1]))
             r_nodes.append(nodes[k])
@@ -1408,7 +1405,7 @@ class DSNode:
         return sum(map(lambda w: np.ceil(PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC), self.windows))
 
     def set_dts(self, dts: Optional[float]) -> None:
-        assert dts is None or dts <= self.dts()
+        assert dts is None or dts <= self.dts() or self.nc_refresh
         self._dts = round(dts*PGDecoder.FREQ) if dts is not None else None
 
     def dts_end(self) -> float:
@@ -1541,7 +1538,7 @@ class DSNode:
 
             if node.is_custom_dts():
                 new_dts = round(node.dts()*PGDecoder.FREQ)
-                assert new_dts <= dts, f"new={new_dts}, min={dts}, {node.tc_pts}"
+                assert new_dts <= dts or ds.pcs.pal_flag, f"new={new_dts}, min={dts}, {node.tc_pts}"
                 dts = new_dts
 
         #PCS always exist
