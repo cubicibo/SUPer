@@ -36,7 +36,7 @@ from .pgraphics import PGDecoder
 from .filestreams import BDNXML, BDNXMLEvent, remove_dupes
 from .segments import Epoch, DisplaySet
 from .optim import Quantizer
-from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext
+from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext, debug_stats
 from .render2 import GroupingEngine, WindowsAnalyzer
 
 class LayoutPreset(IntEnum):
@@ -427,6 +427,9 @@ class BDNRender:
     ####
 
     def test_output(self, bdn: BDNXML) -> None:
+        if logger.level <= 10:
+            logger.debug(debug_stats(self._epochs))
+
         # Final checks
         logger.info("Checking stream consistency and compliancy...")
 
