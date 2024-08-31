@@ -46,6 +46,7 @@ The config.ini file can be used to specify the relative or absolute path to a qu
  -e, --extra-acq     Set the min count of palette update after which acquisitions should be inserted [0: off, default: 2]
  -l, --log-to-file   Set (enable) logging to file and set logging level: [-10: main report, 10: debug, 20: info, 25: iinf, 30: warnings]
  -v, --version       Print the version and exit.
+ --layout            Set the epoch and window definition mode. 2 is the preferred default [2: opportunist, 1: normal, 0: basic].
  --ssim-tol          Adjust the SSIM tolerance threshold. This threshold is used for bitmaps classification in effects [-100; 100, def: 0] 
 ```
 - Image quantization mode 3 ("PILIQ") is either libimagequant or pngquant, whichever specified in config.ini or available in your system.
@@ -64,6 +65,7 @@ Here are some additional informations on selected options, especially those that
 - Palette update buffering: buffer palette updates before a new object is decoded to drop fewer events.
 - Insert acquisition: perform a screen refresh after a palette animation. Some palette animations may cause artifacts that remain on the display, a refresh will hide them. This can impact the bitrate as new bitmaps are inserted in the stream.
 - Logging: logging level -10 creates a single file listing the filtering decisions, if any (e.g. dropped events, normal case object redefinition).
+- Layout mode: steer the epoch definition algorithm way of defining windows. Opportunist is the best and coded buffer-safe, but may be disliked by Scenarist "Build/Rebuild" operation. 1 is an acceptable fall-back. 0 Should never be used.
 
 ### Example (recommended defaults)
 `python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --qmode 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`

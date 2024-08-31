@@ -580,7 +580,7 @@ class WindowsAnalyzer:
                                 if nodes[zek].is_custom_dts():
                                     logger.debug(f"Encountered custom DTS in epoch start collision id={zek}, overwriting.")
                                 new_dts = max(nodes[j].dts_end(), nodes[ze].dts()-1/PGDecoder.FREQ)
-                                logger.debug(f"Buffered PU at {nodes[zek].tc_pts}={nodes[zek].pts()}, DTS={nodes[zek].dts()} to {new_dts}.")
+                                logger.debug(f"Buffered PU at {nodes[zek].tc_pts}={nodes[zek].pts():.04f}, DTS={nodes[zek].dts():.04f} to {new_dts:.04f}.")
                                 nodes[zek].set_dts(new_dts)
                                 buffered += 1
                         elif (not pts_rule or not dts_rule or buffered >= 6 or zek >= drop_from or not nodes[zek].nc_refresh):
@@ -622,7 +622,7 @@ class WindowsAnalyzer:
                         refs[ko].append(refs[ko][-1] and obj is not None and obj.is_visible(nodes[l].idx))
                 # We ran out of PCS to buffer or the objects are too different or min delta PTS -> drop
                 #logger.debug(f"{l}, {j_iter+1}-{k}, {objs} {refs}, PTSR={nodes[l].pts() >= nodes[k].pts()-pts_delta-0.1/PGDecoder.FREQ}")
-                if not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or (nodes[l].pts() + pts_delta + 0.1/PGDecoder.FREQ >= nodes[k].pts()):
+                if flags[l] >= 0 and (not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or (nodes[l].pts() + pts_delta + 0.1/PGDecoder.FREQ >= nodes[k].pts())):
                     logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
                     flags[l] = -1
                 elif flags[l] == 0:
@@ -631,7 +631,7 @@ class WindowsAnalyzer:
                     nodes[l].nc_refresh = True
 
                     if nodes[l].dts() >= dts_iter:
-                        logger.debug(f"DTSS {dts_iter:.04f}, {nodes[l].dts():.04f}, {nodes[l].pts():.04f}={nodes[l].tc_pts} {dts_end_iter}")
+                        logger.debug(f"Shift DTS {dts_iter:.04f}, {nodes[l].dts():.04f}, {nodes[l].pts():.04f}={nodes[l].tc_pts} {dts_end_iter}")
                         nodes[l].set_dts(max(dts_iter - 1/PGDecoder.FREQ, dts_end_iter))
                 assert flags[l] != 1
                 states[l] = PCS.CompositionState.NORMAL
@@ -788,7 +788,7 @@ class WindowsAnalyzer:
                 bias = 0 if abs(ratio_area) < 0.5 else int(67*(ratio_area-np.sign(ratio_area)*0.25))
                 n_colors = 128
                 assert n_colors > abs(bias) + 10
-                logger.debug(f"NC colour distribution: r={ratio_area:.03f}, b={bias} -> w0={n_colors+bias}, w1={n_colors-bias}")
+                logger.debug(f"Split colour distribution: r={ratio_area:.03f}, b={bias} -> w0={n_colors+bias}, w1={n_colors-bias}")
 
             id_skipped = None
             for wid, pgo in pgobs_items:
@@ -866,7 +866,6 @@ class WindowsAnalyzer:
             pal |= pals[1][0]
         else:
             pals.append([Palette()] * len(pals[0]))
-
         return cobjs, pals, o_ods, pal
 
     def _get_undisplay(self, c_pts: float, pcs_id: int, wds_base: WDS, palette_id: int, pcs_fn: Callable[[...], PCS]) -> tuple[DisplaySet, int]:
@@ -970,6 +969,15 @@ class WindowsAnalyzer:
 
             #Normal case refresh implies we are refreshing one object out of two displayed.
             has_two_objs = has_two_objs > 1 or normal_case_refresh
+            if normal_case_refresh:
+                obj_carry = [[] for _ in self.windows]
+                for kc, future_node in enumerate(nodes[i:k]):
+                    if len(obj_carry[0]) > kc or flags[i+kc] == -1 or (states[i+kc] == PCS.CompositionState.NORMAL and flags[i+kc] != 1):
+                        continue
+                    for wid, _ in enumerate(self.windows):
+                        obj_carry[wid] += [False] if future_node.obj_carry is None else future_node.obj_carry[wid]
+                nodes[i].obj_carry = obj_carry
+                assert len(obj_carry[0]) == k-i or not (any(obj_carry[0]) or (len(self.windows) == 2 and any(obj_carry[1])))
 
             r = self._generate_acquisition_ds(i, k, pgobs_items, nodes[i], double_buffering,
                                               has_two_objs, ods_reg, c_pts, normal_case_refresh, flags)

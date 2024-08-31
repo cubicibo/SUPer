@@ -76,6 +76,7 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=0, required=False)
     parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 8 supported. [0: auto] (def:  %(default)s)", type=int, default=0, required=False)
+    parser.add_argument('--layout', help="Set window layout mode. [0: safe, 1: normal, 2: aggressive] (def:  %(default)s)", type=int, default=-1, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
@@ -97,6 +98,10 @@ if __name__ == '__main__':
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown BT ITU target, using bt709.")
         args.bt = 709
+
+    if not (2 >= args.layout >= -1):
+        logger.warning("Invalid layout mode specified, falling back to ini config (or default, 2).")
+        args.layout = -1
 
     if args.extra_acq < 0:
         logger.warning("Got invalid extra-acq, disabling option.")
@@ -125,9 +130,9 @@ if __name__ == '__main__':
             logger.warning("PES output requires --palette, forcefully enabling this flag.")
             args.palette = True
 
-    parameters = {}
+    parameters = {'ini_opts': {'super_cfg': {}}}
     if (config_file := Path('config.ini')).exists():
-        ini_opts = {}
+        ini_opts = {'super_cfg': {}}
         import configparser
         def get_value_key(config, key: str):
             try: return config[key]
@@ -135,7 +140,7 @@ if __name__ == '__main__':
         config = configparser.ConfigParser()
         config.read(config_file)
         if (super_cfg := get_value_key(config, 'SUPer')) is not None:
-            ini_opts['super_cfg'] = dict(super_cfg)
+            ini_opts['super_cfg'] |= dict(super_cfg)
 
         if args.qmode >= 3:
             exepath = None
@@ -146,7 +151,12 @@ if __name__ == '__main__':
                 piq_values |= {k: int(v) for k, v in piq_sect.items()}
             ini_opts['quant'] = {'qpath': exepath} | piq_values
         if len(ini_opts):
-            parameters['ini_opts'] = ini_opts
+            parameters['ini_opts'] |= ini_opts
+    
+    if args.layout >= 0:
+        parameters['ini_opts']['super_cfg']['layout_mode'] = args.layout
+    if parameters['ini_opts']['super_cfg'].get('layout_mode', None) is None:
+        parameters['ini_opts']['super_cfg']['layout_mode'] = 2
     ###
     parameters |= {
         'quality_factor': int(args.compression)/100,

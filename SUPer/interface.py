@@ -215,7 +215,7 @@ class BDNRender:
 
     def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
         layout_mode = self.kwargs.get('ini_opts', {}).get('super_cfg', {}).get('layout_mode', LayoutPreset.NORMAL)
-        layout_mode = int(layout_mode) if isinstance(layout_mode, LayoutPreset) or str.isnumeric(layout_mode) else LayoutPreset.NORMAL
+        layout_mode = int(layout_mode) if isinstance(layout_mode, (int, LayoutPreset)) or str.isnumeric(layout_mode) else LayoutPreset.NORMAL
         logger.debug(f"Layout engine preset: {layout_mode}, with capabilities: {', '.join(LayoutEngine.get_capabilities())}.")
 
         screen_area = np.multiply(*bdn.format.value)
