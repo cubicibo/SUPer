@@ -977,7 +977,7 @@ class WindowsAnalyzer:
                     for wid, _ in enumerate(self.windows):
                         obj_carry[wid] += [False] if future_node.obj_carry is None else future_node.obj_carry[wid]
                 nodes[i].obj_carry = obj_carry
-                assert len(obj_carry[0]) == k-i or not (any(obj_carry[0]) or (len(self.windows) == 2 and any(obj_carry[1])))
+                nodes[i].obj_carry += [False] * ((k-i)-len(obj_carry))
 
             r = self._generate_acquisition_ds(i, k, pgobs_items, nodes[i], double_buffering,
                                               has_two_objs, ods_reg, c_pts, normal_case_refresh, flags)
