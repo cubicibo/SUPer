@@ -1,35 +1,34 @@
 # SUPer
-SUPer is a tool to convert BDN XML + PNG assets to Blu-ray SUP ("HDMV PGS") subtitles.
-Unlike existing free and professionnal SUP converters, SUPer analyzes and re-renders the caption graphics internally to fully exploit the PGS format. Caption files generated with SUPer may feature softsub karaokes, masking, fades, basic moves, and are guaranteed to work nicely on your favorite Blu-ray Disc player.
+SUPer is a HDMV PGS ("BD SUP") encoder. It generates fully compliant Presentation Graphic Streams from BDN XML + PNG assets.
+Unlike existing free and professionnal SUP converters, SUPer analyzes and re-renders the caption graphics internally to fully exploit the PGS format. Caption files generated with SUPer may feature soft-sub typesetting effects like karaokes, masking, fades, basic moves, and are guaranteed to work on your favorite Blu-ray Disc player.
 
 Two output formats are supported: SUP and PES+MUI. The later is commonly used in professional authoring suites.
 
 ## Usage
-SUPer is distributed as stand-alone executable with a GUI, or as an installable Python package with gui/cli user scripts.
+SUPer is distributed as stand-alone executable (gui), or as an installable Python package with gui/cli user scripts.
 
-Users who wish to execute SUPer as a Python package with their local Python environment must first install the package:<br/>
+Users who prefer to execute SUPer in their own Python environment must first install the package:<br/>
 `python3 -m pip install ./SUPer`,  where `SUPer` is the repository folder.
 
 ## Input file format
-SUPer only accepts Sony BDN + PNG assets as input. Those files may be generated via [ass2bdnxml](https://github.com/cubicibo/ass2bdnxml) or avs2bdnxml. Exports from other tools like SubtitleEdit are untested but should work nonetheless.
+SUPer only accepts Sony BDN + PNG assets as input. These may be generated via [ass2bdnxml](https://github.com/cubicibo/ass2bdnxml) or avs2bdnxml. Exports from other tools like SubtitleEdit are untested but should work nonetheless.
 
-### GUI client
-Both the released standalone executables and `python3 supergui.py` will display the graphical user interface. The window let one select the input BDN XML, the output file name and tune some options that affect the quality and the stream structure. The GUI always executes aside of a command-line window providing progress and logging information.
+## config.ini
+The config.ini file can be used to specify the relative or absolute path to a quantizer binary (either pngquant[.exe] or libimagequant[.dll, .so]) and its options. If pngquant is in PATH, the name is sufficient. An external quantizer will offer higher quality than the internal one.
+It also hold a few other options tied to SUPer.
+
+### Graphical User Interface
+Both the standalone executables and `python3 supergui.py` will display the graphical user interface. The user can select the input BDN XML, the output file name and adapt the stream structure with some options. The GUI always executes aside of a command-line window providing progress and logging information.
 
 - Select the input BDN XML file. The file must resides in the same directory as the PNG assets.
 - Select the desired output file and extension using the Windows explorer.
 - "Make it SUPer" starts the conversion process. The actual progress is printed in the command line window.
 
-#### GUI config.ini
-The config.ini file can be used to specify the relative or absolute path to a quantizer binary (either pngquant[.exe] or libimagequant[.dll, .so]). If pngquant is in PATH, the name is sufficient. An external quantizer will offer higher quality than the internal one.
+### Command line interface
+`supercli.py` is essentially the command line equivalent to `supergui.py`. 
 
-### Command line client
-`supercli.py` is essentially the command line equivalent to `supergui.py`.
-
-#### CLI Usage
 `python3 supercli.py [PARAMETERS] outputfile`
 
-#### CLI Parameters
 ```
  -i, --input         Input BDNXML file.
  -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
@@ -49,39 +48,34 @@ The config.ini file can be used to specify the relative or absolute path to a qu
  --layout            Set the epoch and window definition mode. 2 is the preferred default [2: opportunist, 1: normal, 0: basic].
  --ssim-tol          Adjust the SSIM tolerance threshold. This threshold is used for bitmaps classification in effects [-100; 100, def: 0] 
 ```
-- Image quantization mode 3 ("PILIQ") is either libimagequant or pngquant, whichever specified in config.ini or available in your system.
-- The output file extension is used to infer the desired output type (SUP or PES).
-- If `--allow-normal` or `--ahead` is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Building or rebuilding the PES is not mendatory to mux a project.
-- `--max-kbps` does not shape the stream, it is just a limit to compare it to. Only `--compression` and `--qmode` may be used to reduce the filesize.
-- SUPer shall only generate strictly compliant datastream. No option or value will break compliancy.
 
-## Misc
 ### GUI/CLI options
 Here are some additional informations on selected options, especially those that shape the datastream and affect the output:
 - Compression rate: minimum time margin (in %) between two events to perform an acquisition.
-- Acquisition rate: Secondary compression parameter. Do not change it (100) unless a lower bitrate is needed.
-- Quantization: image quantizer to use. pngquant/libimagequant (3) is recommended. PIL (1) outputs lower quality but faster (3). (2) is experimental and should not be used.
-- Allow normal case object redefinition: whenever possible, update a single object out of two. May lower the count of dropped events.
-- Palette update buffering: buffer palette updates before a new object is decoded to drop fewer events.
+- Acquisition rate: Secondary compression parameter. Leave it untouched unless a lower bitrate is needed.
+- Quantization: image quantizer to use. pngquant/libimagequant (3) is recommended. PIL (1) outputs lower quality but can be faster. You should download pngquant and specify it in config.ini if SUPer does not find pngquant or libimagequant.
+- Allow normal case object redefinition: whenever possible, update a single object out of two. This may reduce the count of dropped events.
+- Palette update buffering: decode palette updates early to drop fewer events, right before decoding of new bitmaps.
 - Insert acquisition: perform a screen refresh after a palette animation. Some palette animations may cause artifacts that remain on the display, a refresh will hide them. This can impact the bitrate as new bitmaps are inserted in the stream.
-- Logging: logging level -10 creates a single file listing the filtering decisions, if any (e.g. dropped events, normal case object redefinition).
+- Logging: logging level -10 creates a single file listing solely the filtering decisions, if any (e.g. dropped events, normal case object redefinition).
 - Layout mode: steer the epoch definition algorithm way of defining windows. Opportunist is the best and coded buffer-safe, but may be disliked by Scenarist "Build/Rebuild" operation. 1 is an acceptable fall-back. 0 Should never be used.
+
+### Additional tips  
+- Image quantization mode 3 ("PILIQ") is either libimagequant or pngquant, whichever available and specified in config.ini.
+- The output file extension is used to infer the desired output type (SUP or PES).
+- `--max-kbps` does not shape the stream, it is simply a limit to compare it to. Only `--compression` and `--qmode` may be used to reduce the filesize.
+- If `--allow-normal` or `--ahead` is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Building or rebuilding the PES is not mandatory to mux a project.
 
 ### Example (recommended defaults)
 `python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --qmode 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`
 
 ### How SUPer works
-SUPer implements a conversion engine that uses the entirety of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities that includes palette updates, object redefinition, object cropping and events buffering.
+SUPer implements a conversion engine that makes use of most of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities like palette updates, object redefinition and events buffering. Notably, SUPer analyzes each input images and encodes a sequence of similar images together into a single presentation graphic (bitmap). This dramatically reduces the decoding and composition bandwidth and allows to perform complex animations while the decoder is decoding the next bitmaps.
 
-SUPer analyzes each input images and encodes a sequence of similar images together into a single presentation graphic (bitmap). This PG object has the animation encoded in it and a sequence of palette updates will display the sequence of images. This dramatically reduces the decoding and composition bandwidth and allows for complex animations to be performed while the hardware PG decoder is busy decoding the next PG objects.
-
-### PGS Limitation to keep in mind
-- Blu-ray players PG decoders have a limited bandwidth and can refresh the display ever so often. The size of the object sets its decoding time, and SUPer may be obligated to drop events sporadically if it can't be decoded and displayed in due time.
+- Official PG decoders have a specified bandwidth and can refresh the display ever so often. The size of the largest graphic in an epoch sets the decoding time, and SUPer may be obligated to drop events sporadically to produce a compliant datastream.
 - Palette updates are instantaneous and not subject to decoding constraints. SUPer tries to use them whenever possible.
-- Most typesetting effect will work fine, as long as they are within a reasonable area.
 
 ## Special Thanks
 - Masstock for advanced testing
-- NLScavenger and Prince 7 for samples or testing
 - TheScorpius666 for the incredible documentation
 - FFmpeg libavcodec pgssubdec authors

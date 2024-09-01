@@ -20,8 +20,8 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 __MAJOR = 0
 __MINOR = 2
-__REVISION = 5
+__REVISION = 6
 
 __name__    = "SUPer"
-__version__ = '.'.join(map(str, [__MAJOR, __MINOR, __REVISION]))+'a'
+__version__ = '.'.join(map(str, [__MAJOR, __MINOR, __REVISION]))
 __author__  = 'cubicibo'
