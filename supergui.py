@@ -247,6 +247,8 @@ def init_extra_libs(verbose: bool = True):
             piq_values = {k: int(v) for k, v in piq_params.items()}
         if (sup_params := get_value_key(config, 'SUPer')) is not None:
             params['super_cfg'] = dict(sup_params)
+    elif verbose:
+        logger.warning("config.ini not found!")
     if Quantizer.init_piliq(exepath):
         if verbose:
             logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")

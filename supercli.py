@@ -21,6 +21,10 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 from warnings import filterwarnings
 filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
 
+import multiprocessing as mp
+if __name__ == '__main__':
+    mp.freeze_support()
+
 from SUPer import BDNRender, LogFacility
 from SUPer.__metadata__ import __author__, __version__ as LIB_VERSION
 
@@ -131,7 +135,11 @@ if __name__ == '__main__':
             args.palette = True
 
     parameters = {'ini_opts': {'super_cfg': {}}}
-    if (config_file := Path('config.ini')).exists():
+
+    CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
+    config_file = CWD.joinpath('config.ini')
+
+    if config_file.exists():
         ini_opts = {'super_cfg': {}}
         import configparser
         def get_value_key(config, key: str):
@@ -147,11 +155,13 @@ if __name__ == '__main__':
             piq_values = {}
             if (piq_sect := get_value_key(config, 'PILIQ')) is not None:
                 if (exepath := piq_sect.pop('quantizer', None)) is not None and not os.path.isabs(exepath):
-                    exepath = str(Path(os.path.abspath(Path(sys.argv[0]).parent)).joinpath(exepath))
+                    exepath = str(Path.joinpath(CWD, exepath))
                 piq_values |= {k: int(v) for k, v in piq_sect.items()}
             ini_opts['quant'] = {'qpath': exepath} | piq_values
         if len(ini_opts):
             parameters['ini_opts'] |= ini_opts
+    else:
+        logger.warning("config.ini not found!")
     
     if args.layout >= 0:
         parameters['ini_opts']['super_cfg']['layout_mode'] = args.layout
