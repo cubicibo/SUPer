@@ -69,7 +69,7 @@ if __name__ == '__main__':
     parser.add_argument("-i", "--input", type=str, help="Set input BDNXML file.", default='', required=True)
     parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=75, required=False)
     parser.add_argument('-a', '--acqrate', help="Set acquisition rate [int, 0-100] (def:  %(default)s)", type=int, default=100, required=False)
-    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PNGQ/LIQ]  (def:  %(default)s)", type=int, default=3, required=False)
+    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [0: K-Means, 1: PIL+K-Means, 2: HexTree, 3: PNGQ/LIQ]  (def:  %(default)s)", type=int, default=3, required=False)
     parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object redefinition.", action='store_true', default=False, required=False)
     parser.add_argument('-b', '--bt', help="Set target BT matrix [601, 709, 2020]  (def:  %(default)s)", type=int, default=709, required=False)
     parser.add_argument('-p', '--palette', help="Flag to always write the full palette.", action='store_true', default=False, required=False)
@@ -96,11 +96,11 @@ if __name__ == '__main__':
     assert abs(args.ssim_tol) <= 100
     assert 0 <= args.compression <= 100
     assert 0 <= args.acqrate <= 100
-    if args.qmode not in range(1, 5):
-        logger.warning("Unknown quantization mode, using PIL+K-Means (1).")
-        args.qmode = 1
+    if args.qmode not in range(0, 5):
+        logger.warning("Unknown quantization mode, attempting to use pngquant/libimagequant.")
+        args.qmode = 3
     if args.bt not in [601, 709, 2020]:
-        logger.warning("Unknown BT ITU target, using bt709.")
+        logger.warning("Unknown transfer matrix, using bt709.")
         args.bt = 709
 
     if not (2 >= args.layout >= -1):

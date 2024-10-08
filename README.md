@@ -5,20 +5,19 @@ Unlike existing free and professionnal SUP converters, SUPer analyzes and re-ren
 Two output formats are supported: SUP and PES+MUI. The later is commonly used in professional authoring suites.
 
 ## Usage
-SUPer is distributed as stand-alone executable (gui), or as an installable Python package with gui/cli user scripts.
+SUPer is distributed as stand-alone executable, or as an installable Python package with gui/cli user scripts.
 
-Users who prefer to execute SUPer in their own Python environment must first install the package:<br/>
-`python3 -m pip install ./SUPer`,  where `SUPer` is the repository folder.
+If you wish to execute SUPer in your own Python environment, you may first install the package:<br/>
+`python3 -m pip install ./SUPer`,  where `SUPer` is the present repository.
 
 ## Input file format
 SUPer only accepts Sony BDN + PNG assets as input. These may be generated via [ass2bdnxml](https://github.com/cubicibo/ass2bdnxml) or avs2bdnxml. Exports from other tools like SubtitleEdit are untested but should work nonetheless.
 
 ## config.ini
-The config.ini file can be used to specify the relative or absolute path to a quantizer binary (either pngquant[.exe] or libimagequant[.dll, .so]) and its options. If pngquant is in PATH, the name is sufficient. An external quantizer will offer higher quality than the internal one.
-It also hold a few other options tied to SUPer.
+The config.ini file contains permanent configuration items. Notably, a relative or absolute path to an image quantizer (either pngquant[.exe] or libimagequant[.dll, .so]) and options can be specified. If pngquant is in PATH, the name is sufficient. An external quantizer will offer higher quality than the internal one.
 
 ### Graphical User Interface
-Both the standalone executables and `python3 supergui.py` will display the graphical user interface. The user can select the input BDN XML, the output file name and adapt the stream structure with some options. The GUI always executes aside of a command-line window providing progress and logging information.
+Both the standalone executables and `python3 supergui.py` will display the graphical user interface. You can select the input BDN XML, the output file name and adapt the stream structure with some options. The GUI always executes aside of a command-line window providing progress and logging information.
 
 - Select the input BDN XML file. The file must resides in the same directory as the PNG assets.
 - Select the desired output file and extension using the Windows explorer.
@@ -53,20 +52,33 @@ Both the standalone executables and `python3 supergui.py` will display the graph
 Here are some additional informations on selected options, especially those that shape the datastream and affect the output:
 - Compression rate: minimum time margin (in %) between two events to perform an acquisition.
 - Acquisition rate: Secondary compression parameter. Leave it untouched unless a lower bitrate is needed.
-- Quantization: image quantizer to use. pngquant/libimagequant (3) is recommended. PIL (1) outputs lower quality but can be faster. You should download pngquant and specify it in config.ini if SUPer does not find pngquant or libimagequant.
+- Quantization: [Image quantizer](#image-quantizers) to use. pngquant/libimagequant (3) is recommended.
 - Allow normal case object redefinition: whenever possible, update a single object out of two. This may reduce the count of dropped events.
 - Palette update buffering: decode palette updates early to drop fewer events, right before decoding of new bitmaps.
 - Insert acquisition: perform a screen refresh after a palette animation. Some palette animations may cause artifacts that remain on the display, a refresh will hide them. This can impact the bitrate as new bitmaps are inserted in the stream.
 - Logging: logging level -10 creates a single file listing solely the filtering decisions, if any (e.g. dropped events, normal case object redefinition).
 - Layout mode: steer the epoch definition algorithm way of defining windows. Opportunist is the best and coded buffer-safe, but may be disliked by Scenarist "Build/Rebuild" operation. 1 is an acceptable fall-back. 0 Should never be used.
 
+### Image quantizers
+SUPer ships with various internal image quantizers and supports two external ones. The different methods (values for `--qmode`) are enumerated here:
+
+0. **K-Means**: Slow but high quality quantizer. Should only be used if *PILIQ* (3) is not available and quality is a must.
+1. **PIL**: Fast, medium quality. Excellent for low bitrates and files with solely dialogue and karaoke. Glows and gradients will be hideous.
+2. **HexTree**: Fast, good quality. Suits nicely files with moderate typesetting effects (no heavy gradients or glows).
+3. **PILIQ** (libimagequant / pngquant): High quality, acceptably fast. Recommended default, and it preserves glows and gradients.
+    - macOS users must install pngquant via brew, or specify the pngquant executable in config.ini
+    - Linux and Windows[^1] users can specify either *libimagequant[.dll, .so]* or pngquant executable in config.ini.
+
+Higher quality quantizers (such as *K-Means* or *PILIQ*) will generally affect (increase) the bitrate of the output stream.
+
+[^1]: Windows compiled binaries ship with libimagequant.dll, and Windows users of the Python package in their environment have it embedded via the PILIQ dependency.
+
 ### Additional tips  
-- Image quantization mode 3 ("PILIQ") is either libimagequant or pngquant, whichever available and specified in config.ini.
 - The output file extension is used to infer the desired output type (SUP or PES).
 - `--max-kbps` does not shape the stream, it is simply a limit to compare it to. Only `--compression` and `--qmode` may be used to reduce the filesize.
 - If `--allow-normal` or `--ahead` is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Building or rebuilding the PES is not mandatory to mux a project.
 
-### Example (recommended defaults)
+### Example
 `python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --qmode 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`
 
 ### How SUPer works
