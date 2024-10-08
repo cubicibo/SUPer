@@ -18,13 +18,13 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+import numpy as np
+
 from dataclasses import dataclass, field
 from collections import namedtuple
 from typing import Optional, Union
-
-import numpy as np
-from numpy import (typing as npt)
 from PIL import ImagePalette
+from numpy import (typing as npt)
 
 from .utils import get_matrix, LogFacility
 

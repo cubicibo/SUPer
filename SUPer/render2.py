@@ -728,7 +728,7 @@ class WindowsAnalyzer:
                 coords = np.zeros((2,), np.int32)
                 a_img = Image.new('RGBA', dims, (0, 0, 0, 0))
                 for wid, pgo in compositions:
-                    multiplier = int(flags[j] >= 0)
+                    multiplier = np.uint8(flags[j] >= 0)
                     if len(pgo.mask[j-pgo.f:j+1-pgo.f]) == 1:
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
                         last_imgs[wid] = (self.mask_event(self.windows[wid], self.events[j]), paste_box, pgo.box.coords)
@@ -823,14 +823,14 @@ class WindowsAnalyzer:
                 last_img = None
                 imgs_chain = []
                 for j in range(i, k):
-                    multiplier = int(flags[j] >= 0)
+                    multiplier = np.uint8(flags[j] >= 0)
                     if pgo.is_active(j):
                         last_img = self.mask_event(self.windows[wid], self.events[j])
                     elif node.obj_carry is not None and len(node.obj_carry[wid]) > j-i:
                         multiplier &= node.obj_carry[wid][j-i]
                     else:
                         multiplier = 0
-                    imgs_chain.append(Image.fromarray(multiplier*last_img))
+                    imgs_chain.append(Image.fromarray(multiplier*last_img, 'RGBA'))
 
                 cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                 # cparams = box_to_crop(pgo.box)
@@ -1145,7 +1145,7 @@ class WindowsAnalyzer:
         absolutes = np.zeros_like(valid)
 
         chain_boxes = []
-        min_boxes = 8*np.ones((len(self.windows), 2), np.uint16)
+        min_boxes = 8*np.ones((len(self.windows), 2), np.int32)
 
         objs = [None for objs in pgobjs_proc]
         write_duration = nodes[0].write_duration()/PGDecoder.FREQ
