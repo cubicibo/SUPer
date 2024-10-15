@@ -71,7 +71,7 @@ SUPer ships with various internal image quantizers and supports two external one
 
 Higher quality quantizers (such as *K-Means* or *PILIQ*) will generally affect (increase) the bitrate of the output stream.
 
-[^1]: Windows compiled binaries ship with libimagequant.dll, and Windows users of the Python package in their environment have it embedded via the PILIQ dependency.
+[^1]: On Windows, compiled binaries ship with libimagequant.dll and the PILIQ library embeds a copy for users of the package in a (virtual) environment.
 
 ### Additional tips  
 - The output file extension is used to infer the desired output type (SUP or PES).
