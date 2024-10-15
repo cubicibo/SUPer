@@ -29,7 +29,7 @@ from functools import partial
 from enum import IntEnum
 
 from scenaristream import EsMuiStream
-from brule import LayoutEngine
+from brule import LayoutEngine, Brule, HexTree
 
 from .utils import TimeConv as TC, LogFacility, Box, SSIMPW
 from .pgraphics import PGDecoder
@@ -181,6 +181,9 @@ class BDNRender:
 
     def prepare(self) -> BDNXML:
         stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
+
+        if self.kwargs.get('quantize_lib', None) is None:
+            self.kwargs['quantize_lib'] = Quantizer.Libs.HEXTREE
 
         self._report_log_hdl = None
         if self.kwargs.get('log_to_file', False) < 0:
@@ -559,20 +562,26 @@ class EpochRenderer(mp.Process):
 
         libs_params = self.kwargs.get('ini_opts', {})
         logger.debug(f"INI parameters: {libs_params}")
-        if self.kwargs.get('quantize_lib', Quantizer.Libs.PIL_CV2KM) >= Quantizer.Libs.PILIQ:
+        requested_qtz = Quantizer.Libs(self.kwargs['quantize_lib'])
+        if requested_qtz >= Quantizer.Libs.PILIQ:
             if not Quantizer.init_piliq(**libs_params.get('quant', {})):
-                logger.warning("Failed to initialise an advanced image quantizer. Falling back to lower quality PIL+K-Means.")
-                self.kwargs['quantize_lib'] = Quantizer.Libs.PIL_CV2KM.value
+                logger.warning("Failed to initialise imagequant/pngquant. Falling back to lower quality 'HexTree'.")
+                self.kwargs['quantize_lib'] = Quantizer.Libs.HEXTREE.value
             else:
                 self.kwargs['quantize_lib'] = Quantizer.select_quantizer(self.kwargs['quantize_lib'])
                 logger.debug(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
+        else:
+            logger.debug(f"Image quantizer: '{requested_qtz.name}'.")
+            self.kwargs['quantize_lib'] = requested_qtz.value
 
-        from brule import Brule
+        if Quantizer.Libs.HEXTREE == self.kwargs['quantize_lib']:
+            logger.debug(f"HexTree quantizer capabilities: {', '.join(HexTree.get_capabilities())}.")
+
         logger.debug(f"Bitmap encoder capabilities: {', '.join(Brule.get_capabilities())}.")
 
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
-            logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
+        logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
     ####
 
     def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:

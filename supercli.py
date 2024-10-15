@@ -67,11 +67,11 @@ if __name__ == '__main__':
 
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Set input BDNXML file.", default='', required=True)
-    parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=75, required=False)
+    parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=80, required=False)
     parser.add_argument('-a', '--acqrate', help="Set acquisition rate [int, 0-100] (def:  %(default)s)", type=int, default=100, required=False)
-    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [1: PIL+K-Means, 2: K-Means, 3: PNGQ/LIQ]  (def:  %(default)s)", type=int, default=3, required=False)
+    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [0: K-Means, 1: PIL+K-Means, 2: HexTree, 3: PNGQ/LIQ] (def:  %(default)s)", type=int, default=3, required=False)
     parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object redefinition.", action='store_true', default=False, required=False)
-    parser.add_argument('-b', '--bt', help="Set target BT matrix [601, 709, 2020]  (def:  %(default)s)", type=int, default=709, required=False)
+    parser.add_argument('-b', '--bt', help="Set target Rec. BT matrix [601, 709, 2020] (def:  %(default)s)", type=int, default=709, required=False)
     parser.add_argument('-p', '--palette', help="Flag to always write the full palette.", action='store_true', default=False, required=False)
     parser.add_argument('-d', '--ahead', help="Flag to enable ahead of time palette update decoding.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Flag to overwrite an existing file with the same name.", action='store_true', default=False, required=False)
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=0, required=False)
     parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 8 supported. [0: auto] (def:  %(default)s)", type=int, default=0, required=False)
-    parser.add_argument('--layout', help="Set window layout mode. [0: safe, 1: normal, 2: aggressive] (def:  %(default)s)", type=int, default=-1, required=False)
+    parser.add_argument('--layout', help="Set window layout mode. [0: safe, 1: normal, 2: aggressive] (def: config.ini)", type=int, default=-1, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
@@ -96,11 +96,11 @@ if __name__ == '__main__':
     assert abs(args.ssim_tol) <= 100
     assert 0 <= args.compression <= 100
     assert 0 <= args.acqrate <= 100
-    if args.qmode not in range(1, 5):
-        logger.warning("Unknown quantization mode, using PIL+K-Means (1).")
-        args.qmode = 1
+    if args.qmode not in range(0, 5):
+        logger.warning("Unknown quantization mode, attempting to use pngquant/libimagequant.")
+        args.qmode = 3
     if args.bt not in [601, 709, 2020]:
-        logger.warning("Unknown BT ITU target, using bt709.")
+        logger.warning("Unknown transfer matrix, using bt709.")
         args.bt = 709
 
     if not (2 >= args.layout >= -1):
@@ -136,7 +136,7 @@ if __name__ == '__main__':
 
     parameters = {'ini_opts': {'super_cfg': {}}}
 
-    CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
+    CWD = Path.cwd()
     config_file = CWD.joinpath('config.ini')
 
     if config_file.exists():
@@ -155,7 +155,7 @@ if __name__ == '__main__':
             piq_values = {}
             if (piq_sect := get_value_key(config, 'PILIQ')) is not None:
                 if (exepath := piq_sect.pop('quantizer', None)) is not None and not os.path.isabs(exepath):
-                    exepath = str(Path.joinpath(CWD, exepath))
+                    exepath = str(CWD.joinpath(exepath))
                 piq_values |= {k: int(v) for k, v in piq_sect.items()}
             ini_opts['quant'] = {'qpath': exepath} | piq_values
         if len(ini_opts):

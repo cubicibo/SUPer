@@ -20,14 +20,15 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 import numpy as np
 import numpy.typing as npt
+import cv2
 
 from PIL import Image, ImagePalette
 
-from typing import Optional, Union
+from typing import Optional, Union, Any
 from collections.abc import Iterable
 from enum import IntEnum, auto
 from piliq import PILIQ, PNGQuantWrapper
-import cv2
+from brule import HexTree
 
 from .palette import Palette, PaletteEntry
 from .utils import TimeConv as TC, LogFacility, get_matrix, SSIMPW
@@ -41,11 +42,24 @@ class FadeCurve(IntEnum):
 
 class Quantizer:
     class Libs(IntEnum):
-        PILLOW = 0
-        PIL_CV2KM = 1
-        CV2KM  = 2
-        PILIQ  = 3
-        PNGQNT = 4
+        KMEANS  = 0
+        PIL_KM  = 1
+        HEXTREE = 2
+        PILIQ   = 3
+        PNGQNT  = 4
+
+        @classmethod
+        def _missing_(cls, v: Any) -> 'Quantizer.Libs':
+            if isinstance(v, cls):
+                v = v.value
+            else:
+                try:
+                    v = int(v)
+                except ValueError:
+                    ...
+            if v in [ev.value for ev in cls]:
+                return cls(v)
+            return cls(cls.HEXTREE.value)
 
     _opts = {}
     _piliq = None
@@ -68,12 +82,12 @@ class Quantizer:
     @classmethod
     def find_options(cls) -> None:
         if cls._piliq is not None:
-            cls._opts[cls.Libs.PILIQ] = (cls.get_piliq().lib_name,'(best, avg)')
+            cls._opts[cls.Libs.PILIQ] = (cls.get_piliq().lib_name,'(best, fast)')
         if cls._alt_piliq is not None:
-            cls._opts[cls.Libs.PNGQNT] = (cls._alt_piliq.lib_name,'(best, avg)')
-        cls._opts[cls.Libs.PIL_CV2KM] = ('PIL+KMeans', '(good, fast)')
-        cls._opts[cls.Libs.CV2KM]     = ('KMeans', '(better, slow)')
-        #cls._opts[cls.Libs.PILLOW]    = ('PIL', '(average, fast)')
+            cls._opts[cls.Libs.PNGQNT] = (cls._alt_piliq.lib_name,'(best, fast)')
+        cls._opts[cls.Libs.HEXTREE] = ("HexTree", "(good, fast)")
+        cls._opts[cls.Libs.PIL_KM] = ('Pillow', '(average, turbo)')
+        cls._opts[cls.Libs.KMEANS] = ('K-Means', '(best, slow)')
 
     @classmethod
     def init_piliq(cls,
@@ -128,10 +142,8 @@ class Quantizer:
                     logger.error("Requesting specifically pngquant, but executable not found.")
             option_id = cls.Libs.PILIQ
         if option_id == cls.Libs.PILIQ and not cls.get_piliq():
-            logger.error("Unable to find an advanced quantizer (pngquant, libimagequant, quantizr). Falling back to PIL+KMeans")
-            option_id = cls.Libs.PIL_CV2KM
-        if option_id == cls.Libs.CV2KM:
-            logger.warning("CV2KM Quantizer selected: this quantizer is very slow.")
+            logger.error("Unable to find an advanced quantizer (pngquant, libimagequant). Using lower quality: 'HexTree'.")
+            option_id = cls.Libs.HEXTREE
         return int(option_id)
 
     @classmethod
@@ -142,30 +154,10 @@ class Quantizer:
 class Preprocess:
     @classmethod
     def quantize(cls, img: Image.Image, colors: int = 256, **kwargs) -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
-        quant_method = Quantizer.Libs(kwargs.pop('quantize_lib', Quantizer.Libs.PILLOW))
+        quant_method = Quantizer.Libs(kwargs.pop('quantize_lib', Quantizer.Libs.HEXTREE))
+        single_bitmap = kwargs.get('single_bitmap', False)
 
-        if quant_method == Quantizer.Libs.CV2KM:
-            # Use PIL to get approximate number of clusters
-            nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
-            ocv_img = np.asarray(img)
-            flat_img = np.float32(ocv_img.reshape((-1, 4)))
-
-            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 15, 0.33)
-            ret, label, center = cv2.kmeans(flat_img, nk, None, criteria, 10, cv2.KMEANS_PP_CENTERS)
-
-            center = np.uint8(np.round(np.clip(center, 0, 255)))
-
-            offset = 1024
-            occs = np.argsort(np.bincount(label[:,0]))[::-1]
-            for idx in occs:
-                label[label == idx] = offset
-                offset += 1
-
-            label -= 1024
-            return np.reshape(label.flatten(), ocv_img.shape[:-1]).astype(np.uint8), center[occs]
-
-        elif Quantizer.Libs.PILIQ == quant_method:
-            single_bitmap = kwargs.get('single_bitmap', False)
+        if Quantizer.Libs.PILIQ == quant_method:
             if single_bitmap:
                 nc = colors
             else:
@@ -186,6 +178,22 @@ class Preprocess:
                 lib_piq.set_quality(original_quality)
             return qtz_img, pal
 
+        elif Quantizer.Libs.KMEANS == quant_method:
+            # Use PIL to get approximate number of clusters
+            nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
+            nk = min(colors, int(np.ceil(20+nk*235/255)))
+            flat_img = np.float32(np.asarray(img).reshape((-1, 4)))/255.0
+
+            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 11, 1.0)
+            _, label, center = cv2.kmeans(flat_img, nk, None, criteria, 3, cv2.KMEANS_PP_CENTERS)
+            return label.reshape(img.height, img.width).astype(np.uint8), np.round(np.clip(center, 0.0, 1.0)*255).astype(np.uint8)
+
+        elif Quantizer.Libs.HEXTREE == quant_method:
+            nc = colors if single_bitmap else len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
+            npimg = np.asarray(img, dtype=np.uint8)
+            npbm, nppal = HexTree.quantize(npimg, max(16, min(colors, int(np.ceil(20+nc*235/255)))))
+            return npbm, nppal
+
         else:
             img_out = img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
             npimg = np.asarray(img_out, dtype=np.uint8)
@@ -199,7 +207,7 @@ class Preprocess:
 
             if pil_failed:
                 logger.ldebug("Pillow failed to palettize image, falling back to K-Means.")
-                return cls.quantize(img, colors, quantize_lib=Quantizer.Libs.CV2KM, **kwargs)
+                return cls.quantize(img, colors, quantize_lib=Quantizer.Libs.HEXTREE, **kwargs)
 
             return npimg, nppal
 

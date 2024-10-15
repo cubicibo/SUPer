@@ -22,11 +22,7 @@ import os
 import sys
 import time
 import signal
-from pathlib import Path
 from typing import Optional, Any, Callable
-
-from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
-from idlelib.tooltip import Hovertip
 
 from warnings import filterwarnings
 filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
@@ -58,7 +54,11 @@ if __name__ == '__main__':
     mp.freeze_support()
     print("Loading...")
 
-from SUPer import BDNRender, LogFacility
+from pathlib import Path
+from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
+from idlelib.tooltip import Hovertip
+
+from SUPer import LogFacility
 from SUPer.optim import Quantizer
 from SUPer.__metadata__ import __version__ as SUPVERS, __author__
 
@@ -231,7 +231,7 @@ def init_extra_libs(verbose: bool = True):
         except KeyError: return None
     ####
     params = {}
-    CWD = Path(os.path.abspath(Path(sys.argv[0]).parent))
+    CWD = Path.cwd()
     ini_file = CWD.joinpath('config.ini')
 
     exepath = None
@@ -276,6 +276,10 @@ if __name__ == '__main__':
         signal.signal(signal.SIGBREAK, terminate)
 
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
+    ico_paths = Path.cwd()
+    ico_paths = next(filter(lambda x: x.exists(), map(lambda fl: Path.joinpath(ico_paths, fl, 'icon.ico'), ['misc', 'lib', '.'])), None)
+    if ico_paths is not None:
+        app.tk.iconbitmap(str(ico_paths))
 
     PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,pos_v:=pos_v+1],align='left', width=15)
     bdnname = Text(app, grid=[1,pos_v], align='left', size=10)
@@ -310,53 +314,55 @@ if __name__ == '__main__':
     colorspace = Combo(bspace, options=["bt709", "bt601", "bt2020"], grid=[1,0], align='left')
 
     bquant = Box(app, layout="grid", grid=[1, pos_v], align='left')
-    Text(bquant, "Quantization: ", grid=[0,0], align='left', size=11)
+    Text(bquant, "Quantizer: ", grid=[0,0], align='left', size=11)
     quantcombo = Combo(bquant, options=list(map(lambda x: ' '.join(x), opts_quant.values())), grid=[1,0], align='left')
+    Hovertip(bquant.tk, "Image quantizer to use (Quality, Speed).\n")
 
     bthread = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1])
     Text(bthread, "Threads: ", grid=[0,0], align='left', size=11)
     threadscombo = Combo(bthread, options=['auto'] + list(range(1, 9)), grid=[1,0], align='left', selected='auto')
 
     normal_case_ok = CheckBox(app, text="Allow normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
-    Hovertip(normal_case_ok.tk, "This option may reduce the number of dropped events on complicated animations.\n"\
-                                "When there are two objects on screen and one must be updated, it may be possible\n"\
-                                "to update the given object in a tighter time window than in an acquisition (both objects refreshed).")
+    Hovertip(normal_case_ok.tk, "Update only one composition out of the two, whenever updating both is not possible due to time constraints.\n"\
+                                "This exploits the PG object buffer capabilities as intended by the format designers.\n"\
+                                "Stream shall NOT be Built or Rebuilt at the authoring stage.")
 
-    allow_overlaps = CheckBox(app, text="Allow palette update buffering (experimental).", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    allow_overlaps = CheckBox(app, text="Allow palette update buffering.", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(allow_overlaps.tk, "Buffer palette updates whenever possible to drop fewer events.\n"\
                                 "Stream shall NOT be Built or Rebuilt at the authoring stage.")
 
-    fullpalette = CheckBox(app, text="Always write the full palette", grid=[0,pos_v:=pos_v+1,2,1], align='left')
-    Hovertip(fullpalette.tk, "Scenarist BD mendles with the imported files and may mess up the palette assignments.\n"\
+    fullpalette = CheckBox(app, text="Write the full palette.", grid=[0,pos_v:=pos_v+1,2,1], align='left')
+    Hovertip(fullpalette.tk, "Some authoring suites mendle with the imported files and may mess up the palette assignments.\n"\
                              "Writing the full palette everytime ensures palette data consistency throughout the stream.")
 
     all_formats = CheckBox(app, text="Generate both SUP and PES+MUI files.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
 
     biacqs = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
-    biacqs_val = TextBox(biacqs, width=2, height=1, grid=[0,0], text="2")
-    Text(biacqs, "Insert acquisition after N palette updates. [0: off, 3: recommended].", grid=[1,0], align='left')
+    biacqs_val = TextBox(biacqs, width=4, height=1, grid=[1,0], text="2")
+    Text(biacqs, "Insert acquisition after N palette updates. [0: off, 2-5: advised]: ", grid=[0,0], align='left', size=11)
     Hovertip(biacqs.tk, "Long palette effects can alter the bitmap quality and be visible to the viewer if the end\n"\
                         "result remains on screen. To improve psychovisual quality, an acquisition can be added after\n"\
                         "to hide small artifacts originating from the palette animation encoding.")
 
     bssimtol = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
-    ssim_tolb = TextBox(bssimtol, width=3, height=1, grid=[0,0], text="0")
-    Text(bssimtol, "SSIM tolerance offset [-100;100]", grid=[1,0], align='left')
-    Hovertip(bssimtol.tk, "Higher sensitivity increases the needed structural similarity to classify two images as similar.\n"\
-                        "similar images can be encoded as palette updates, while dissimilar ones require an acquisition.")
+    ssim_tolb = TextBox(bssimtol, width=4, height=1, grid=[1,0], text="0")
+    Text(bssimtol, "SSIM tolerance offset [-100;100]: ", grid=[0,0], align='left', size=11)
+    Hovertip(bssimtol.tk, "Adjust the similarity threshold to classify two images as similar, to potentially encode them as one.\n"\
+                        "A positive value may fix the smearing on selected moves, a lower value may reduce the bitrate.\n"\
+                        "The set value should rarely differ from zero.")
 
     bmax_kbps = Box(app, layout="grid", grid=[0,pos_v:=pos_v+1])
     max_kbps = TextBox(bmax_kbps, width=6, height=1, grid=[1,0], text="16000", align='left')
     Text(bmax_kbps, "Max bitrate test [Kbps]: ", grid=[0,0], align='left', size=11)
     Hovertip(bmax_kbps.tk, "Test the stream against the given bitrate. This value does not shape the output.\n"\
-                           "Change the quantizer, compression and acquisition value to lower the bitrate.\n"\
-                           "Set to zero to disable the test. Unrealistic values will lead to a spam of errors.")
+                           "Change the quantizer, compression, acquisition, SSIM parameters to lower the bitrate.\n"\
+                           "Set to zero to disable the test. Unrealistic values will lead to a spam of messages.")
 
     blog = Box(app, layout="grid", grid=[1, pos_v], align='left')
     Text(blog, "Log to file: ", grid=[0,0], align='left', size=11)
     logcombo = Combo(blog, options=list(opts_log), grid=[1,0], align='left')
 
-    Text(app, grid=[0,pos_v:=pos_v+1,2,1], align='left', text="Progress data is displayed in the command line!")
+    Text(app, grid=[0,pos_v:=pos_v+2,2,1], align='left', text=" "*11 + "Progress data is displayed in the command line!", size=11)
     app.repeat(1000, monitor_mp)  # Schedule call to monitor_mp() every 1000ms
 
     app.when_closed = terminate
