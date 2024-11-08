@@ -116,7 +116,9 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
     is_ok = True
     leaky = LeakyBuffer(prev_ts, bitrate)
 
-    leaky.set_tc_func(lambda pts: TC.s2tc(pts/PGDecoder.FREQ/(1 if float(fps).is_integer() else 1.001), fps))
+    f_print_tc = lambda pts: str(TC.s2tc(pts/PGDecoder.FREQ, fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.s2tc(pts/PGDecoder.FREQ, fps, True))))
+
+    leaky.set_tc_func(f_print_tc)
 
     dur_offset = 0
     ts_first = prev_ts
@@ -182,7 +184,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
     cumulated_ods_size = 0
     prev_pcs_id = 0xFFFF
 
-    to_tc = lambda pts: TC.s2tc(pts/(1 if float(fps).is_integer() else 1.001), fps)
+    to_tc = lambda pts: str(TC.s2tc(pts, fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.s2tc(pts, fps, True))))
 
     for ke, epoch in enumerate(epochs):
         windows = {}
@@ -194,7 +196,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
         buffer = PGObjectBuffer()
 
         if epoch[0].pcs.composition_state & PCS.CompositionState.EPOCH_START == 0:
-            logger.warning(f"First display set in epoch is not an Epoch Start at {to_tc(current_pts)}.")
+            logger.warning(f"First display set in epoch is not an Epoch Start at {to_tc(epoch[0].pcs.pts)}.")
             compliant = False
 
         if epoch[0].wds:
@@ -378,7 +380,7 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     prev_pts = prev_dts = -99999999
     min_dts_delta = 99999999
 
-    to_tc = lambda pts: TC.s2tc(pts/(1 if float(fps).is_integer() else 1.001), fps)
+    to_tc = lambda pts: str(TC.s2tc(pts, fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.s2tc(pts, fps, True))))
     frame_duration = np.floor(PGDecoder.FREQ/fps)
 
     for k, epoch in enumerate(epochs):

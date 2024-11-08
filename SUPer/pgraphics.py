@@ -83,8 +83,8 @@ class PGraphics:
         assert isinstance(data, (bytes, bytearray))
         return Brule.decode(data, width, height, check_rle)
 
-    @staticmethod
-    def show(l_ods: Union[ODS, list[ODS]],
+    @classmethod
+    def show(cls, l_ods: Union[ODS, list[ODS]],
              palette: Optional[Union[npt.NDArray[np.uint8], PDS, list[PDS], dict[int, PaletteEntry]]] = None) -> None:
         """
         Show the ODS with or without a provided palette. If no palette are provided,
@@ -94,11 +94,11 @@ class PGraphics:
                   generated on the fly that illustrates the encoded animation
                   If list[PDS] is provided, the PDS are OR'd together.
         """
-        bitmap = __class__.decode_rle(l_ods)
+        bitmap = cls.decode_rle(l_ods)
 
         # Create a evenly distributed palette using YUV wiht constant luma.
         if palette is None:
-            mpe, Mpe = np.min(bitmap), np.max(bitmap)
+            mpe, Mpe = int(np.min(bitmap)), int(np.max(bitmap))
             n_cols = (Mpe-mpe+1)
             luma = 0.5
             palette = np.zeros((Mpe+1, 3), float)
@@ -125,15 +125,11 @@ class PGraphics:
                 palette = Palette(palette)
 
             if isinstance(palette, Palette):
-                if palette.get(255, None) is None:
-                    palette[255] = PaletteEntry(16, 128, 128, 0)
+                for peid in range(0, 256):
+                    if palette.get(peid, None) is None:
+                        palette[peid] = PaletteEntry(16, 128, 128, 0)
                 palette = palette.get_rgba_array(keep_indexes=True)
-        try:
-            from matplotlib import pyplot as plt
-            plt.imshow(palette[bitmap])
-        except ModuleNotFoundError:
-            from PIL import Image
-            Image.fromarray(palette[bitmap], 'RGB').show()
+        return palette[bitmap]
 ####
 #%%
 class PGDecoder:

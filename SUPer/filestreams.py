@@ -22,11 +22,11 @@ import os
 import xml.etree.ElementTree as ET
 import numpy as np
 
-from numpy import typing as npt
+from timecode import Timecode
+
 from PIL import Image
 from pathlib import Path
 
-from abc import ABC, abstractmethod
 from collections.abc import Generator
 from typing import Union, Optional, Type, Any, Callable
 
@@ -189,16 +189,51 @@ class SUPFile:
 ####SUPFile
 
 #%%
-class BaseEvent:
+class BDNXMLEvent:
     """
-    Container event for any graphic object displayed on screen for a given time duration.
+    A BDNXML event can have numerous child elements such as fade timing and >1
+    graphics (files) shown at once.
     """
-    def __init__(self, in_tc, out_tc, file, x, y) -> None:
-        self._intc = in_tc
-        self._outtc = out_tc
-        self.gfxfile = file
-        self.x, self.y = x, y
+    def __init__(self, te: dict[str, int], ie: dict[str, Any], others: dict[str, Any]) -> None:
+        """
+        Parameters
+        ----------
+        te : dict[str, int]
+            Temporal informations related to the event.
+        ie : dict[str, Any]
+            Spatial informations related to the event (incl. base path).
+        others : dict[str, Any]
+            Other elements related to the event such as fades.
+        """
+        _fps = round(te.get('fps'), 2)
+        self._intc = Timecode(_fps, te.get('InTC'))
+        self._outtc = Timecode(_fps, te.get('OutTC'))
         self._img, self._width, self._height = None, None, None
+
+        base_folder = ie.get('fp')
+        assert len(ie['graphics']) > 0
+
+        self.gfxfile = os.path.join(base_folder, ie['graphics'][0].text)
+
+        f_box = lambda gfx: Box(int(gfx.get('Y')), int(gfx.get('Height')),
+                                int(gfx.get('X')), int(gfx.get('Width')))
+        box = f_box(ie['graphics'][0])
+        for gfx_ev in ie['graphics'][1:]:
+            box = Box.union(box, f_box(gfx_ev))
+        self.x, self.y = box.x, box.y
+
+        self._custom = False
+        if len(ie['graphics']) > 1:
+            self._custom = True
+            self._gfx = ie['graphics']
+            self._bf = base_folder
+
+        self.forced = (te.get('Forced', 'False')).lower() == 'true'
+        self._width = box.dx
+        self._height = box.dy
+
+        #Apparently there's "Crop", "Position" and "Color" but god knows how these are even structured and
+        # no commonly used program appears to generate any of those tags.
 
     @property
     def width(self) -> int:
@@ -232,18 +267,6 @@ class BaseEvent:
     def img(self) -> Image.Image:
         return self.image
 
-    def load(self, fp: Union[str, Path] = None) -> None:
-        if fp is None:
-            self._img = Image.open(self.gfxfile).convert('RGBA')
-        else:
-            self._img = Image.open(os.path.join(fp, self.gfxfile)).convert('RGBA')
-        # Update wh
-        if self._width is None or self._height is None:
-            self._width = self._img.width
-            self._height = self._img.height
-        else:
-            assert self._img.width == self._width and self._img.height == self._height
-
     def unload(self) -> None:
         if self._img is not None:
             self._img.close()
@@ -257,66 +280,16 @@ class BaseEvent:
     def tc_out(self) -> str:
         return self._outtc
 
-    @tc_out.setter
-    def tc_out(self, tc_out: str) -> None:
-        self._outtc = tc_out
-####
-
-class BDNXMLEvent(BaseEvent):
-    """
-    A BDNXML event can have numerous child elements such as fade timing and >1
-    graphics (files) shown at once.
-    """
-    def __init__(self, te: dict[str, int], ie: dict[str, Any], others: dict[str, Any]) -> None:
-        """
-        Parameters
-        ----------
-        te : dict[str, int]
-            Temporal informations related to the event.
-        ie : dict[str, Any]
-            Spatial informations related to the event (incl. base path).
-        others : dict[str, Any]
-            Other elements related to the event such as fades.
-        """
-        base_folder = ie.get('fp')
-        assert len(ie['graphics']) > 0
-
-        fp = os.path.join(base_folder, ie['graphics'][0].text)
-
-        f_box = lambda gfx: Box(int(gfx.get('Y')), int(gfx.get('Height')),
-                                int(gfx.get('X')), int(gfx.get('Width')))
-        box = f_box(ie['graphics'][0])
-        for gfx_ev in ie['graphics'][1:]:
-            box = Box.union(box, f_box(gfx_ev))
-
-        self._custom = False
-        if len(ie['graphics']) > 1:
-            self._custom = True
-            self._gfx = ie['graphics']
-            self._bf = base_folder
-
-        super().__init__(te.get('InTC'), te.get('OutTC'), fp, box.x, box.y)
-        self.forced = (te.get('Forced', 'False')).lower() == 'true'
-        self._width = box.dx
-        self._height = box.dy
-
-        #Apparently there's "Crop", "Position" and "Color" but god knows how these are even structured and
-        # no commonly used program appears to generate any of those tags.
-        #self.fade_in = dict()
-        #self.fade_out = dict()
-        #for e in others:
-        #    if e.get('Type', None) == 'Fade':
-        #        if e.find('Fade').attrib['FadeType'] == 'FadeIn':
-        #            self.fade_in = e.attrib
-        #        elif e.find('Fade').attrib['FadeType'] == 'FadeOut':
-        #            self.fade_out = e.attrib
-        #        else:
-        #            raise ValueError(f"Unknown fade type {e.attrib['FadeType']}")
-            # Do you notice how the implementers of BDNXML thought that people would
-            #  consider to anchor fade-in at the end????
-
-    def set_tc_out(self, tc_out: str) -> None:
-        self.tc_out = tc_out
+    def set_tc_out(self, tc_out: Union[str, Timecode]) -> None:
+        if isinstance(tc_out, str):
+            new_tc = Timecode(self._outtc.framerate, tc_out)
+            if new_tc.drop_frame and not self._outtc.drop_frame:
+                new_tc = Timecode(self._outtc.framerate, tc_out, force_non_drop_frame=True)
+            self._outtc = new_tc
+        else:
+            self._outtc = tc_out
+        assert self._intc.drop_frame == self._outtc.drop_frame
+        assert self._outtc > self._intc
 
     def load(self) -> None:
         if self._custom:
@@ -349,39 +322,97 @@ def remove_dupes(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
     return output_events
 ####
 
-class SeqIO(ABC):
-    """
-    Base class to describe a sequence of events and the common properties
-    """
-    def __init__(self, file: Union[str, Path], folder: Optional[Union[str, Path]] = None) -> None:
-        self.events = []
-
+#%%
+class BDNXML:
+    def __init__(self,
+            file: Union[str, Path],
+            folder: Optional[Union[str, Path]] = None,
+        ) -> None:
+        """
+        BDNXML handler object/parser
+        """
         self._file = Path(file)
         if folder is None:
-            self.folder = self.file.parent
+            self._folder = self.file.parent
         else:
-            self.folder = Path(folder)
+            self._folder = Path(folder)
+            assert self._folder.exists()
 
-    @abstractmethod
-    def parse(self) -> None:
-        raise NotImplementedError
+        self.events: list[BDNXMLEvent] = []
+        self._parse()
 
-    def get(self, tc_in: str, default = None) -> Optional[Type[BaseEvent]]:
-        for e in self.events:
-            if e.intc == tc_in:
-                return e
-            elif TC.tc2f(e.intc, self.fps) > TC.tc2f(tc_in, self.fps):
-                break
-        return default
+    def _parse(self) -> None:
+        self._parse_header()
+        self._parse_events()
 
-    def groups(self, dt_split: float) -> list[Type[BaseEvent]]:
+    def _parse_header(self) -> None:
+        content = None
+        with open(self._file, 'r', encoding="utf-8-sig") as f:
+            content = ET.fromstring(f.read())
+        assert content is not None, "Failed to parse file."
+        header, self._raw_events = content[0:2]
+
+        hformat = header.find('Format')
+        self._fps = BDVideo.FPS(float(hformat.attrib['FrameRate']))
+        self._dropframe = bool(hformat.attrib['DropFrame'].lower() == 'true')
+        self._set_format(hformat.attrib['VideoFormat'])
+
+    def _parse_events(self) -> None:
+        """
+        BDNXML repesents events with PNG images. But the way those PNG images
+        are generated differs vastly. Some have one image for overlapping
+        events [in time] while others will generate two images with different
+        spatial properties. This is a problem for consistency because the two
+        are entirely different in term.
+        SUPer assumes the worst case and always assumes there's a single bitmap
+        per BDNXMLEvent. (2+ images are merged to have one image).
+        """
+        # TODO: Parse global effects here then LTU while cycling the events
+        #  https://forum.doom9.org/showthread.php?t=146493&page=9
+
+        #BDNXML have 2>=n>=1 graphical object in each event but we don't want to
+        # have subgroup for a given timestamp to not break the SeqIO class
+        # so, we merge sub-evnets on the same plane.
+        self.events.clear()
+        split_seen = False
+
+        for event in self._raw_events:
+            assert event.tag == 'Event'
+            effects, gevents, k = [], [], 0
+            for k, subevent in enumerate(event):
+                assert k > 0 or subevent.tag == 'Graphic', "Expected a 'Graphic' first."
+                if subevent.tag == 'Graphic':
+                    gevents.append(subevent)
+                else:
+                    effects.append(subevent)
+            # Event.attrib contains the <Event> tag params
+            # Event[cnt] features the internal content of the <event> tag.
+            # i.e <Graphic>, <Fade ...>
+            if len(gevents) > 1 and not split_seen:
+                split_seen = True
+                logger.warning("Input BDN has split events! Merging back splits to find better ones...")
+                logger.warning("Risk of excessive RAM usage: storing in RAM combined images...")
+            ev = BDNXMLEvent(event.attrib | {'fps': self.fps, 'dropframe': self._dropframe},
+                             dict(graphics=gevents, fp=os.path.join(self.folder)), effects)
+            if ev.tc_in != ev.tc_out:
+                self.events.append(ev)
+            else:
+                logger.warning(f"Ignored zero-duration graphic: '{ev.gfxfile.split(os.path.sep)[-1]}' @ '{ev.tc_in}'.")
+        # for event
+        self.events.sort(key=lambda e: e.tc_in.frames)
+
+        for k, ev in enumerate(self.events):
+            assert ev.tc_in < ev.tc_out, f"Illegal event duration at InTC={ev.tc_in}."
+            assert 0 == k or self.events[k-1].tc_out <= ev.tc_in, f"Two events overlap in time around InTC={ev.tc_in}."
+
+    def groups(self, dt_split: float) -> list[BDNXMLEvent]:
         le = []
 
-        for event in self.fetch():
+        for event in self.events:
             if 0 == len(le):
                 le = [event]
                 continue
-            td = TC.tc2pts(event.tc_in, self.fps) - TC.tc2pts(le[-1].tc_out, self.fps)
+            td = TC.tc2pts(event.tc_in) - TC.tc2pts(le[-1].tc_out)
             assert td >= 0, f"Events are not ordered in time: {event.tc_in}, {event.gfxfile.split(os.path.sep)[-1]} predates previous event."
             if td < dt_split:
                 le.append(event)
@@ -392,14 +423,6 @@ class SeqIO(ABC):
             yield le
         return
 
-    def fetch(self, tc_in: Optional[str] = None, tc_out: Optional[str] = None):
-        for e in self.events:
-         if tc_in is None or TC.tc2ms(e.tc_in, self.fps) >= TC.tc2ms(tc_in, self.fps):
-          if tc_out is None or TC.tc2ms(e.tc_out, self.fps) <= TC.tc2ms(tc_out, self.fps):
-           yield e
-          else: #Past tc out point
-           return
-
     def __len__(self):
         return len(self.events)
 
@@ -407,8 +430,7 @@ class SeqIO(ABC):
     def format(self) -> BDVideo.VideoFormat:
         return self._format
 
-    @format.setter
-    def format(self, nf: Union[str, tuple[int, int], int, BDVideo.VideoFormat]) -> None:
+    def _set_format(self, nf: Union[str, tuple[int, int], int, BDVideo.VideoFormat]) -> None:
         if type(nf) is tuple or type(nf) is BDVideo.VideoFormat:
             self._format = BDVideo.VideoFormat(nf)
         elif type(nf) is str:
@@ -441,121 +463,14 @@ class SeqIO(ABC):
     def fps(self) -> float:
         return self._fps.exact_value
 
-    @fps.setter
-    def fps(self, nfps: float) -> None:
-        self._fps = BDVideo.FPS(nfps)
-
     @property
     def file(self) -> Union[str, Path]:
         return self._file
-
-    @file.setter
-    def file(self, newf: Union[str, Path]) -> None:
-        if not os.path.exists(newf):
-            raise OSError("File not found.")
-        self._file = newf
-        self.parse()
 
     @property
     def folder(self) -> Union[str, Path]:
         return self._folder
 
-    @folder.setter
-    def folder(self, newf: Union[str, Path]) -> None:
-        if not os.path.exists(newf):
-            raise OSError("Folder not found.")
-        self._folder = newf
-####
-
-#%%
-class BDNXML(SeqIO):
-    def __init__(self,
-            file: Union[str, Path],
-            folder: Optional[Union[str, Path]] = None,
-            skip_zero_dur: bool = True,
-        ) -> None:
-        """
-        BDNXML handler object/parser
-        """
-        super().__init__(file, folder)
-
-        self._skip_zero_duration = skip_zero_dur
-        self.events: list[BDNXMLEvent] = []
-        self.parse()
-
-    def parse(self) -> None:
-        self.parse_header()
-        self._parse_events()
-
-    def parse_header(self) -> None:
-        content = None
-        with open(self._file, 'r', encoding="utf-8-sig") as f:
-            content = ET.fromstring(f.read())
-        assert content is not None, "Failed to parse file."
-        header, self._raw_events = content[0:2]
-
-        hformat = header.find('Format')
-        self.fps = float(hformat.attrib['FrameRate'])
-        self.dropframe = bool(hformat.attrib['DropFrame'].lower() == 'true')
-        self.format = hformat.attrib['VideoFormat']
-
-    def _parse_events(self) -> None:
-        """
-        BDNXML repesents events with PNG images. But the way those PNG images
-        are generated differs vastly. Some have one image for overlapping
-        events [in time] while others will generate two images with different
-        spatial properties. This is a problem for consistency because the two
-        are entirely different in term.
-        SUPer assumes the worst case and always assumes there's a single bitmap
-        per BDNXMLEvent. (2+ images are merged to have one image).
-        """
-        # TODO: Parse global effects here then LTU while cycling the events
-        #  https://forum.doom9.org/showthread.php?t=146493&page=9
-
-        #BDNXML have 2>=n>=1 graphical object in each event but we don't want to
-        # have subgroup for a given timestamp to not break the SeqIO class
-        # so, we merge sub-evnets on the same plane.
-        self.events = []
-        split_seen = False
-
-        for event in self._raw_events:
-            assert event.tag == 'Event'
-            effects, gevents, k = [], [], 0
-            for k, subevent in enumerate(event):
-                assert k > 0 or subevent.tag == 'Graphic', "Expected a 'Graphic' first."
-                if subevent.tag == 'Graphic':
-                    gevents.append(subevent)
-                else:
-                    effects.append(subevent)
-            # Event.attrib contains the <Event> tag params
-            # Event[cnt] features the internal content of the <event> tag.
-            # i.e <Graphic>, <Fade ...>
-            if len(gevents) > 1 and not split_seen:
-                split_seen = True
-                logger.warning("Input BDN has split events! Merging back splits to find better ones...")
-                logger.warning("Risk of excessive RAM usage: storing in RAM combined images...")
-            ea = BDNXMLEvent(event.attrib, dict(graphics=gevents, fp=os.path.join(self.folder)), effects)
-            if not (ea.tc_in == ea.tc_out and self._skip_zero_duration):
-                self.events.append(ea)
-            else:
-                logger.warning(f"Ignored zero-duration graphic: '{ea.gfxfile.split(os.path.sep)[-1]}' @ '{ea.tc_in}'.")
-        # for event
-        def sort_events_func(e):
-            return TC.tc2f(e.tc_in, self.fps)
-        
-        self.events.sort(key=sort_events_func)
-        
-        for k, ev in enumerate(self.events):
-            assert TC.tc2f(ev.tc_in, self.fps) < TC.tc2f(ev.tc_out, self.fps), f"Event at InTC={ev.tc_in} has a zero duration."
-            assert 0 == k or TC.tc2f(self.events[k-1].tc_out, self.fps) <= TC.tc2f(ev.tc_in, self.fps), f"Two events overlap in time around InTC={ev.tc_in}."
-
     @property
     def dropframe(self) -> bool:
         return self._dropframe
-
-    @dropframe.setter
-    def dropframe(self, dropframe: bool) -> None:
-        self._dropframe = dropframe
-        TC.FORCE_NDF = not dropframe
-        if dropframe:
-            logger.warning("WARNING: Detected drop frame flag in BDNXML! SUPer is untested with drop frame timecodes!")

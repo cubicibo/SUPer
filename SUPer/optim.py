@@ -22,8 +22,8 @@ import numpy as np
 import numpy.typing as npt
 import cv2
 
-from PIL import Image, ImagePalette
-
+from PIL import Image
+from pathlib import Path
 from typing import Optional, Union, Any
 from collections.abc import Iterable
 from enum import IntEnum, auto
@@ -31,7 +31,7 @@ from piliq import PILIQ, PNGQuantWrapper
 from brule import HexTree
 
 from .palette import Palette, PaletteEntry
-from .utils import TimeConv as TC, LogFacility, get_matrix, SSIMPW
+from .utils import LogFacility, get_matrix, SSIMPW
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -91,7 +91,7 @@ class Quantizer:
 
     @classmethod
     def init_piliq(cls,
-        qpath: Optional[Union[str, 'Path']] = None,
+        qpath: Optional[Union[str, Path]] = None,
         quality: Optional[int] = 100,
         speed: Optional[int] = 4,
         dither: Optional[int] = 100,
@@ -411,87 +411,6 @@ class Optimise:
                         break #We found the last time it was set, exit backward loop
             l_pal.append(pal)
         return l_pal
-
-    @staticmethod
-    def fade(tc_in: str, fade_out: bool, tc_out: str, fps: float, stride: int=1,
-                      palette: Optional[Palette] = None, img: Optional[Image.Image] = None,
-                      dynamics: FadeCurve = FadeCurve.LINEAR, flip_dyn: bool = False,
-                      **kwargs) -> Union[list[Palette], list[ImagePalette.ImagePalette]]:
-        """
-        Optimize a fade (in/out) for a given image
-
-        :param palette: Palette to use (if img, palette is ignored.)
-        :param img:     P-mode image to fade (if img, palette is ignored.)
-
-        :param tc_in:   Timecode when the effect starts (start appearing/disappear)
-        :param tc_out:  Timecode when the effects ends (end appearing/disappearing)
-        :param fps:     FPS of the video stream
-        :param stride:  FPS prescaler for palette updates (1=every, 2=every other frame)
-        :param flip_dyn: Flip the dynamics of the curve (slow2fast becomes fast2slow)
-        :param kwargs: Provide additional values to customize the behaviour (Read code)
-        :return:        list of palettes (1 entry in list -> 1 DS.PDS).
-        """
-
-        if img is not None and palette is not None:
-            raise ValueError("Provided both an image and a palette. Pick either!")
-
-        if stride < 1 or type(stride) is not int:
-            raise ValueError(f"Incorrect stride parameter, got '{stride}'.")
-
-        if img.mode != 'P' or not isinstance(palette, Palette) :
-            raise NotImplementedError("Image must be in P mode with an inner palette.")
-
-        nf = TC.tc2f(tc_out, fps) - TC.tc2f(tc_in, fps)
-
-        if nf < 3:
-            raise ValueError("Attempting fade on less than three frames...")
-
-        if FadeCurve(dynamics) == FadeCurve.LINEAR:
-            coeffs = np.arange(1, nf)/nf
-
-        elif FadeCurve(dynamics) == FadeCurve.QUADRATIC:
-            # User can abuse this to define their own function too
-            power = kwargs.get('pow', 2)
-            f = kwargs.get('qfunc', lambda x: (x**power)/nf)
-            coeffs = f(np.arange(0, nf, stride))
-
-        elif FadeCurve(dynamics) == FadeCurve.EXPONENTIAL:
-            # By default the beginning of the animation is abrupt then it smooths out
-            sig = kwargs.get('sig', nf/3) # /3 is empirical
-            f = lambda x: (np.exp(x/sig)-1)/np.exp(nf/sig)
-            coeffs = f(np.arange(1, nf, stride))
-
-        else:
-            raise NotImplementedError("Requested fade dynamics is not available.")
-
-        if fade_out:
-            coeffs = np.flip(coeffs)
-
-        # Flip the coefficients of a curve, (i.e fast to slow out -> slow to fast out)
-        if flip_dyn:
-            coeffs = np.flip(1-coeffs)
-
-        #Broadcast coeffs to palette alpha
-        if isinstance(palette, Palette):
-            pal_tsp = np.asarray([tuple(entry) for entry in palette.palette.values()])
-        else:
-            pal_tsp = np.array([*img.palette.colors.keys()])
-
-        alphas_per_frame = pal_tsp[:, 3, None]*coeffs
-        alphas_per_frame = np.round(alphas_per_frame)
-        alphas_per_frame[alphas_per_frame < 0] = 0
-        alphas_per_frame[alphas_per_frame > 255] = 255
-
-        pals = []
-        for k, alphas in enumerate(alphas_per_frame[:].T):
-            pal_tsp[:,3] = alphas
-            if isinstance(palette, Palette):
-                pals.append(Palette(dict(zip(palette.palette.keys(), pal_tsp))))
-            else:
-                pals.append(ImagePalette.ImagePalette('RGBA',
-                                            pal_tsp.reshape((np.dot(*pal_tsp.shape)))))
-
-        return pals
 
     @staticmethod
     def eval_animation(cmap: npt.NDArray[np.uint8], sequence: npt.NDArray[np.uint8],

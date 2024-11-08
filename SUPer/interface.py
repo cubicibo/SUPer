@@ -37,7 +37,7 @@ from .filestreams import BDNXML, BDNXMLEvent, remove_dupes
 from .segments import Epoch, DisplaySet
 from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext, debug_stats
-from .render2 import GroupingEngine, WindowsAnalyzer
+from .render2 import PaddingEngine, WindowsAnalyzer
 
 class LayoutPreset(IntEnum):
     SAFE   = 0
@@ -74,7 +74,7 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, preset: LayoutPreset
     cbox, w1, w2, is_vertical = leng.get_layout()
     cbox, w1, w2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, w1, w2)))
     cwd = (w1, w2) if w1 != w2 else (w1,)
-    cwd = GroupingEngine(cbox, container=container, n_groups=2).directional_pad(cwd, is_vertical)
+    cwd = PaddingEngine(cbox, container=container, n_groups=2).directional_pad(cwd, is_vertical)
 
     scores = []
     for cwdo in (cwd, reversed(cwd)):
@@ -150,8 +150,8 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
 
         if ev.tc_out != running_ev[0].tc_in:
             cbox, cwd, layout_modifier, is_bad_split, is_greedysplit_worthwile, scores, old_score = _find_modify_layout(leng, container, preset)
-            pts_out = TC.tc2pts(ev.tc_out, bdn.fps)
-            if pts_out + scores[0] + 1e-8 < TC.tc2pts(running_ev[0].tc_in, bdn.fps):
+            pts_out = TC.tc2pts(ev.tc_out)
+            if pts_out + scores[0] + 1e-8 < TC.tc2pts(running_ev[0].tc_in):
                 logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with b={is_bad_split}:g={is_greedysplit_worthwile}, {old_score:.03f}->{scores[0]:.03f}.")
                 ectx.append(EpochContext(cbox, cwd, running_ev, pts_out))
                 running_ev = []
@@ -213,7 +213,7 @@ class BDNRender:
         self.kwargs['adjust_ntsc'] = isinstance(bdn.fps, float) and not bdn.dropframe
         if self.kwargs['adjust_ntsc']:
             logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
-        self._first_pts = TC.tc2pts(bdn.events[0].tc_in, bdn.fps)
+        self._first_pts = TC.tc2pts(bdn.events[0].tc_in)
         return bdn
 
     def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
@@ -234,7 +234,7 @@ class BDNRender:
                 for r in mpp.imap_unordered(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
                     pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
                     lectx += r
-            lectx = sorted(lectx, key=lambda ctx: TC.tc2pts(ctx.events[0].tc_in, bdn.fps))
+            lectx = sorted(lectx, key=lambda ctx: ctx.events[0].tc_in)
         else:
             for r in map(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
                 pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
@@ -244,9 +244,9 @@ class BDNRender:
 
         wipe_margin = np.ceil(PGDecoder.copy_gp_duration(bdn.format.area)*bdn.fps + 1/bdn.fps/2)/bdn.fps
         for ctx, ctx_next in zip(lectx, lectx[1:]):
-            event_max_pts = TC.tc2pts(ctx.events[-1].tc_out, bdn.fps)
+            event_max_pts = TC.tc2pts(ctx.events[-1].tc_out)
             if np.isinf(ctx_next.min_dts):
-                ctx_next.min_dts = max(event_max_pts, (TC.tc2pts(ctx_next.events[0].tc_in, bdn.fps) - _decode_duration_base(ctx_next.windows, bdn.format.area)) - wipe_margin)
+                ctx_next.min_dts = max(event_max_pts, (TC.tc2pts(ctx_next.events[0].tc_in) - _decode_duration_base(ctx_next.windows, bdn.format.area)) - wipe_margin)
             ctx.max_pts = min(event_max_pts + wipe_margin, ctx_next.min_dts)
             ctx_next.min_dts += 1/PGDecoder.FREQ #safe: add one tick to min dts
 

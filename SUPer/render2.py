@@ -18,7 +18,7 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import Optional, Type, Callable
+from typing import Optional, Callable
 from itertools import chain, zip_longest
 from functools import reduce
 
@@ -29,35 +29,23 @@ import cv2
 
 #%%
 from .utils import LogFacility, BDVideo, TimeConv as TC, Box, SSIMPW
-from .filestreams import BaseEvent
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise
 from .pgraphics import PGraphics, PGDecoder, PGObjectBuffer, PaletteManager, ProspectiveObject
 from .pgstream import EpochContext
 from .palette import Palette, PaletteEntry
+from .filestreams import BDNXML
 
 logger = LogFacility.get_logger('SUPer')
 
 #%%
-class GroupingEngine:
+class PaddingEngine:
     def __init__(self, box: Box, container: Box, n_groups: int = 2) -> None:
         if n_groups not in range(1, 3):
-            raise AssertionError(f"GroupingEngine expects 1 or 2 groups, not '{n_groups}'.")
+            raise AssertionError(f"PaddingEngine expects 1 or 2 groups, not '{n_groups}'.")
         self.box = box
         self.container = container
         self.n_groups = n_groups
-
-    def coarse_grouping(self, group: list[Type[BaseEvent]], box: Box) -> tuple[npt.NDArray[np.uint8]]:
-        (pxtl, pytl), (w, h) = box.pos_shape
-        gs_orig = np.zeros((h, w), dtype=np.uint8)
-
-        for k, event in enumerate(group):
-            slice_x = slice(event.x-pxtl, event.x-pxtl+event.width)
-            slice_y = slice(event.y-pytl, event.y-pytl+event.height)
-            alpha = np.array(event.img.getchannel('A'), dtype=np.uint8)
-
-            gs_orig[slice_y, slice_x] |= (alpha > 0)
-        return gs_orig
 
     @staticmethod
     def _pad_any_box(box: Box, container: Box, min_dx: int, min_dy: int) -> Box:
@@ -85,18 +73,6 @@ class GroupingEngine:
             new_y2 += (did_offset := (new_y2 + missing <= container.dy))*missing
             new_y1 -= (not did_offset)*missing
         return Box.from_coords(new_x1, new_y1, new_x2, new_y2)
-
-    def pad_box(self, min_dx: int = 8, min_dy: int = 8) -> Box:
-        """
-        Adjust a box within a larger container given dimensional constraints.
-        """
-        assert self.container.dx >= min_dx and self.container.dy >= min_dy, "Video container dimensions too small."
-        assert self.box.overlap_with(self.container) == 1.0, "Rendering rectangle not fully within video container."
-        out = __class__._pad_any_box(self.box, self.container, min_dx, min_dy)
-        assert out.overlap_with(self.container) == 1.0, f"Adjusted rendering rectangle outside of video container {out} within {self.container}"
-        assert out.dx >= min_dx and out.dy >= min_dy, f"Failed padding: {out}, with input: {self.box}"
-        self.box = out
-        return self.box
 
     @staticmethod
     def check_best(new_lwd: tuple[Box], prev_lwd: tuple[Box]) -> tuple[Box]:
@@ -164,46 +140,11 @@ class GroupingEngine:
             return (Box.union(*lwd),)
         assert Box.intersect(*new_lwd).area == 0, f"Padded windows overlap: {new_lwd} from {lwd}."
         return new_lwd
-
-    def find_layout(self, gs_origs: npt.NDArray[np.uint8]) -> tuple[Box]:
-        xl, yl, xr, yr = Image.fromarray(gs_origs, 'L').getbbox()
-        base_wds = self.directional_pad((Box(yl, yr-yl, xl, xr-xl),))
-        best_wds = base_wds
-        if self.n_groups == 1 or (gs_origs.shape[1] < 8 and gs_origs.shape[2] < 8):
-            logger.debug(f"Single window due to shape ({gs_origs.shape}) or n_groups ({self.n_groups})")
-            return best_wds
-
-        for yj in range(yl+8, yr-8):
-            top_wd = Box.from_coords(*Image.fromarray(gs_origs[:yj, :]).getbbox())
-            xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[yj:, :]).getbbox()
-            bottom_wd = Box.from_coords(xt0, yt0+yj, xt1, yt1+yj)
-            best_wds = __class__.check_best(self.directional_pad((top_wd, bottom_wd), True), best_wds)
-
-        for xj in range(xl+8, xr-8):
-            left_wd = Box.from_coords(*Image.fromarray(gs_origs[:, :xj]).getbbox())
-            xt0, yt0, xt1, yt1 = Image.fromarray(gs_origs[:, xj:]).getbbox()
-            right_wd = Box.from_coords(xt0+xj, yt0, xt1+xj, yt1)
-            best_wds = __class__.check_best(self.directional_pad((left_wd, right_wd), False), best_wds)
-
-        # 356 = 32e6/90e3: number of pixels we can output in a tick. If area diff is smaller,
-        # the tick overhead for dual windows/objects may not be worthwile.
-        if sum(map(lambda x: x.area, best_wds)) >= (yr - yl)*(xr - xl) - 356:
-            logger.debug("No layout found or a single window is as efficient.")
-            return base_wds
-
-        for wd in best_wds:
-            assert wd.dx >= 8 and wd.dy >= 8, "Incorrect window or object size."
-        assert 1 == len(best_wds) or Box.intersect(*best_wds).area == 0
-        return best_wds
-
-    def group(self, subgroup: list[Type[BaseEvent]]) -> tuple[Box]:
-        gs_origs = self.coarse_grouping(subgroup, self.box)
-        return self.find_layout(gs_origs)
 ####
 
 #%%
 class WindowsAnalyzer:
-    def __init__(self, ectx: EpochContext, bdn: 'BDNXML', **kwargs):
+    def __init__(self, ectx: EpochContext, bdn: BDNXML, **kwargs):
         self.windows = ectx.windows
         self.events = ectx.events
         self.box = ectx.box
@@ -230,7 +171,6 @@ class WindowsAnalyzer:
 
     def analyze(self):
         ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
-        DSNode.configure(self.bdn.fps)
 
         #Adjust slightly SSIM threshold depending of res
         ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480))
@@ -490,7 +430,7 @@ class WindowsAnalyzer:
                 #K-node are always a mandatory acquisition: do we have time to decode and compose this (worst case)?
                 if needed_shift_f < (durs[k] - 1) >> 1 and (durs[k] - 1 - needed_shift_f)/self.bdn.fps > pts_delta:
                     prev_tc = nodes[k].tc_pts
-                    nodes[k].tc_pts = TC.add_framestc(nodes[k].tc_pts, self.bdn.fps, needed_shift_f)
+                    nodes[k].tc_pts = nodes[k].tc_pts + needed_shift_f
                     logger.warning(f"Shifted event at {prev_tc} to {nodes[k].tc_pts} to account for epoch start and compliancy.")
                     #wipe all events in between epoch start and this point
                     can_buffer = allow_overlaps
@@ -563,7 +503,6 @@ class WindowsAnalyzer:
                     if left and right:
                         states[ze] = PCS.CompositionState.ACQUISITION
                         flags[ze] = 0
-                        f_log_warn = lambda tc_pts: f"Discarded event at {tc_pts} as it preceeds the promoted NC at {nodes[ze].tc_pts}."
                         max_z = ze
                     else:
                         max_z = ze_max
@@ -932,7 +871,7 @@ class WindowsAnalyzer:
             if durs[i][1] != 0:
                 assert i > 0
                 assert nodes[i].parent is not None
-                w_pts = TC.tc2pts(self.events[i-1].tc_out, self.bdn.fps)
+                w_pts = TC.tc2pts(self.events[i-1].tc_out)
                 wds_doable = (nodes[i].parent.write_duration() + 3)/PGDecoder.FREQ < 1/self.bdn.fps
                 if wds_doable and not nodes[i].parent.is_custom_dts():
                     uds, pcs_id = self._get_undisplay(w_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
@@ -959,7 +898,7 @@ class WindowsAnalyzer:
                     break
             assert k > i
 
-            c_pts = TC.tc2pts(nodes[i].tc_pts, self.bdn.fps)
+            c_pts = TC.tc2pts(nodes[i].tc_pts)
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
@@ -1008,7 +947,7 @@ class WindowsAnalyzer:
                 pals[1] += [Palette()] * (k-i - len(pals[1]))
 
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
-                    c_pts = TC.tc2pts(self.events[z].tc_in, self.bdn.fps)
+                    c_pts = TC.tc2pts(self.events[z].tc_in)
                     assert states[z] == PCS.CompositionState.NORMAL
                     pal |= pals[0][z-i] | pals[1][z-i]
 
@@ -1019,7 +958,7 @@ class WindowsAnalyzer:
                         p_id, p_vn = get_palette_data(palette_manager, nodes[z].parent)
                         nodes[z].parent.palette_id = p_id
                         nodes[z].parent.pal_vn = p_vn
-                        uds, pcs_id = self._get_undisplay_pds(TC.tc2pts(self.events[z-1].tc_out, self.bdn.fps), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1, wds_base)
+                        uds, pcs_id = self._get_undisplay_pds(TC.tc2pts(self.events[z-1].tc_out), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1, wds_base)
                         displaysets.append(uds)
                         #We just wipped a palette, whatever the next palette id, rewrite it fully
                         last_palette_id = None
@@ -1069,16 +1008,15 @@ class WindowsAnalyzer:
                 assert z+1 == k
 
             if insert_acqs > 0 and len(pals[0]) > insert_acqs and flags[k-1] != -1:
-                t_diff = TC.tc2s(self.events[k-1].tc_out, self.bdn.fps) - TC.tc2s(self.events[k-1].tc_in, self.bdn.fps)
+                t_diff = (self.events[k-1].tc_out - self.events[k-1].tc_in).to_realtime(as_float=True)
                 #Worst decoding time is twice the write duration. The next display set should also have as much margin.
                 if t_diff > 4.5*nodes[k-1].write_duration()/PGDecoder.FREQ:
                     dts_end = nodes[k-1].dts_end() + 2/PGDecoder.FREQ
                     npts = nodes[k-1].pts() + 2/PGDecoder.FREQ
                     nodes[k-1].nc_refresh = nodes[k-1].partial = False
                     frame_added = 0
-                    #original_tc = nodes[k-1].tc_pts
                     while nodes[k-1].dts() < dts_end or nodes[k-1].pts() < npts + nodes[k-1].write_duration()/PGDecoder.FREQ:
-                        nodes[k-1].tc_pts = TC.add_framestc(nodes[k-1].tc_pts, self.bdn.fps, 1)
+                        nodes[k-1].tc_pts = nodes[k-1].tc_pts + 1
                         frame_added += 1
                     # Subtract one frame to durs to ensure we have enough time for the next real acquisition.
                     if nodes[k-1].dts() - dts_end < 0.25 and frame_added <= (durs[k-1][0]-1) >> 1:
@@ -1090,7 +1028,7 @@ class WindowsAnalyzer:
                             has_two_objs += 1
 
                         logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
-                        c_pts = TC.tc2pts(nodes[k-1].tc_pts, self.bdn.fps)
+                        c_pts = TC.tc2pts(nodes[k-1].tc_pts)
 
                         r = self._generate_acquisition_ds(k-1, k, pgobs_items, nodes[k-1], double_buffering,
                                                           has_two_objs > 1, ods_reg, c_pts, False, flags)
@@ -1120,17 +1058,17 @@ class WindowsAnalyzer:
             p_id, p_vn = get_palette_data(palette_manager, final_node)
             last_palette_id = final_node.palette_id = p_id
             final_node.pal_vn = p_vn
-            uds, pcs_id = self._get_undisplay_pds(TC.tc2pts(self.events[-1].tc_out, self.bdn.fps), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
+            uds, pcs_id = self._get_undisplay_pds(TC.tc2pts(self.events[-1].tc_out), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
             displaysets.append(uds)
 
             #Prepare an additional display set to undraw the screen. Will be added by parent if there's enough time before the next epoch.
             nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self.bdn.fps)/PGDecoder.FREQ)))
-            tc_final_pts = TC.add_framestc(self.events[-1].tc_out, self.bdn.fps, nf_shift)
-            final_pts = TC.tc2pts(tc_final_pts, self.bdn.fps)
+            tc_final_pts = self.events[-1].tc_out + nf_shift
+            final_pts = TC.tc2pts(tc_final_pts)
             perform_wds_end = final_pts < self.max_pts
         else:
             tc_final_pts = self.events[-1].tc_out
-            final_pts = TC.tc2pts(self.events[-1].tc_out, self.bdn.fps)
+            final_pts = TC.tc2pts(self.events[-1].tc_out)
 
         if perform_wds_end:
             final_ds, pcs_id = self._get_undisplay(final_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
@@ -1210,12 +1148,12 @@ class WindowsAnalyzer:
         Additionally, the offset from the previous event is also returned. This value
         is zero unless there are no PG objects shown at some point in the epoch.
         """
-        top = TC.tc2f(self.events[0].tc_in, self.bdn.fps)
+        top = self.events[0].tc_in.frames
         delays = []
         nodes = []
         for ne, event in enumerate(self.events):
-            tic = TC.tc2f(event.tc_in, self.bdn.fps)
-            toc = TC.tc2f(event.tc_out,self.bdn.fps)
+            tic = event.tc_in.frames
+            toc = event.tc_out.frames
             clear_duration = tic-top
             if clear_duration > 0:
                 delays += [clear_duration]
@@ -1317,7 +1255,7 @@ class WindowAnalyzer:
     def analyze(self):
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
-        unseen = event_cnt = 0
+        f_start = unseen = event_cnt = 0
         pgo_yield = None
         containers, mask = [], []
 
@@ -1377,8 +1315,6 @@ class WindowAnalyzer:
 #%%
 ####
 class DSNode:
-    bdn_fps = None
-
     def __init__(self,
             objects: list[Optional[ProspectiveObject]],
             windows: list[Box],
@@ -1401,10 +1337,6 @@ class DSNode:
         self.palette_id = None
         self.pal_vn = 0
         self._dts = None
-
-    @classmethod
-    def configure(cls, fps: BDVideo.FPS) -> None:
-        cls.bdn_fps = fps
 
     def wipe_duration(self) -> int:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
@@ -1431,7 +1363,7 @@ class DSNode:
         return sum(self.get_dts_markers()[1])/PGDecoder.FREQ
 
     def pts(self) -> float:
-        return TC.tc2pts(self.tc_pts, __class__.bdn_fps)
+        return TC.tc2pts(self.tc_pts)
 
     def is_custom_dts(self) -> bool:
         return not (self._dts is None)

@@ -347,70 +347,33 @@ class BDVideo:
             expected = [cls.FPS.NTSCi, cls.FPS.PALi, cls.FPS.FILM, cls.FPS.FILM_NTSC]
             valid &= fps in expected
         elif _format == cls.VideoFormat.SD576_43:
-            expected = [cls.FPS.PALp]
+            expected = [cls.FPS.PALp, cls.FPS.PALi]
             valid &= fps in expected
         elif _format == cls.VideoFormat.SD480_43:
-            expected = [cls.FPS.NTSCp]
+            expected = [cls.FPS.NTSCp, cls.FPS.NTSCi]
             valid &= fps in expected
         return valid, list(map(lambda x: x.value, expected))
 
+#%%
 class TimeConv:
-    FORCE_NDF = True
-    @staticmethod
-    def s2f(s: float, fps: float, *, round_f: Optional[Callable[[float], float]] = round) -> float:
-        """
-        Convert a timestamp (seconds) to a number of frames
-        :param s:           Seconds timestamp
-        :param fps:         Framerate (Frames/s)
-        :return:            Frame count
-        """
-        if round_f is None:
-            round_f = lambda a : a # passthrough
-        return int(round_f(s*fps))
-
     @classmethod
-    def s2tc(cls, s: float, fps: float) -> str:
+    def s2tc(cls, s: float, fps: float, drop_frame: bool = False) -> Timecode:
         #Add 1e-8 to avoid wrong rounding
-        return str(Timecode(round(fps, 2), start_seconds=s+1/fps+1e-8, force_non_drop_frame=cls.FORCE_NDF))
+        s = s/(1 if float(fps).is_integer() else 1.001)
+        r_tc = Timecode(round(fps, 2), start_seconds=s+1/fps+1e-8, force_non_drop_frame=True)
+        r_tc.drop_frame = drop_frame
+        return r_tc
 
     @classmethod
-    def tc2s(cls, tc: str, fps: float, *, ndigits: int = 6) -> float:
-        fps = round(fps, 2)
-        return round(Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF).float -\
-                     Timecode(fps, '00:00:00:00', force_non_drop_frame=cls.FORCE_NDF).float, ndigits)
+    def tc2s(cls, tc: Timecode, *, ndigits: int = 6) -> float:
+        origin_tc = Timecode(tc.framerate, '00:00:00:00')
+        origin_tc.drop_frame = tc.drop_frame
+        return round(tc.float - origin_tc.float, ndigits)
 
     @classmethod
-    def ms2tc(cls, ms: int, fps: float) -> str:
-        return cls.s2tc(ms/1000, fps)
-
-    @classmethod
-    def tc2ms(cls, tc: str, fps: float) -> int:
-        return int(cls.tc2s(tc, fps)*1000)
-
-    @classmethod
-    def tc2f(cls, tc: str, fps: float, *, add_one: bool = False) -> int:
-        return Timecode(round(fps, 2), tc, force_non_drop_frame=cls.FORCE_NDF).frame_number
-
-    @classmethod
-    def f2tc(cls, f: int, fps: float, *, add_one: bool = False) -> str:
-        return str(Timecode(round(fps, 2), frames=f+1, force_non_drop_frame=cls.FORCE_NDF))
-
-    @classmethod
-    def add_framestc(cls, tc: str, fps: float, nf: int) -> str:
-        fps = round(fps, 2)
-        tc_udf = Timecode(fps, tc, force_non_drop_frame=cls.FORCE_NDF) + nf
-        if cls.FORCE_NDF:
-            tc_udf.drop_frame = False
-        return str(tc_udf)
-
-    @classmethod
-    def add_frames(cls, tc: str, fps: float, nf: int) -> float:
-        fps = round(fps, 2)
-        return cls.tc2s(cls.add_framestc(tc, fps, nf), fps)
-
-    @classmethod
-    def tc2pts(cls, tc: str, fps: float) -> float:
-        return max(0, (cls.tc2s(tc, fps) - (1/3)/MPEGTS_FREQ)) * (1 if float(fps).is_integer() else 1.001)
+    def tc2pts(cls, tc: Timecode) -> float:
+        scale_ntsc = tc._ntsc_framerate and not tc.drop_frame
+        return max(0, (cls.tc2s(tc) - (1/3)/MPEGTS_FREQ)) * (1 if not scale_ntsc else 1.001)
 
 class SSIMPW:
     use_gpu = True
