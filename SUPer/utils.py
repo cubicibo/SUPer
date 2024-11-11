@@ -365,21 +365,16 @@ class TimeConv:
         return r_tc
 
     @classmethod
-    def tc2s(cls, tc: Timecode, *, ndigits: int = 6) -> float:
-        origin_tc = Timecode(tc.framerate, '00:00:00:00')
-        origin_tc.drop_frame = tc.drop_frame
-        return round(tc.float - origin_tc.float, ndigits)
-
-    @classmethod
     def tc2pts(cls, tc: Timecode) -> float:
-        scale_ntsc = tc._ntsc_framerate and not tc.drop_frame
-        return max(0, (cls.tc2s(tc) - (1/3)/MPEGTS_FREQ)) * (1 if not scale_ntsc else 1.001)
+        secs = round(tc.float - Timecode(tc.framerate, '00:00:00:00', force_non_drop_frame=True).float, 6)
+        scale_ntsc = not float(tc.framerate).is_integer()
+        return max(0, (secs - (1/3)/MPEGTS_FREQ)) * (1 if not scale_ntsc else 1.001)
 
 class SSIMPW:
     use_gpu = True
 
     @classmethod
-    def compare(cls, img1: Image.Image, img2: Image.Image) -> float:
+    def compare(cls, img1, img2) -> float:
         return compare_ssim(img1, img2, GPU=cls.use_gpu)
 
 @lru_cache(maxsize=6)

@@ -195,7 +195,7 @@ class BDNRender:
         logger.iinfo(f"Parameters: {stkw}")
 
         bdn = BDNXML(os.path.expanduser(self.bdn_file))
-        fps_str = bdn.fps if float(bdn.fps).is_integer() else round(bdn.fps, 3)
+        fps_str = int(bdn.fps) if float(bdn.fps).is_integer() else round(float(bdn.fps), 3)
         logger.iinfo(f"BDN metadata: {'x'.join(map(str, bdn.format.value))}, FPS={fps_str}, DF={bdn.dropframe}, {len(bdn.events)} valid events.")
 
         # Pop succint handler
@@ -210,9 +210,13 @@ class BDNRender:
             import sys
             sys.exit(1)
 
-        self.kwargs['adjust_ntsc'] = isinstance(bdn.fps, float) and not bdn.dropframe
+        self.kwargs['adjust_ntsc'] = isinstance(fps_str, float)
         if self.kwargs['adjust_ntsc']:
-            logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
+            if bdn.dropframe:
+                logger.warning("DF BDN detected: converting Timecodes to NDF and scaling all timestamps by 1.001.")
+                #conversion was done internally in BDNXML already.
+            else:
+                logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
         self._first_pts = TC.tc2pts(bdn.events[0].tc_in)
         return bdn
 

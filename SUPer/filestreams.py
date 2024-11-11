@@ -206,8 +206,15 @@ class BDNXMLEvent:
             Other elements related to the event such as fades.
         """
         _fps = round(te.get('fps'), 2)
-        self._intc = Timecode(_fps, te.get('InTC'))
-        self._outtc = Timecode(_fps, te.get('OutTC'))
+        if te.get('dropframe', False):
+            # Parse correctly as DF, then change to NDF
+            self._intc = Timecode(_fps, te.get('InTC'))
+            self._outtc = Timecode(_fps, te.get('OutTC'))
+            self._intc.drop_frame = self._outtc.drop_frame = False
+        else:
+            self._intc = Timecode(_fps, te.get('InTC'), force_non_drop_frame=True)
+            self._outtc = Timecode(_fps, te.get('OutTC'), force_non_drop_frame=True)
+
         self._img, self._width, self._height = None, None, None
 
         base_folder = ie.get('fp')
@@ -282,10 +289,7 @@ class BDNXMLEvent:
 
     def set_tc_out(self, tc_out: Union[str, Timecode]) -> None:
         if isinstance(tc_out, str):
-            new_tc = Timecode(self._outtc.framerate, tc_out)
-            if new_tc.drop_frame and not self._outtc.drop_frame:
-                new_tc = Timecode(self._outtc.framerate, tc_out, force_non_drop_frame=True)
-            self._outtc = new_tc
+            self._outtc = Timecode(self._outtc.framerate, tc_out, force_non_drop_frame=True)
         else:
             self._outtc = tc_out
         assert self._intc.drop_frame == self._outtc.drop_frame
