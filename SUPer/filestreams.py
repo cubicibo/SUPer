@@ -22,8 +22,6 @@ import os
 import xml.etree.ElementTree as ET
 import numpy as np
 
-from timecode import Timecode
-
 from PIL import Image
 from pathlib import Path
 
@@ -31,7 +29,7 @@ from collections.abc import Generator
 from typing import Union, Optional, Type, Any, Callable
 
 from .segments import PGSegment, PCS, DisplaySet, Epoch
-from .utils import (BDVideo, TimeConv as TC, LogFacility, Shape, Box)
+from .utils import BDVideo, TC, LogFacility, Shape, Box
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -94,7 +92,7 @@ class SUPFile:
     def get_fps(self) -> BDVideo.FPS:
         pcs = next(self.gen_segments())
         assert isinstance(pcs, PCS)
-        return BDVideo.FPS(BDVideo.FPS.from_pcsfps(pcs.fps))
+        return BDVideo.FPS.from_pcsfps(pcs.fps)
 
 
     def get_video_format(self) -> BDVideo.VideoFormat:
@@ -130,11 +128,11 @@ class SUPFile:
         fps = ds0.pcs.fps
 
         for ds in displaysets:
-            assert width == ds.pcs.width, "Width is not constant in SUP."
-            assert height == ds.pcs.height, "Height is not constant in SUP."
-            assert fps == ds.pcs.fps, "FPS is not constant in SUP."
+            assert width == ds.pcs.width, "Width is not constant."
+            assert height == ds.pcs.height, "Height is not constant."
+            assert fps == ds.pcs.fps, "FPS is not constant."
 
-        return BDVideo.VideoFormat((width, height)), BDVideo.FPS(BDVideo.FPS.from_pcsfps(fps))
+        return BDVideo.VideoFormat((width, height)), BDVideo.FPS.from_pcsfps(fps)
 
 
     def segments(self) -> list[Type[PGSegment]]:
@@ -205,15 +203,15 @@ class BDNXMLEvent:
         others : dict[str, Any]
             Other elements related to the event such as fades.
         """
-        _fps = round(te.get('fps'), 2)
-        if te.get('dropframe', False):
+        _fps = te.get('fps')
+        if te.get('dropframe'):
             # Parse correctly as DF, then change to NDF
-            self._intc = Timecode(_fps, te.get('InTC'))
-            self._outtc = Timecode(_fps, te.get('OutTC'))
+            self._intc = TC(_fps, te.get('InTC'))
+            self._outtc = TC(_fps, te.get('OutTC'))
             self._intc.drop_frame = self._outtc.drop_frame = False
         else:
-            self._intc = Timecode(_fps, te.get('InTC'), force_non_drop_frame=True)
-            self._outtc = Timecode(_fps, te.get('OutTC'), force_non_drop_frame=True)
+            self._intc = TC(_fps, te.get('InTC'), force_non_drop_frame=True)
+            self._outtc = TC(_fps, te.get('OutTC'), force_non_drop_frame=True)
 
         self._img, self._width, self._height = None, None, None
 
@@ -287,9 +285,9 @@ class BDNXMLEvent:
     def tc_out(self) -> str:
         return self._outtc
 
-    def set_tc_out(self, tc_out: Union[str, Timecode]) -> None:
+    def set_tc_out(self, tc_out: Union[str, TC]) -> None:
         if isinstance(tc_out, str):
-            self._outtc = Timecode(self._outtc.framerate, tc_out, force_non_drop_frame=True)
+            self._outtc = TC(self._outtc.fractional_fps, tc_out, force_non_drop_frame=True)
         else:
             self._outtc = tc_out
         assert self._intc.drop_frame == self._outtc.drop_frame
@@ -396,7 +394,7 @@ class BDNXML:
                 split_seen = True
                 logger.warning("Input BDN has split events! Merging back splits to find better ones...")
                 logger.warning("Risk of excessive RAM usage: storing in RAM combined images...")
-            ev = BDNXMLEvent(event.attrib | {'fps': self.fps, 'dropframe': self._dropframe},
+            ev = BDNXMLEvent(event.attrib | {'fps': self._fps, 'dropframe': self._dropframe},
                              dict(graphics=gevents, fp=os.path.join(self.folder)), effects)
             if ev.tc_in != ev.tc_out:
                 self.events.append(ev)
@@ -416,7 +414,7 @@ class BDNXML:
             if 0 == len(le):
                 le = [event]
                 continue
-            td = TC.tc2pts(event.tc_in) - TC.tc2pts(le[-1].tc_out)
+            td = event.tc_in.to_pts() - le[-1].tc_out.to_pts()
             assert td >= 0, f"Events are not ordered in time: {event.tc_in}, {event.gfxfile.split(os.path.sep)[-1]} predates previous event."
             if td < dt_split:
                 le.append(event)
@@ -456,16 +454,17 @@ class BDNXML:
                         raise TypeError("Don't know how to parse format string.")
                 self._format = BDVideo.VideoFormat((dc[nf_rs], nf_rs))
         valid_fmt, valid_fps = BDVideo.check_format_fps(self._format, self.fps)
+        str_fps = int(self._fps) if float(self._fps).is_integer() else round(float(self._fps), 3)
         if not valid_fmt:
-            logger.warning(f"Non standard VideoFormat-FPS ({self._format.value[1]}@{self._fps.value}) combination for a primary video stream!!")
+            logger.warning(f"Non standard VideoFormat-FPS ({self._format.value[1]}@{str_fps}) combination for a primary video stream!!")
             logger.warning(f"Expected one of these framerate: {valid_fps}")
         elif self._format == BDVideo.VideoFormat.HD1080:
             if self._fps > BDVideo.FPS.NTSCp:
-                logger.info(f"UHD BD VideoFormat-FPS detected: 1080p@{self._fps.value} only exists with a HEVC video stream.")
+                logger.info(f"UHD BD VideoFormat-FPS detected: 1080p@{str_fps} only exists with a HEVC video stream.")
 
     @property
-    def fps(self) -> float:
-        return self._fps.exact_value
+    def fps(self) -> BDVideo.FPS:
+        return self._fps
 
     @property
     def file(self) -> Union[str, Path]:

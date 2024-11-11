@@ -25,7 +25,7 @@ import numpy as np
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, Epoch, DisplaySet
 from .pgraphics import PGDecoder, PGraphics, PGObjectBuffer
 from .palette import Palette
-from .utils import LogFacility, TimeConv as TC, Box
+from .utils import LogFacility, TC, Box
 
 logger = LogFacility.get_logger('SUPer')
 
