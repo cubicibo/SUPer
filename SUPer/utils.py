@@ -21,16 +21,15 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 import logging
 import numpy as np
 
-from typing import Optional, Callable, TypeVar, Union
-import collections
+from typing import Optional, TypeVar, Union
 from logging.handlers import BufferingHandler
 from enum import Enum, IntEnum
-from numpy import (typing as npt)
+from numpy import typing as npt
+from fractions import Fraction
 from timecode import Timecode
 from dataclasses import dataclass
 from contextlib import nullcontext
 from functools import lru_cache
-from PIL import Image
 from SSIM_PIL import compare_ssim
 
 try:
@@ -208,18 +207,32 @@ class Box:
 
 #%%
 class BDVideo:
+    _LUT_PCS_FPS = {
+        23.976:0x10,
+        24:    0x20,
+        25:    0x30,
+        29.97: 0x40,
+        50:    0x60,
+        59.94: 0x70,
+        60:    0x80,
+    }
+
     class FPS(Enum):
-        HFR_60 = 60
-        NTSCi = 59.94
-        PALi  = 50
-        NTSCp = 29.97
-        PALp  = 25
-        FILM  = 24
-        FILM_NTSC = 23.976
+        HFR_60 = Fraction(60, 1)
+        NTSCi  = Fraction(60000, 1001)
+        PALi   = Fraction(50, 1)
+        NTSCp  = Fraction(30000, 1001)
+        PALp   = Fraction(25, 1)
+        FILM   = Fraction(24, 1)
+        FILM_NTSC = Fraction(24000, 1001)
 
         @classmethod
-        def from_pcsfps(self, pcsfps: int) -> 'BDVideo.FPS':
-            return next((k for k in BDVideo.LUT_PCS_FPS if BDVideo.LUT_PCS_FPS[k] == pcsfps), None)
+        def from_pcsfps(cls, pcsfps: int) -> 'BDVideo.FPS':
+            return cls(next(filter(lambda v: v[1] == pcsfps, BDVideo._LUT_PCS_FPS.items()))[0])
+
+        def to_pcsfps(self) -> 'BDVideo.PCSFPS':
+            rfps = round(float(self), 2)
+            return BDVideo.PCSFPS(next(filter(lambda v: rfps == round(v[0],2), BDVideo._LUT_PCS_FPS.items()))[1])
 
         @property
         def exact_value(self):
@@ -241,19 +254,25 @@ class BDVideo:
                 return cls(candidates[best_idx])
             raise ValueError("Framerate is not BD compliant.")
 
-        def __truediv__(self, other) -> float:
-            value = self.exact_value
-            return value/other
+        def __float__(self) -> float:
+            return float(self.value)
 
-        def __rtruediv__(self, other) -> float:
-            value = self.exact_value
-            return other/value
+        def __int__(self) -> int:
+            return int(self.value)
 
-        def __mul__(self, other) -> float:
-            value = self.exact_value
-            return other*value
+        def __round__(self, ndigits: int = 0):
+            return round(self.value, ndigits)
 
-        def __rmul__(self, other) -> float:
+        def __truediv__(self, other: Union[Fraction, float, int]) -> Union[Fraction, float]:
+            return self.value/other
+
+        def __rtruediv__(self, other: Union[Fraction, float, int]) -> Union[Fraction, float]:
+            return other/self.value
+
+        def __mul__(self, other: Union[Fraction, float, int]) -> Union[Fraction, float]:
+            return self.value*other
+
+        def __rmul__(self, other: Union[Fraction, float, int]) -> Union[Fraction, float]:
             return self.__mul__(other)
 
         def __float__(self) -> float:
@@ -262,19 +281,25 @@ class BDVideo:
         def __gt__(self, other):
             if isinstance(other, __class__):
                 return self.value > other.value
-            elif isinstance(other, (int, float)):
+            elif isinstance(other, (int, float, Fraction)):
                 return self.value > other
             return NotImplemented
 
         def __lt__(self, other):
             if isinstance(other, __class__):
                 return self.value < other.value
-            elif isinstance(other, (int, float)):
+            elif isinstance(other, (int, float, Fraction)):
                 return self.value < other
             return NotImplemented
 
+        def __ne__(self, other) -> bool:
+            test_eq = self.__eq__(other)
+            if test_eq == NotImplemented:
+                return test_eq
+            return not test_eq
+
         def __eq__(self, other) -> bool:
-            if isinstance(other, (float, int)):
+            if isinstance(other, (float, int, Fraction)):
                 try:
                     return __class__(other).value == self.value
                 except ValueError:
@@ -310,24 +335,9 @@ class BDVideo:
         NTSC_I      = 0x70
         HFR_60      = 0x80
 
-        @classmethod
-        def from_fps(cls, other: float):
-            return cls(BDVideo.LUT_PCS_FPS[np.round(other, 3)])
-
-    LUT_PCS_FPS = {
-        23.976:0x10,
-        24:    0x20,
-        25:    0x30,
-        29.97: 0x40,
-        50:    0x60,
-        59.94: 0x70,
-        60:    0x80,
-    }
-    LUT_FPS_PCSFPS = {v: k for k,v in LUT_PCS_FPS.items()}
-
     def __init__(self, fps: float, height: int, width: Optional[int] = None) -> None:
         self.fps = __class__.FPS(fps)
-        self.pcsfps = __class__.PCSFPS.from_fps(self.fps.value)
+        self.pcsfps = self.fps.to_pcsfps()
         if width is None:
             self.format = None
             for vf in __class__.VideoFormat:
@@ -339,12 +349,12 @@ class BDVideo:
             self.format = __class__.VideoFormat((width, height))
 
     @classmethod
-    def check_format_fps(cls, _format: 'BDVideo.VideoFormat', fps: float) -> bool:
+    def check_format_fps(cls, _format: 'BDVideo.VideoFormat', fps: Union[float, 'BDVideo.FPS', Fraction]) -> bool:
         valid = True
         fps = cls.FPS(fps)
         expected = [_fps for _fps in cls.FPS]
         if _format == cls.VideoFormat.HD720:
-            expected = [cls.FPS.NTSCi, cls.FPS.PALi, cls.FPS.FILM, cls.FPS.FILM_NTSC]
+            expected = [cls.FPS.FILM_NTSC, cls.FPS.FILM, cls.FPS.PALi, cls.FPS.NTSCi]
             valid &= fps in expected
         elif _format == cls.VideoFormat.SD576_43:
             expected = [cls.FPS.PALp, cls.FPS.PALi]
@@ -352,23 +362,41 @@ class BDVideo:
         elif _format == cls.VideoFormat.SD480_43:
             expected = [cls.FPS.NTSCp, cls.FPS.NTSCi]
             valid &= fps in expected
-        return valid, list(map(lambda x: x.value, expected))
+        return valid, list(map(lambda x: round((float if x.value.denominator == 1001 else int)(x), 3), expected))
 
 #%%
-class TimeConv:
+class TC(Timecode):
+    def __init__(self, fps, *args, **kwargs) -> None:
+        if not isinstance(fps, BDVideo.FPS):
+            fps = BDVideo.FPS(fps)
+        super().__init__(fps.value, *args, **kwargs)
+        self.fractional_fps = fps
+
     @classmethod
-    def s2tc(cls, s: float, fps: float, drop_frame: bool = False) -> Timecode:
+    def s2tc(cls, s: float, fps: float, drop_frame: bool = False) -> 'TC':
         #Add 1e-8 to avoid wrong rounding
         s = s/(1 if float(fps).is_integer() else 1.001)
-        r_tc = Timecode(round(fps, 2), start_seconds=s+1/fps+1e-8, force_non_drop_frame=True)
+        r_tc = cls(round(fps, 2), start_seconds=s+1/fps+1e-8, force_non_drop_frame=True)
         r_tc.drop_frame = drop_frame
         return r_tc
 
-    @classmethod
-    def tc2pts(cls, tc: Timecode) -> float:
-        secs = round(tc.float - Timecode(tc.framerate, '00:00:00:00', force_non_drop_frame=True).float, 6)
-        scale_ntsc = not float(tc.framerate).is_integer()
-        return max(0, (secs - (1/3)/MPEGTS_FREQ)) * (1 if not scale_ntsc else 1.001)
+    def to_pts(self) -> float:
+        tpts = ((self.frames - 1)/self.fractional_fps.value)*MPEGTS_FREQ
+        return (tpts.numerator//tpts.denominator)/MPEGTS_FREQ
+
+    def __add__(self, other: Union['TC', int]) -> 'TC':
+        # duplicate current one
+        tc = __class__(self.fractional_fps, frames=self.frames)
+        tc.drop_frame = self.drop_frame
+
+        if isinstance(other, __class__):
+            assert other.fractional_fps == self.fractional_fps
+            assert self.drop_frame == other.drop_frame == False
+            tc.add_frames(other.frames)
+        else:
+            assert isinstance(other, int)
+            tc.add_frames(other)
+        return tc
 
 class SSIMPW:
     use_gpu = True
@@ -378,7 +406,7 @@ class SSIMPW:
         return compare_ssim(img1, img2, GPU=cls.use_gpu)
 
 @lru_cache(maxsize=6)
-def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
+def get_matrix(matrix: str, to_rgba: bool) -> npt.NDArray[np.uint8]:
     """
     Getter of colorspace conversion matrix, BT ITU, limited or full
     :param matrix:       Conversion (BTxxx)
@@ -387,42 +415,38 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """
 
     cc_matrix = {
-        'bt601': {'y2r_l': np.array([[1.164,       0,  1.596, 0],
+        'bt601': {'y2r':   np.array([[1.164,       0,  1.596, 0],
                                      [1.164,  -0.392, -0.813, 0],
                                      [1.164,   2.017,      0, 0],
                                      [    0,       0,      0, 1]]),
-                  'r2y_l': np.array([[ 0.257,  0.504,  0.098, 0],
+                  'r2y':   np.array([[ 0.257,  0.504,  0.098, 0],
                                      [-0.148, -0.291,  0.439, 0],
                                      [ 0.439, -0.368, -0.071, 0],
                                      [     0,      0,      0, 1]]),
         },
-        'bt709': {'y2r_l': np.array([[1.164,      0,   1.793, 0],
+        'bt709': {'y2r':   np.array([[1.164,      0,   1.793, 0],
                                      [1.164, -0.213,  -0.533, 0],
                                      [1.164,  2.112,       0, 0],
                                      [    0,      0,       0, 1]]),
-                  'r2y_l': np.array([[ 0.183,  0.614,  0.062, 0],
+                  'r2y':   np.array([[ 0.183,  0.614,  0.062, 0],
                                      [-0.101, -0.339,  0.439, 0],
                                      [ 0.439, -0.399, -0.040, 0],
                                      [     0,      0,      0, 1]]),
         },
-        'bt2020': {'y2r_l':np.array([[1.16439,      0,1.67867,0],
+        'bt2020': {'y2r':  np.array([[1.16439,      0,1.67867,0],
                                      [1.16439,-.18734,-.65042,0],
                                      [1.16439,2.14175,      0,0],
                                      [     0,      0,       0,1]]),
-                   'r2y_l':np.array([[0.22561,0.58228,0.05093,0],
+                   'r2y':  np.array([[0.22561,0.58228,0.05093,0],
                                      [-.12266,-.31656,0.43922,0],
                                      [0.43922,-.40389,-.03533,0],
                                      [      0,      0,      0,1]]),
         },
     }
-    if to_rgba:
-        mat = cc_matrix.get(matrix, {}).get(f"y2r_{range[0]}", None)
-    else:
-        mat = cc_matrix.get(matrix, {}).get(f"r2y_{range[0]}", None)
-
+    mat = cc_matrix.get(matrix, None)
     if mat is None:
         raise NotImplementedError("Unknown/Not implemented conversion standard.")
-    return mat
+    return mat["y2r" if to_rgba else "r2y"]
 
 class LogFacility:
     _logger = dict()

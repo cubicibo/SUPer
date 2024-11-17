@@ -31,7 +31,7 @@ from enum import IntEnum
 from scenaristream import EsMuiStream
 from brule import LayoutEngine, Brule, HexTree
 
-from .utils import TimeConv as TC, LogFacility, Box, SSIMPW
+from .utils import TC, LogFacility, Box, SSIMPW
 from .pgraphics import PGDecoder
 from .filestreams import BDNXML, BDNXMLEvent, remove_dupes
 from .segments import Epoch, DisplaySet
@@ -150,8 +150,8 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
 
         if ev.tc_out != running_ev[0].tc_in:
             cbox, cwd, layout_modifier, is_bad_split, is_greedysplit_worthwile, scores, old_score = _find_modify_layout(leng, container, preset)
-            pts_out = TC.tc2pts(ev.tc_out)
-            if pts_out + scores[0] + 1e-8 < TC.tc2pts(running_ev[0].tc_in):
+            pts_out = ev.tc_out.to_pts()
+            if pts_out + scores[0] + 1e-8 < running_ev[0].tc_in.to_pts():
                 logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with b={is_bad_split}:g={is_greedysplit_worthwile}, {old_score:.03f}->{scores[0]:.03f}.")
                 ectx.append(EpochContext(cbox, cwd, running_ev, pts_out))
                 running_ev = []
@@ -217,7 +217,7 @@ class BDNRender:
                 #conversion was done internally in BDNXML already.
             else:
                 logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
-        self._first_pts = TC.tc2pts(bdn.events[0].tc_in)
+        self._first_pts = bdn.events[0].tc_in.to_pts()
         return bdn
 
     def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
@@ -246,11 +246,11 @@ class BDNRender:
         pbar.update(len(bdn.events)-pbar.n+1)
         LogFacility.close_progress_bar(logger)
 
-        wipe_margin = np.ceil(PGDecoder.copy_gp_duration(bdn.format.area)*bdn.fps + 1/bdn.fps/2)/bdn.fps
+        wipe_margin = float(np.ceil(PGDecoder.copy_gp_duration(bdn.format.area)*bdn.fps + 1/bdn.fps/2)/bdn.fps)
         for ctx, ctx_next in zip(lectx, lectx[1:]):
-            event_max_pts = TC.tc2pts(ctx.events[-1].tc_out)
+            event_max_pts = ctx.events[-1].tc_out.to_pts()
             if np.isinf(ctx_next.min_dts):
-                ctx_next.min_dts = max(event_max_pts, (TC.tc2pts(ctx_next.events[0].tc_in) - _decode_duration_base(ctx_next.windows, bdn.format.area)) - wipe_margin)
+                ctx_next.min_dts = max(event_max_pts, (ctx_next.events[0].tc_in.to_pts() - _decode_duration_base(ctx_next.windows, bdn.format.area)) - wipe_margin)
             ctx.max_pts = min(event_max_pts + wipe_margin, ctx_next.min_dts)
             ctx_next.min_dts += 1/PGDecoder.FREQ #safe: add one tick to min dts
 

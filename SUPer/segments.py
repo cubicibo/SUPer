@@ -235,7 +235,7 @@ class CObject:
         STANDARD = 0x00
 
         @classmethod
-        def _missing_(cls, value: int) -> 'COFlags':
+        def _missing_(cls, value: int) -> 'CObject.COFlags':
             return cls.STANDARD
 
     def __init__(self, data: bytes, *, _cropped = False) -> None:
@@ -643,7 +643,6 @@ class PDS(PGSegment):
     A PaletteDefinitionSegment updates or defines the entries of a given palette.
     For a given DS, this class allows to visualize or set updates.
     """
-    _ids: list[int] = [] # Store the palette IDs used throughout a stream
 
     def __init__(self, data: bytes) -> None:
         super().__init__(data)

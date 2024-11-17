@@ -369,7 +369,7 @@ class Optimise:
 
     @staticmethod
     def diff_cluts(cluts: npt.NDArray[np.uint8], /, *,
-                   matrix: str = 'bt709', s_range: str = 'limited') -> list[Palette]:
+                   matrix: str = 'bt709') -> list[Palette]:
         """
         This functions finds the chain of palette updates for consecutives cluts.
         :param cluts:  Color look-up tables of the sequence, stacked one after the other.
@@ -379,7 +379,7 @@ class Optimise:
         :return: N palette objects defining palette that can be converted to PDSes.
         """
         stacked_cluts = np.swapaxes(cluts, 1, 0).astype(np.int32)
-        matrix = get_matrix(matrix, False, s_range)
+        matrix = get_matrix(matrix, False)
 
         shape = stacked_cluts.shape
         stacked_cluts = np.round(np.matmul(stacked_cluts.reshape((-1, 4)), matrix.T))

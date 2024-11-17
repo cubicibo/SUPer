@@ -28,7 +28,7 @@ import numpy as np
 import cv2
 
 #%%
-from .utils import LogFacility, BDVideo, TimeConv as TC, Box, SSIMPW
+from .utils import LogFacility, BDVideo, TC, Box, SSIMPW
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise
 from .pgraphics import PGraphics, PGDecoder, PGObjectBuffer, PaletteManager, ProspectiveObject
@@ -857,7 +857,7 @@ class WindowsAnalyzer:
         last_palette_id = -1
 
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
-                    PCS.from_scratch(*self.bdn.format.value, BDVideo.LUT_PCS_FPS[round(self.bdn.fps, 3)], pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
+                    PCS.from_scratch(*self.bdn.format.value, self.bdn.fps.to_pcsfps(), pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
         final_node = DSNode([], self.windows, self.events[-1].tc_out, nc_refresh=True)
         #Do we have time to redraw the window (with some margin)?
@@ -871,7 +871,7 @@ class WindowsAnalyzer:
             if durs[i][1] != 0:
                 assert i > 0
                 assert nodes[i].parent is not None
-                w_pts = TC.tc2pts(self.events[i-1].tc_out)
+                w_pts = self.events[i-1].tc_out.to_pts()
                 wds_doable = (nodes[i].parent.write_duration() + 3)/PGDecoder.FREQ < 1/self.bdn.fps
                 if wds_doable and not nodes[i].parent.is_custom_dts():
                     uds, pcs_id = self._get_undisplay(w_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
@@ -898,7 +898,7 @@ class WindowsAnalyzer:
                     break
             assert k > i
 
-            c_pts = TC.tc2pts(nodes[i].tc_pts)
+            c_pts = nodes[i].tc_pts.to_pts()
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
@@ -947,7 +947,7 @@ class WindowsAnalyzer:
                 pals[1] += [Palette()] * (k-i - len(pals[1]))
 
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
-                    c_pts = TC.tc2pts(self.events[z].tc_in)
+                    c_pts = self.events[z].tc_in.to_pts()
                     assert states[z] == PCS.CompositionState.NORMAL
                     pal |= pals[0][z-i] | pals[1][z-i]
 
@@ -958,7 +958,7 @@ class WindowsAnalyzer:
                         p_id, p_vn = get_palette_data(palette_manager, nodes[z].parent)
                         nodes[z].parent.palette_id = p_id
                         nodes[z].parent.pal_vn = p_vn
-                        uds, pcs_id = self._get_undisplay_pds(TC.tc2pts(self.events[z-1].tc_out), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1, wds_base)
+                        uds, pcs_id = self._get_undisplay_pds(self.events[z-1].tc_out.to_pts(), pcs_id, nodes[z].parent, cobjs, pcs_fn, max(pal.palette)+1, wds_base)
                         displaysets.append(uds)
                         #We just wipped a palette, whatever the next palette id, rewrite it fully
                         last_palette_id = None
@@ -1028,7 +1028,7 @@ class WindowsAnalyzer:
                             has_two_objs += 1
 
                         logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
-                        c_pts = TC.tc2pts(nodes[k-1].tc_pts)
+                        c_pts = nodes[k-1].pts()
 
                         r = self._generate_acquisition_ds(k-1, k, pgobs_items, nodes[k-1], double_buffering,
                                                           has_two_objs > 1, ods_reg, c_pts, False, flags)
@@ -1058,17 +1058,17 @@ class WindowsAnalyzer:
             p_id, p_vn = get_palette_data(palette_manager, final_node)
             last_palette_id = final_node.palette_id = p_id
             final_node.pal_vn = p_vn
-            uds, pcs_id = self._get_undisplay_pds(TC.tc2pts(self.events[-1].tc_out), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
+            uds, pcs_id = self._get_undisplay_pds(self.events[-1].tc_out.to_pts(), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
             displaysets.append(uds)
 
             #Prepare an additional display set to undraw the screen. Will be added by parent if there's enough time before the next epoch.
             nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self.bdn.fps)/PGDecoder.FREQ)))
             tc_final_pts = self.events[-1].tc_out + nf_shift
-            final_pts = TC.tc2pts(tc_final_pts)
+            final_pts = tc_final_pts.to_pts()
             perform_wds_end = final_pts < self.max_pts
         else:
             tc_final_pts = self.events[-1].tc_out
-            final_pts = TC.tc2pts(self.events[-1].tc_out)
+            final_pts = self.events[-1].tc_out.to_pts()
 
         if perform_wds_end:
             final_ds, pcs_id = self._get_undisplay(final_pts, pcs_id, wds_base, last_palette_id, pcs_fn)
@@ -1318,7 +1318,7 @@ class DSNode:
     def __init__(self,
             objects: list[Optional[ProspectiveObject]],
             windows: list[Box],
-            tc_pts: str,
+            tc_pts: TC,
             nc_refresh: bool = False,
         ) -> None:
         self.objects = objects
@@ -1363,7 +1363,7 @@ class DSNode:
         return sum(self.get_dts_markers()[1])/PGDecoder.FREQ
 
     def pts(self) -> float:
-        return TC.tc2pts(self.tc_pts)
+        return self.tc_pts.to_pts()
 
     def is_custom_dts(self) -> bool:
         return not (self._dts is None)
