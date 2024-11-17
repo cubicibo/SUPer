@@ -374,7 +374,6 @@ class Optimise:
         This functions finds the chain of palette updates for consecutives cluts.
         :param cluts:  Color look-up tables of the sequence, stacked one after the other.
         :param matrix:  BT ITU conversion
-        :param s_range: YUV range.
 
         :return: N palette objects defining palette that can be converted to PDSes.
         """
@@ -383,12 +382,8 @@ class Optimise:
 
         shape = stacked_cluts.shape
         stacked_cluts = np.round(np.matmul(stacked_cluts.reshape((-1, 4)), matrix.T))
-        if 'full' in s_range:
-            stacked_cluts += np.asarray([[0, 128, 128, 0]])
-            clip_vals = (np.array([[0, 0, 0, 0]]), np.asarray([[255, 255, 255, 255]]))
-        else:
-            stacked_cluts += np.asarray([[16, 128, 128, 0]])
-            clip_vals = (np.array([[16, 16, 16, 0]]), np.asarray([[235, 240, 240, 255]]))
+        stacked_cluts += np.asarray([[16, 128, 128, 0]])
+        clip_vals = (np.array([[16, 16, 16, 0]]), np.asarray([[235, 240, 240, 255]]))
         stacked_cluts = np.clip(stacked_cluts, *clip_vals).astype(np.uint8).reshape(shape)
 
         l_pal = []
