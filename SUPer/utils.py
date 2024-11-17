@@ -406,7 +406,7 @@ class SSIMPW:
         return compare_ssim(img1, img2, GPU=cls.use_gpu)
 
 @lru_cache(maxsize=6)
-def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
+def get_matrix(matrix: str, to_rgba: bool) -> npt.NDArray[np.uint8]:
     """
     Getter of colorspace conversion matrix, BT ITU, limited or full
     :param matrix:       Conversion (BTxxx)
@@ -415,42 +415,38 @@ def get_matrix(matrix: str, to_rgba: bool, range: str) -> npt.NDArray[np.uint8]:
     """
 
     cc_matrix = {
-        'bt601': {'y2r_l': np.array([[1.164,       0,  1.596, 0],
+        'bt601': {'y2r':   np.array([[1.164,       0,  1.596, 0],
                                      [1.164,  -0.392, -0.813, 0],
                                      [1.164,   2.017,      0, 0],
                                      [    0,       0,      0, 1]]),
-                  'r2y_l': np.array([[ 0.257,  0.504,  0.098, 0],
+                  'r2y':   np.array([[ 0.257,  0.504,  0.098, 0],
                                      [-0.148, -0.291,  0.439, 0],
                                      [ 0.439, -0.368, -0.071, 0],
                                      [     0,      0,      0, 1]]),
         },
-        'bt709': {'y2r_l': np.array([[1.164,      0,   1.793, 0],
+        'bt709': {'y2r':   np.array([[1.164,      0,   1.793, 0],
                                      [1.164, -0.213,  -0.533, 0],
                                      [1.164,  2.112,       0, 0],
                                      [    0,      0,       0, 1]]),
-                  'r2y_l': np.array([[ 0.183,  0.614,  0.062, 0],
+                  'r2y':   np.array([[ 0.183,  0.614,  0.062, 0],
                                      [-0.101, -0.339,  0.439, 0],
                                      [ 0.439, -0.399, -0.040, 0],
                                      [     0,      0,      0, 1]]),
         },
-        'bt2020': {'y2r_l':np.array([[1.16439,      0,1.67867,0],
+        'bt2020': {'y2r':  np.array([[1.16439,      0,1.67867,0],
                                      [1.16439,-.18734,-.65042,0],
                                      [1.16439,2.14175,      0,0],
                                      [     0,      0,       0,1]]),
-                   'r2y_l':np.array([[0.22561,0.58228,0.05093,0],
+                   'r2y':  np.array([[0.22561,0.58228,0.05093,0],
                                      [-.12266,-.31656,0.43922,0],
                                      [0.43922,-.40389,-.03533,0],
                                      [      0,      0,      0,1]]),
         },
     }
-    if to_rgba:
-        mat = cc_matrix.get(matrix, {}).get(f"y2r_{range[0]}", None)
-    else:
-        mat = cc_matrix.get(matrix, {}).get(f"r2y_{range[0]}", None)
-
+    mat = cc_matrix.get(matrix, None)
     if mat is None:
         raise NotImplementedError("Unknown/Not implemented conversion standard.")
-    return mat
+    return mat["y2r" if to_rgba else "r2y"]
 
 class LogFacility:
     _logger = dict()
