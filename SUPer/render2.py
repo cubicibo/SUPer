@@ -972,9 +972,9 @@ class WindowsAnalyzer:
                         cobjs, n_pals, o_ods, new_pal = r
                         logger.debug(f"Normal Case: PTS={self.events[z].tc_in}={c_pts:.03f}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
                         pal |= new_pal
-                        for nz, (new_p1, new_p2) in enumerate(zip_longest(n_pals[0], n_pals[1], fillvalue=Palette()), z):
-                            pals[0][nz-i] |= new_p1
-                            pals[1][nz-i] |= new_p2
+                        idxnc = nodes[z].new_mask.index(True)
+                        for nz, new_p in enumerate(n_pals[idxnc], z):
+                            pals[idxnc][nz-i] = new_p
                         normal_case_refresh = True
                         last_palette_id = None
                     elif flags[z] == -1:
