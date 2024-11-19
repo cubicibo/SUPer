@@ -113,6 +113,7 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, preset: LayoutPreset
             cwd = greedy_wds
             scores[0] = new_score
             layout_modifier = 'G'
+            cbox = base_box
         # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
     if layout_modifier == 'N' and is_bad_split and not may_not_fit_buffer:
         cwd = (base_box_wd,)
