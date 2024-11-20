@@ -206,10 +206,6 @@ class WindowsAnalyzer:
         durs, nodes = self.get_durations()
         states, flags, cboxes = self.shape_stream(durs, nodes, pgobjs)
 
-        #if there's a discarded event, perform buffer layout optimisation.
-        #if next(filter(lambda f: f < 0, flags), None) is not None:
-        #    ...
-
         r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
         return self._convert(r_states, pgobjs, r_durs, r_flags, r_nodes)
 
@@ -279,8 +275,40 @@ class WindowsAnalyzer:
             self.shift_forward_overlay(nodes, states, absolutes, acqs, allow_overlaps, pts_delta)
 
         self.filter_events(nodes, states, flags, absolutes, durs, pts_delta, allow_normal_case, allow_overlaps)
-        __class__.verify_palette_usage(nodes, states, flags, allow_overlaps)
+        cls = __class__
+        if allow_overlaps:
+            cls.align_palette_updates(nodes, states, flags)
+        cls.verify_palette_usage(nodes, states, flags, allow_overlaps)
         return states, flags, cboxes
+
+    def align_palette_updates(
+        nodes: list['DSNode'],
+        states: list[PCS.CompositionState],
+        flags: list[int],
+    ) -> None:
+        f_ticks = lambda ts: round(ts*PGDecoder.FREQ)
+        first_possible_dts = f_ticks(nodes[0].dts_end())
+        for ck, node in enumerate(nodes[1:], 1):
+            if flags[ck] < 0:
+                continue
+            if states[ck] == 0 and node.nc_refresh:
+                last_possible_dts = np.inf
+                current_dts = node.dts()
+                if f_ticks(current_dts) < first_possible_dts and first_possible_dts < f_ticks(node.pts()):
+                    for ckf, flag in enumerate(flags[ck+1:],ck+1):
+                        if flag >= 0:
+                            last_possible_dts = f_ticks(nodes[ckf].dts())
+                            break
+                    if first_possible_dts < last_possible_dts:
+                        node.set_dts(min((first_possible_dts+1)/PGDecoder.FREQ, last_possible_dts/PGDecoder.FREQ))
+                        logger.debug(f"Shifted DTS of PU at {node.tc_pts}={node.pts():.03f} from {current_dts:.04f} to {node.dts():.04f}.")
+                    else:
+                        logger.error(f"Required to drop a PU at {node.tc_pts}={node.pts():.03f} to ensure a monotonic DTS.")
+                        flags[ck] = -1
+                        continue
+            first_possible_dts = f_ticks(node.dts_end())
+        ####for ck
+    ####
 
     def shift_forward_overlay(self,
           nodes: list['DSNode'],
