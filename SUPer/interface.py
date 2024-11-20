@@ -132,7 +132,7 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
 
     running_ev = []
     for k, ev in enumerate(reversed(events), 1):
-        channel = np.ascontiguousarray(ev.img.getchannel('A'), dtype=np.uint8)
+        channel = np.ascontiguousarray(ev.image.getchannel('A'), dtype=np.uint8)
         if np.any(channel):
             leng.add_to_layout(ev.x, ev.y, channel)
             running_ev = [ev]
@@ -144,7 +144,7 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
 
     for ev in reversed(events[:-k]):
         # Remove empty bitmaps
-        channel = np.ascontiguousarray(ev.img.getchannel('A'), dtype=np.uint8)
+        channel = np.ascontiguousarray(ev.image.getchannel('A'), dtype=np.uint8)
         ev.unload()
         if not np.any(channel):
             continue
@@ -219,6 +219,10 @@ class BDNRender:
             else:
                 logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
         self._first_pts = bdn.events[0].tc_in.to_pts()
+
+        if bdn.split_seen:
+            logger.warning("BDN contains split graphics! Merging them back to find better ones, output quality may be affected.")
+            logger.warning("Risk of excessive RAM usage: storing the merged images in RAM.")
         return bdn
 
     def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
@@ -587,6 +591,8 @@ class EpochRenderer(mp.Process):
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
         logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
+
+        BDNXMLEvent.can_warn_palettized = True
     ####
 
     def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:

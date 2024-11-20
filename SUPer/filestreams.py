@@ -192,6 +192,7 @@ class BDNXMLEvent:
     A BDNXML event can have numerous child elements such as fade timing and >1
     graphics (files) shown at once.
     """
+    can_warn_palettized = False
     def __init__(self, te: dict[str, int], ie: dict[str, Any], others: dict[str, Any]) -> None:
         """
         Parameters
@@ -268,10 +269,6 @@ class BDNXMLEvent:
             self.load()
         return self._img
 
-    @property
-    def img(self) -> Image.Image:
-        return self.image
-
     def unload(self) -> None:
         if self._img is not None:
             self._img.close()
@@ -294,13 +291,20 @@ class BDNXMLEvent:
         assert self._outtc > self._intc
 
     def load(self) -> None:
+        should_warn = False
         if self._custom:
             self._img = Image.new('RGBA', (self._width, self._height), (0,0,0,0))
             for gfx in self._gfx:
-                self._img.paste(Image.open(os.path.join(self._bf, gfx.text)).convert('RGBA'),
-                          (int(gfx.get('X')) - self.x, int(gfx.get('Y')) - self.y))
+                gfxp = Image.open(os.path.join(self._bf, gfx.text))
+                should_warn = gfxp.mode == 'P'
+                self._img.paste(gfxp.convert('RGBA'), (int(gfx.get('X')) - self.x, int(gfx.get('Y')) - self.y))
         else:
-            self._img = Image.open(self.gfxfile).convert('RGBA')
+            gfximg = Image.open(self.gfxfile)
+            should_warn = gfximg.mode == 'P'
+            self._img = gfximg.convert('RGBA')
+        if should_warn and __class__.can_warn_palettized:
+            __class__.can_warn_palettized = False
+            logger.warning("Some PNGs are already palettized. Prefer 32-bit RGBA images, else quality may be subpar.")
         assert self._img.width == self._width
         assert self._img.height == self._height
 ####BDNXMLEvent
@@ -311,7 +315,7 @@ def remove_dupes(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
         is_diff = events[i+1].pos != events[i].pos
         is_diff = is_diff or events[i+1].shape != events[i].shape
         #only diff the images if they have the same size and position.
-        is_diff = is_diff or (not np.array_equal(np.asarray(events[i+1].img), np.asarray(events[i].img)))
+        is_diff = is_diff or (not np.array_equal(np.asarray(events[i+1].image), np.asarray(events[i].image)))
 
         events[i].unload()
         if is_diff or output_events[-1].tc_out != events[i+1].tc_in:
@@ -340,6 +344,7 @@ class BDNXML:
             self._folder = Path(folder)
             assert self._folder.exists()
 
+        self.split_seen = False
         self.events: list[BDNXMLEvent] = []
         self._parse()
 
@@ -376,7 +381,7 @@ class BDNXML:
         # have subgroup for a given timestamp to not break the SeqIO class
         # so, we merge sub-evnets on the same plane.
         self.events.clear()
-        split_seen = False
+        self.split_seen = False
 
         for event in self._raw_events:
             assert event.tag == 'Event'
@@ -390,10 +395,7 @@ class BDNXML:
             # Event.attrib contains the <Event> tag params
             # Event[cnt] features the internal content of the <event> tag.
             # i.e <Graphic>, <Fade ...>
-            if len(gevents) > 1 and not split_seen:
-                split_seen = True
-                logger.warning("Input BDN has split events! Merging back splits to find better ones...")
-                logger.warning("Risk of excessive RAM usage: storing in RAM combined images...")
+            self.split_seen = self.split_seen or len(gevents) > 1
             ev = BDNXMLEvent(event.attrib | {'fps': self._fps, 'dropframe': self._dropframe},
                              dict(graphics=gevents, fp=os.path.join(self.folder)), effects)
             if ev.tc_in != ev.tc_out:

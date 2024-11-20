@@ -93,7 +93,7 @@ class PaletteEntry:
         corr = 0 if 'full' in s_range else 16
         pe = FpPal(self.y-corr, self.cb-128, self.cr-128, self.alpha)
 
-        rgba_v = np.matmul(get_matrix(matrix, True, s_range), np.asarray([[*pe]]).T)
+        rgba_v = np.matmul(get_matrix(matrix, True), np.asarray([[*pe]]).T)
         return RGBA(*clip_rgba(np.round(rgba_v)).reshape(4,))
 
 
@@ -138,7 +138,7 @@ class PaletteEntry:
         :param matrix: BT ITU conversion to use.
         :param s_range: YUV range.
         """
-        mat = get_matrix(matrix, False, s_range)
+        mat = get_matrix(matrix, False)
         pe = np.round(np.matmul(mat, np.asarray(rgba).T)).T
         pe = pe + np.asarray([0 if 'full' in s_range else 16, 128, 128, 0])
 
@@ -300,7 +300,7 @@ class Palette:
         :param kwargs: Additional parameters for palette version and number.
         :return: Palette object
         """
-        cmat = get_matrix(matrix, False, s_range)
+        cmat = get_matrix(matrix, False)
 
         new_pal = cls({} if not prev_pal else prev_pal.palette)
 
@@ -335,7 +335,7 @@ class Palette:
         :param kwargs: Additional parameters for palette version and number.
         :return: Palette object
         """
-        cmat = get_matrix(matrix, True, s_range)[:3,:3]
+        cmat = get_matrix(matrix, True)[:3,:3]
 
         ycbcr = self.get_ycbcr(_no_key=True).astype(float).reshape((-1, 3)).T
         ycbcr[[1,2],:] -= 128
@@ -354,7 +354,7 @@ class Palette:
         :param s_range: YUV range
         :return: Mapping with, as key the palette entry ID and value: RGBA tuple.
         """
-        cmat = get_matrix(matrix, True, s_range)
+        cmat = get_matrix(matrix, True)
 
         ycbcra = self.get_ycbcra(_no_key=True).astype(float).reshape((-1, 4)).T
         ycbcra[[1,2],:] -= 128

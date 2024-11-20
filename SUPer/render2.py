@@ -165,7 +165,7 @@ class WindowsAnalyzer:
                 hsi = slice(zone_overlap.x-window.x-self.box.x, zone_overlap.x2-window.x-self.box.x)
                 ivsi = slice(zone_overlap.y-event.y, zone_overlap.y2-event.y)
                 ihsi = slice(zone_overlap.x-event.x, zone_overlap.x2-event.x)
-                work_plane[vsi, hsi, :] = np.asarray(event.img, dtype=np.uint8)[ivsi, ihsi, :]
+                work_plane[vsi, hsi, :] = np.asarray(event.image, dtype=np.uint8)[ivsi, ihsi, :]
             return work_plane
         return None
 

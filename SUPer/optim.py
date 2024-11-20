@@ -385,13 +385,13 @@ class Optimise:
         stacked_cluts += np.asarray([[16, 128, 128, 0]])
         clip_vals = (np.array([[16, 16, 16, 0]]), np.asarray([[235, 240, 240, 255]]))
         stacked_cluts = np.clip(stacked_cluts, *clip_vals).astype(np.uint8).reshape(shape)
-
+        #YCbCrA -> YCrCbA
+        stacked_cluts = stacked_cluts[:, :, [0, 2, 1, 3]]
         l_pal = []
         for j, clut in enumerate(stacked_cluts):
             pal = Palette()
             for k, pal_entry in enumerate(clut):
                 n_e = PaletteEntry(*pal_entry)
-                n_e.swap_cbcr()
                 if j == 0: # For t0, set the entire palette regardless
                     pal[k] = n_e
                     continue
