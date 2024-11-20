@@ -74,7 +74,7 @@ def get_kwargs() -> dict[str, Any]:
         'output_all_formats': bool(all_formats.value),
         'allow_normal_case': bool(normal_case_ok.value),
         'insert_acquisitions': int(biacqs_val.value),
-        'ini_opts': init_extra_libs(verbose=False),
+        'ini_opts': init_extra_libs(application_path, verbose=False),
         'max_kbps': int(max_kbps.value),
         'log_to_file': opts_log[logcombo.value],
         'ssim_tol': int(ssim_tolb.value)/100,
@@ -225,13 +225,12 @@ def terminate(frame = None, sig = None):
     app.destroy()
     abort(proc)
 
-def init_extra_libs(verbose: bool = True):
+def init_extra_libs(CWD: Path, verbose: bool = True):
     def get_value_key(config, key: str) -> Optional[Any]:
         try: return config[key]
         except KeyError: return None
     ####
     params = {}
-    CWD = Path.cwd()
     ini_file = CWD.joinpath('config.ini')
 
     exepath = None
@@ -248,7 +247,7 @@ def init_extra_libs(verbose: bool = True):
         if (sup_params := get_value_key(config, 'SUPer')) is not None:
             params['super_cfg'] = dict(sup_params)
     elif verbose:
-        logger.warning("config.ini not found!")
+        logger.error("config.ini not found!")
     if Quantizer.init_piliq(exepath):
         if verbose:
             logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
@@ -258,11 +257,16 @@ def init_extra_libs(verbose: bool = True):
     return params
 
 if __name__ == '__main__':
+    try:
+        application_path = Path(sys.argv[0]).resolve().parent
+    except:
+        application_path = Path(sys.argv[0]).absolute().parent
+
     logger = LogFacility.get_logger('SUPui')
     logger.info(f"SUPer v{SUPVERS}, (c) {__author__}")
 
     #Do not keep returned params, we just want to initialize PILIQ
-    init_extra_libs()
+    init_extra_libs(application_path)
     opts_quant = Quantizer.get_options()
     opts_log = {'Disabled':  0, 'Succint': -10, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30, 'Debug': 10, 'Max debug': 5}
 

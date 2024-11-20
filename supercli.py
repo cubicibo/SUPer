@@ -31,7 +31,7 @@ from SUPer.__metadata__ import __author__, __version__ as LIB_VERSION
 import os
 import sys
 from pathlib import Path
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 from typing import NoReturn, Union
 import time
 from datetime import timedelta
@@ -65,6 +65,19 @@ if __name__ == '__main__':
     def check_ext(fp: Union[Path, str]) -> None:
         fp = Path(fp)
 
+    class BruleCapAction(BooleanOptionalAction):
+        def __init__(self, option_strings, dest, nargs=None, **kwargs):
+            super().__init__(option_strings, dest, **kwargs)
+
+        def __call__(self, parser, namespace, values = None, option_string=None):
+            from brule import LayoutEngine, Brule, HexTree
+            f_strcap = lambda caps: ', '.join(caps)
+
+            print(f"LayoutEngine: {f_strcap(LayoutEngine.get_capabilities())}")
+            print(f"   RLE codec: {f_strcap(Brule.get_capabilities())}")
+            print(f"     HexTree: {f_strcap(Brule.get_capabilities())}")
+            exit_msg('', is_error=False)
+
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Set input BDNXML file.", default='', required=True)
     parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=80, required=False)
@@ -79,8 +92,10 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: off] (def:  %(default)s)", type=int, default=2, required=False)
     parser.add_argument('-m', '--max-kbps', help="Set a max bitrate to validate the output against.", type=int, default=0, required=False)
     parser.add_argument('-l', '--log-to-file', help="Enable logging to file and specify the minimum logging level. [10: debug, 20: normal, 30: warn/errors]", type=int, default=0, required=False)
-    parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 8 supported. [0: auto] (def:  %(default)s)", type=int, default=0, required=False)
+    parser.add_argument('-t', '--threads', help="Set number of concurrent threads, up to 10 supported. [0: auto] (def:  %(default)s)", type=int, default=0, required=False)
     parser.add_argument('--layout', help="Set window layout mode. [0: safe, 1: normal, 2: aggressive] (def: config.ini)", type=int, default=-1, required=False)
+    parser.add_argument('--capabilities', help="Display Brule library capabilities and exit.", action=BruleCapAction)
+
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
@@ -122,7 +137,7 @@ if __name__ == '__main__':
         logger.warning("Meaningless logging level, disabling file logging.")
         args.log_to_file = False
 
-    if args.threads < 0 or args.threads > 8:
+    if args.threads < 0 or args.threads > 10:
         exit_msg("Incorrect number of threads, aborting.")
 
     if ext == 'pes' or args.withsup:
@@ -136,8 +151,12 @@ if __name__ == '__main__':
 
     parameters = {'ini_opts': {'super_cfg': {}}}
 
-    CWD = Path.cwd()
-    config_file = CWD.joinpath('config.ini')
+    try:
+        application_path = Path(sys.argv[0]).resolve().parent
+    except:
+        application_path = Path(sys.argv[0]).absolute().parent
+
+    config_file = application_path.joinpath('config.ini')
 
     if config_file.exists():
         ini_opts = {'super_cfg': {}}
@@ -155,13 +174,13 @@ if __name__ == '__main__':
             piq_values = {}
             if (piq_sect := get_value_key(config, 'PILIQ')) is not None:
                 if (exepath := piq_sect.pop('quantizer', None)) is not None and not os.path.isabs(exepath):
-                    exepath = str(CWD.joinpath(exepath))
+                    exepath = str(application_path.joinpath(exepath))
                 piq_values |= {k: int(v) for k, v in piq_sect.items()}
             ini_opts['quant'] = {'qpath': exepath} | piq_values
         if len(ini_opts):
             parameters['ini_opts'] |= ini_opts
     else:
-        logger.warning("config.ini not found!")
+        logger.error("config.ini not found!")
     
     if args.layout >= 0:
         parameters['ini_opts']['super_cfg']['layout_mode'] = args.layout
