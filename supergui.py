@@ -73,6 +73,7 @@ def get_kwargs() -> dict[str, Any]:
         'full_palette': bool(fullpalette.value),
         'output_all_formats': bool(all_formats.value),
         'allow_normal_case': bool(normal_case_ok.value),
+        'prefer_normal_case': bool(prefer_normal_case.value),
         'insert_acquisitions': int(biacqs_val.value),
         'ini_opts': init_extra_libs(application_path, verbose=False),
         'max_kbps': int(max_kbps.value),
@@ -187,6 +188,11 @@ def hide_chkbox() -> None:
         fullpalette.enabled = False
     elif not supout.value.lower().endswith('pes'):
         fullpalette.enabled = True
+    if prefer_normal_case.value:
+        normal_case_ok.value = True
+        normal_case_ok.enabled = False
+    else:
+        normal_case_ok.enabled = True
 
 def get_bdnxml() -> None:
     bdn_xml_types = ("*.xml", "*.XML")
@@ -330,6 +336,10 @@ if __name__ == '__main__':
     Hovertip(normal_case_ok.tk, "Update only one composition out of the two, whenever updating both is not possible due to time constraints.\n"\
                                 "This exploits the PG object buffer capabilities as intended by the format designers.\n"\
                                 "Stream shall NOT be Built or Rebuilt at the authoring stage.")
+
+    prefer_normal_case = CheckBox(app, text="Prefer normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
+    Hovertip(prefer_normal_case.tk, "Update only one composition out of the two, even when decoding time is sufficient to refresh both (default).\n"\
+                                    "It can reduce the bitrate, but the palette can no longer be shared across composition objects.")
 
     allow_overlaps = CheckBox(app, text="Allow palette update buffering.", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(allow_overlaps.tk, "Buffer palette updates whenever possible to drop fewer events.\n"\

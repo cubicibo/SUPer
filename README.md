@@ -32,8 +32,9 @@ Both the standalone executables and `python3 supergui.py` will display the graph
  -i, --input         Input BDNXML file.
  -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
  -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
- -q, --qmode         Set the image quantization mode. [1: PIL+K-Means on fades, 2: K-Means, 3: PILIQ, def: 3]
+ -q, --qmode         Set the image quantization mode. [0: K-Means, 1: Pillow, 2: HexTree, 3: libimagequant/pngquant, def: 3]
  -n, --allow-normal  Flag to allow normal case object redefinition, can reduce the number of dropped events on complex animations.
+ -k, --prefer-normal Flag to always prefer normal case object redefinition, can reduce the overall bitrate.
  -t, --threads       Set the number of concurrent threads to use. Default is 0 (autoselect), maximum is 8.
  -b, --bt            Set the target BT matrix [601, 709, 2020, def: 709]
  -p, --palette       Flag to always write the full palette (enforced for PES).
@@ -53,7 +54,8 @@ Here are some additional informations on selected options, especially those that
 - Compression rate: minimum time margin (in %) between two events to perform an acquisition.
 - Acquisition rate: Secondary compression parameter. Leave it untouched unless a lower bitrate is needed.
 - Quantization: [Image quantizer](#image-quantizers) to use. pngquant/libimagequant (3) is recommended.
-- Allow normal case object redefinition: whenever possible, update a single object out of two. This may reduce the count of dropped events.
+- Allow normal case: allow to update a single object out of two when there's no enough time to refresh both, it may reduce the count of dropped events.
+- Prefer normal case: Update only one composition out of the two, even when decoding time is sufficient to refresh both (which is the default). This can significantly reduce the bitrate, but the composition objects can no longer share palette entries.
 - Palette update buffering: decode palette updates early to drop fewer events, right before decoding of new bitmaps.
 - Insert acquisition: perform a screen refresh after a palette animation. Some palette animations may cause artifacts that remain on the display, a refresh will hide them. This can impact the bitrate as new bitmaps are inserted in the stream.
 - Logging: logging level -10 creates a single file listing solely the filtering decisions, if any (e.g. dropped events, normal case object redefinition).
@@ -76,7 +78,7 @@ Higher quality quantizers (such as *K-Means* or *PILIQ*) will generally affect (
 ### Additional tips  
 - The output file extension is used to infer the desired output type (SUP or PES).
 - `--max-kbps` does not shape the stream, it is simply a limit to compare it to. Only `--compression` and `--qmode` may be used to reduce the filesize.
-- If `--allow-normal` or `--ahead` is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Building or rebuilding the PES is not mandatory to mux a project.
+- If `--allow-normal` (`--prefer-normal`) or `--ahead` is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Building or rebuilding the PES is not mandatory to mux a project.
 
 ### Example
 `python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --qmode 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`

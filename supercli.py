@@ -75,18 +75,19 @@ if __name__ == '__main__':
 
             print(f"LayoutEngine: {f_strcap(LayoutEngine.get_capabilities())}")
             print(f"   RLE codec: {f_strcap(Brule.get_capabilities())}")
-            print(f"     HexTree: {f_strcap(Brule.get_capabilities())}")
+            print(f"     HexTree: {f_strcap(HexTree.get_capabilities())}")
             exit_msg('', is_error=False)
 
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Set input BDNXML file.", default='', required=True)
     parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=80, required=False)
     parser.add_argument('-a', '--acqrate', help="Set acquisition rate [int, 0-100] (def:  %(default)s)", type=int, default=100, required=False)
-    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [0: K-Means, 1: PIL+K-Means, 2: HexTree, 3: PNGQ/LIQ] (def:  %(default)s)", type=int, default=3, required=False)
-    parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object redefinition.", action='store_true', default=False, required=False)
+    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [0: K-Means, 1: Pillow, 2: HexTree, 3: PNGQ/LIQ] (def:  %(default)s)", type=int, default=3, required=False)
+    parser.add_argument('-k', '--prefer-normal', help="Flag to prefer normal case over acquisitions.", action='store_true', default=False, required=False)
+    parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object refreshes.", action='store_true', default=False, required=False)
     parser.add_argument('-b', '--bt', help="Set target Rec. BT matrix [601, 709, 2020] (def:  %(default)s)", type=int, default=709, required=False)
     parser.add_argument('-p', '--palette', help="Flag to always write the full palette.", action='store_true', default=False, required=False)
-    parser.add_argument('-d', '--ahead', help="Flag to enable ahead of time palette update decoding.", action='store_true', default=False, required=False)
+    parser.add_argument('-d', '--ahead', help="Flag to enable flexible palette update buffering.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Flag to overwrite an existing file with the same name.", action='store_true', default=False, required=False)
     parser.add_argument('-w', '--withsup', help="Flag to write both SUP and PES+MUI files.", action='store_true', default=False, required=False)
     parser.add_argument('-e', '--extra-acq', help="Set min count of palette updates needed to add an acquisition. [0: off] (def:  %(default)s)", type=int, default=2, required=False)
@@ -139,6 +140,10 @@ if __name__ == '__main__':
 
     if args.threads < 0 or args.threads > 10:
         exit_msg("Incorrect number of threads, aborting.")
+
+    if args.prefer_normal and not args.allow_normal:
+        args.allow_normal = True
+        logger.warning("--prefer-normal requires --allow-normal, forcefully enabling this flag.")
 
     if ext == 'pes' or args.withsup:
         if args.ahead:
@@ -196,6 +201,7 @@ if __name__ == '__main__':
         'full_palette': args.palette,
         'output_all_formats': args.withsup,
         'allow_normal_case': args.allow_normal,
+        'prefer_normal_case': args.prefer_normal,
         'max_kbps': args.max_kbps,
         'log_to_file': args.log_to_file,
         'insert_acquisitions': args.extra_acq,

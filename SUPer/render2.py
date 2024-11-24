@@ -414,6 +414,7 @@ class WindowsAnalyzer:
           allow_normal_case: bool,
           allow_overlaps: bool,
     ) -> None:
+        prefer_normal_case = self.kwargs.get('prefer_normal_case', False)
         #At this point, we have the stream acquisitions. Some may be impossible,
         # so we have to filter out some less relevant events.
         logger.debug("Backtracking to filter acquisitions and events.")
@@ -567,7 +568,7 @@ class WindowsAnalyzer:
                     continue
                 ###event shift
             #Filter the events
-            is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
+            is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or prefer_normal_case or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
             j_iter = j_nc if is_normal_case else j
             dts_iter = dts_start_nc if is_normal_case else dts_start
             dts_end_iter = nodes[max(j_iter-1, 0)].dts_end()
@@ -624,7 +625,7 @@ class WindowsAnalyzer:
             nodes[k].partial = is_normal_case
             flags[k] = int(is_normal_case)
             if is_normal_case:
-                logger.einfo(f"Object refreshed with a Normal Case at {nodes[k].tc_pts} (tight timing).")
+                logger.einfo(f"Object refreshed with a Normal Case at {nodes[k].tc_pts}.")
             k -= 1
         ####while k > 0
     ####filter_events
