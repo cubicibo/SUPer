@@ -47,7 +47,6 @@ def setup_pkg():
         long_description=long_description,
         long_description_content_type='text/markdown',
         packages=[NAME,],
-        package_dir={NAME: '.'},
         package_data={
             NAME: ['py.typed'],
         },
