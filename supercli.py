@@ -75,6 +75,7 @@ if __name__ == '__main__':
 
             print(f"LayoutEngine: {f_strcap(LayoutEngine.get_capabilities())}")
             print(f"   RLE codec: {f_strcap(Brule.get_capabilities())}")
+            print(f"    kd-Means: {f_strcap(KDMeans.get_capabilities())}")
             print(f"     HexTree: {f_strcap(HexTree.get_capabilities())}")
             exit_msg('', is_error=False)
 
@@ -82,7 +83,7 @@ if __name__ == '__main__':
     parser.add_argument("-i", "--input", type=str, help="Set input BDNXML file.", default='', required=True)
     parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=80, required=False)
     parser.add_argument('-a', '--acqrate', help="Set acquisition rate [int, 0-100] (def:  %(default)s)", type=int, default=100, required=False)
-    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [0: K-Means, 1: Pillow, 2: HexTree, 3: PNGQ/LIQ] (def:  %(default)s)", type=int, default=3, required=False)
+    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [0: KD-Means, 1: Pillow, 2: HexTree, 3: PNGQ/LIQ] (def:  %(default)s)", type=int, default=3, required=False)
     parser.add_argument('-k', '--prefer-normal', help="Flag to prefer normal case over acquisitions.", action='store_true', default=False, required=False)
     parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object refreshes.", action='store_true', default=False, required=False)
     parser.add_argument('-b', '--bt', help="Set target Rec. BT matrix [601, 709, 2020] (def:  %(default)s)", type=int, default=709, required=False)
