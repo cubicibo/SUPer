@@ -32,7 +32,7 @@ Both the standalone executables and `python3 supergui.py` will display the graph
  -i, --input         Input BDNXML file.
  -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
  -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
- -q, --qmode         Set the image quantization mode. [0: K-Means, 1: Pillow, 2: HexTree, 3: libimagequant/pngquant, def: 3]
+ -q, --qmode         Set the image quantization mode. [0: KD-Means, 1: Pillow, 2: HexTree, 3: libimagequant/pngquant, def: 3]
  -n, --allow-normal  Flag to allow normal case object redefinition, can reduce the number of dropped events on complex animations.
  -k, --prefer-normal Flag to always prefer normal case object redefinition, can reduce the overall bitrate.
  -t, --threads       Set the number of concurrent threads to use. Default is 0 (autoselect), maximum is 8.
@@ -64,14 +64,14 @@ Here are some additional informations on selected options, especially those that
 ### Image quantizers
 SUPer ships with various internal image quantizers and supports two external ones. The different methods (values for `--qmode`) are enumerated here:
 
-0. **K-Means**: Slow but high quality quantizer. Should only be used if *PILIQ* (3) is not available and quality is a must.
+0. **KD-Means**: Slow but high quality quantizer. Should only be used if *PILIQ* (3) is not available and quality is a must.
 1. **PIL**: Fast, medium quality. Excellent for low bitrates and files with solely dialogue and karaoke. Glows and gradients will be hideous.
 2. **HexTree**: Fast, good quality. Suits nicely files with moderate typesetting effects (no heavy gradients or glows).
 3. **PILIQ** (libimagequant / pngquant): High quality, acceptably fast. Recommended default, and it preserves glows and gradients.
     - macOS users must install pngquant via brew, or specify the pngquant executable in config.ini
     - Linux and Windows[^1] users can specify either *libimagequant[.dll, .so]* or pngquant executable in config.ini.
 
-Higher quality quantizers (such as *K-Means* or *PILIQ*) will generally affect (increase) the bitrate of the output stream.
+Higher quality quantizers (such as *KD-Means* or *PILIQ*) will generally affect (increase) the bitrate of the output stream.
 
 [^1]: On Windows, compiled binaries ship with libimagequant.dll and the PILIQ library embeds a copy for users of the package in a (virtual) environment.
 

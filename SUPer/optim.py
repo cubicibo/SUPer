@@ -28,7 +28,7 @@ from typing import Optional, Union, Any
 from collections.abc import Iterable
 from enum import IntEnum, auto
 from piliq import PILIQ, PNGQuantWrapper
-from brule import HexTree
+from brule import HexTree, KDMeans
 
 from .palette import Palette, PaletteEntry
 from .utils import LogFacility, get_matrix, SSIMPW
@@ -85,9 +85,11 @@ class Quantizer:
             cls._opts[cls.Libs.PILIQ] = (cls.get_piliq().lib_name,'(best, fast)')
         if cls._alt_piliq is not None:
             cls._opts[cls.Libs.PNGQNT] = (cls._alt_piliq.lib_name,'(best, fast)')
-        cls._opts[cls.Libs.HEXTREE] = ("HexTree", "(good, fast)")
+        ht_info = '(good, very fast)' if 'C' in HexTree.get_capabilities() else '(medium, avg)'
+        cls._opts[cls.Libs.HEXTREE] = ("HexTree", ht_info)
         cls._opts[cls.Libs.PIL_KM] = ('Pillow', '(average, turbo)')
-        cls._opts[cls.Libs.KMEANS] = ('K-Means', '(best, slow)')
+        kdm_info = '(good+, fast)' if 'C' in KDMeans.get_capabilities() else '(good+, slow)'
+        cls._opts[cls.Libs.KMEANS] = ('KD-Means', kdm_info)
 
     @classmethod
     def init_piliq(cls,
@@ -182,11 +184,7 @@ class Preprocess:
             # Use PIL to get approximate number of clusters
             nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
             nk = min(colors, int(np.ceil(20+nk*235/255)))
-            flat_img = np.float32(np.asarray(img).reshape((-1, 4)))/255.0
-
-            criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 11, 1.0)
-            _, label, center = cv2.kmeans(flat_img, nk, None, criteria, 3, cv2.KMEANS_PP_CENTERS)
-            return label.reshape(img.height, img.width).astype(np.uint8), np.round(np.clip(center, 0.0, 1.0)*255).astype(np.uint8)
+            return KDMeans.quantize(np.asarray(img, dtype=np.uint8), nk)
 
         elif Quantizer.Libs.HEXTREE == quant_method:
             nc = colors if single_bitmap else len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
@@ -206,7 +204,7 @@ class Preprocess:
             pil_failed = pil_failed or SSIMPW.compare(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.95
 
             if pil_failed:
-                logger.ldebug("Pillow failed to palettize image, falling back to K-Means.")
+                logger.ldebug("Pillow failed to palettize image, falling back to HexTree.")
                 return cls.quantize(img, colors, quantize_lib=Quantizer.Libs.HEXTREE, **kwargs)
 
             return npimg, nppal
@@ -259,7 +257,6 @@ class Optimise:
         This functions finds a solution for the provided subtitle animation.
         :param events: PIL images, stacked one after the other
         :param colors: max number of sequences usable
-        :param kmwans: enable kmeans quantization
 
         :return: bitmap, sequence of palette update to obtain the said input animation.
         """

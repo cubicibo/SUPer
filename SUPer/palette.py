@@ -35,14 +35,12 @@ FpPal = namedtuple('FpPal', 'y cb cr alpha')
 
 logger = LogFacility.get_logger('SUPer')
 
-def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
+def clip_ycbcr(ycbcra: npt.NDArray) -> npt.NDArray[np.uint8]:
     """
-    Clip an array of YCxCyA values to s_range either {'limited', 'full'}
-
+    Clip an array of YCxCyA values to limited range
     :param ycbcra: Values to clip. Ideally as (N, 4) with entries stacked vertically.
-    :param s_range: YUV range. PGS uses limited so should you.
 
-    :return: Clipped values according to range. If 'full' generally input=output.
+    :return: Clipped values
     """
     squeeze = ycbcra.ndim == 1
     if squeeze:
@@ -51,13 +49,10 @@ def clip_ycbcr(ycbcra: npt.NDArray, s_range: str) -> npt.NDArray[np.uint8]:
     if ycbcra.shape[1] != 4 and ycbcra.shape[0] == 4:
         ycbcra = ycbcra.T
 
-    if 'full' not in s_range:
-        #logger.ldebug("Clipping values to limited range.")
-        ycbcra[:, :3][ycbcra[:, :3] <  16] = 16
-        ycbcra[:,  0][ycbcra[:,  0] > 235] = 235
-        ycbcra[:,1:3][ycbcra[:,1:3] > 240] = 240
-    ycbcra[ycbcra > 255] = 255
-    ycbcra[ycbcra < 0] = 0
+    ycbcra[:, :3][ycbcra[:, :3] <  16] = 16
+    ycbcra[:,  0][ycbcra[:,  0] > 235] = 235
+    ycbcra[:,1:3][ycbcra[:,1:3] > 240] = 240
+    ycbcra = np.clip(ycbcra, 0, 255)
 
     if squeeze:
         ycbcra = ycbcra.squeeze()
@@ -83,15 +78,12 @@ class PaletteEntry:
     cb: int
     alpha: int
 
-    def to_rgba(self, matrix: str ='bt709', /, *,
-                s_range: str = 'limited'):
+    def to_rgba(self, matrix: str ='bt709'):
         """
         :param matrix: BT ITU conversion to use
-        :param s_range: YUV space
         :return: RGBA equivalent.
         """
-        corr = 0 if 'full' in s_range else 16
-        pe = FpPal(self.y-corr, self.cb-128, self.cr-128, self.alpha)
+        pe = FpPal(self.y-16, self.cb-128, self.cr-128, self.alpha)
 
         rgba_v = np.matmul(get_matrix(matrix, True), np.asarray([[*pe]]).T)
         return RGBA(*clip_rgba(np.round(rgba_v)).reshape(4,))
@@ -130,19 +122,17 @@ class PaletteEntry:
 
 
     @classmethod
-    def from_rgba(cls, rgba: Union[RGBA, tuple[int]], /, *, matrix: str = 'bt709',
-                  s_range: str = 'limited'):
+    def from_rgba(cls, rgba: Union[RGBA, tuple[int]], /, *, matrix: str = 'bt709'):
         """
         Construct a PaletteEntry from a RGBA value.
         :param rgba: rgba iterable
         :param matrix: BT ITU conversion to use.
-        :param s_range: YUV range.
         """
         mat = get_matrix(matrix, False)
         pe = np.round(np.matmul(mat, np.asarray(rgba).T)).T
-        pe = pe + np.asarray([0 if 'full' in s_range else 16, 128, 128, 0])
+        pe = pe + np.asarray([16, 128, 128, 0])
 
-        ret = cls(*clip_ycbcr(pe.astype(np.int32), s_range))
+        ret = cls(*clip_ycbcr(pe.astype(np.int32)))
         ret.swap_cbcr()
 
         return ret
@@ -237,14 +227,14 @@ class Palette:
         else:
             raise ValueError(f"Shifting outside 8bit range with {offset} (got {max(self.palette) + offset}, {min(self.palette) + offset}).")
 
-    def get_rgba_array(self, matrix: str = 'bt709', s_range: str = 'limited', keep_indexes: bool = False) -> npt.NDArray[np.uint8]:
+    def get_rgba_array(self, matrix: str = 'bt709', keep_indexes: bool = False) -> npt.NDArray[np.uint8]:
         if not keep_indexes:
-            vfunc = np.vectorize(lambda x: x.to_rgba(matrix, s_range=s_range))
+            vfunc = np.vectorize(lambda x: x.to_rgba(matrix))
             return np.array(vfunc(self), dtype=np.uint8).transpose()
         else:
             pal = np.zeros((max(self.palette)+1, 4), dtype=np.uint8)
             for peid, ycrcba in self.palette.items():
-                pal[peid, :] = ycrcba.to_rgba(matrix, s_range=s_range)
+                pal[peid, :] = ycrcba.to_rgba(matrix)
             return pal
 
     def get_ycbcr(self, /, *, _no_key = False) -> npt.NDArray[np.uint8]:
@@ -286,17 +276,15 @@ class Palette:
 
     @classmethod
     def from_rgba(cls,
-                  rgba: Union[list, bytes, bytearray,
-                              dict[int, Union[npt.NDArray[np.uint8], tuple]]], /, *,
-                  prev_pal: Optional['Palette'] = None, matrix: str = 'bt709',
-                  s_range: str= 'limited', **kwargs) -> 'Palette':
+        rgba: Union[list, bytes, bytearray, dict[int, Union[npt.NDArray[np.uint8], tuple]]],
+        prev_pal: Optional['Palette'] = None, matrix: str = 'bt709', **kwargs
+    ) -> 'Palette':
         """
         Construct a Palette from a mapping or an iterable, like Pillow ImagePalette.
         :param rgba: Iterable list or dictionary with RGBA entries.
         :param prev_pal: Previous palette, used as a base to build the new one.
           This is handy to deal when rgba defines just updated entries.
         :param matrix: BT ITU conversion
-        :param s_range: YUV range
         :param kwargs: Additional parameters for palette version and number.
         :return: Palette object
         """
@@ -304,11 +292,11 @@ class Palette:
 
         new_pal = cls({} if not prev_pal else prev_pal.palette)
 
-        offset = np.asarray([0 if 'full' in s_range else 16, 128, 128, 0]).T
+        offset = np.asarray([16, 128, 128, 0]).T
 
         if type(rgba) is dict:
             for k, v in rgba.items():
-                tmp = clip_ycbcr(np.matmul(cmat, np.asarray(v).T) + offset, s_range)
+                tmp = clip_ycbcr(np.matmul(cmat, np.asarray(v).T) + offset)
                 new_pal[k] = PaletteEntry(*tmp)
                 new_pal[k].swap_cbcr()
 
@@ -316,22 +304,20 @@ class Palette:
             assert len(rgba) % 5 == 0,"Expected [Id1 Y Cb Cr A Id2 Y ...] structure."
             for k in range(0, len(rgba), 5):
                 tmp = np.matmul(cmat, np.asarray(rgba[k+1:k+5]).T) + offset
-                new_pal[rgba[k]] = PaletteEntry(*clip_ycbcr(tmp, s_range))
+                new_pal[rgba[k]] = PaletteEntry(*clip_ycbcr(tmp))
                 new_pal[rgba[k]].swap_cbcr()
         else:
             raise NotImplementedError("Unknown rgba variable type.")
         return new_pal
 
 
-    def to_rgb(self, matrix: str = 'bt709',
-               s_range: str = 'limited') -> dict[int, tuple[int]]:
+    def to_rgb(self, matrix: str = 'bt709') -> dict[int, tuple[int]]:
         """
         Construct a Palette from a mapping or an iterable, like Pillow ImagePalette.
         :param rgba: Iterable list or dictionary with RGBA entries.
         :param prev_pal: Previous palette, used as a base to build the new one.
           This is handy to deal when rgba defines just updated entries.
         :param matrix: BT ITU conversion
-        :param s_range: YUV range
         :param kwargs: Additional parameters for palette version and number.
         :return: Palette object
         """
@@ -339,26 +325,24 @@ class Palette:
 
         ycbcr = self.get_ycbcr(_no_key=True).astype(float).reshape((-1, 3)).T
         ycbcr[[1,2],:] -= 128
-        if 'full' not in s_range: ycbcr[[0],:] -= 16
+        ycbcr[[0],:] -= 16
         t = np.round(np.dot(cmat, ycbcr)).T
         t = clip_rgba(t)
 
         return dict(map(lambda it: (it[0], tuple(it[1])), zip(self.palette.keys(), t)))
 
 
-    def to_rgba(self, matrix: str = 'bt709',
-                s_range: str = 'limited') -> dict[int, tuple[int]]:
+    def to_rgba(self, matrix: str = 'bt709') -> dict[int, tuple[int]]:
         """
         Export a palette to a RGBA mapping
         :param matrix: BT ITU conversion
-        :param s_range: YUV range
         :return: Mapping with, as key the palette entry ID and value: RGBA tuple.
         """
         cmat = get_matrix(matrix, True)
 
         ycbcra = self.get_ycbcra(_no_key=True).astype(float).reshape((-1, 4)).T
         ycbcra[[1,2],:] -= 128
-        if 'full' not in s_range: ycbcra[[0],:] -= 16
+        ycbcra[[0],:] -= 16
         t = np.round(np.dot(cmat, ycbcra)).T
         t = clip_rgba(t)
 
