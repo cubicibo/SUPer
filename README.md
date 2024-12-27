@@ -64,14 +64,16 @@ Here are some additional informations on selected options, especially those that
 ### Image quantizers
 SUPer ships with various internal image quantizers and supports two external ones. The different methods (values for `--qmode`) are enumerated here:
 
-0. **KD-Means**: Slow but high quality quantizer. Should only be used if *PILIQ* (3) is not available and quality is a must.
-1. **PIL**: Fast, medium quality. Excellent for low bitrates and files with solely dialogue and karaoke. Glows and gradients will be hideous.
-2. **HexTree**: Fast, good quality. Suits nicely files with moderate typesetting effects (no heavy gradients or glows).
+0. **KD-Means**: Fair quality quantizer. Should only be used if quality is a must and *PILIQ* (3) is not available or *HexTree* (2) is forced on the sub-optimal fallback. Handles poorly crossfades.
+1. **Pillow**: Fast, medium quality. Excellent for low bitrates and files with solely dialogue and karaoke. Glows and gradients will be hideous.
+2. **HexTree**: Fast, good quality. Suits nicely files with moderate typesetting effects (no heavy gradients + large glows).
 3. **PILIQ** (libimagequant / pngquant): High quality, acceptably fast. Recommended default, and it preserves glows and gradients.
     - macOS users must install pngquant via brew, or specify the pngquant executable in config.ini
     - Linux and Windows[^1] users can specify either *libimagequant[.dll, .so]* or pngquant executable in config.ini.
 
-Higher quality quantizers (such as *KD-Means* or *PILIQ*) will generally affect (increase) the bitrate of the output stream.
+Higher quality quantizers will generally use more bandwidth: (highest quality + bandwidth) *PILIQ > HexTree >= KD-Means >> Pillow* (lowest).
+
+SUPer is properly installed if every item listed by `python3 supercli.py --capabilities` displays a 'C'. Else, only sub-optimal fallbacks are availables ("Python"). In sub-optimal environments (no C extensions, no pngquant/imagequant), this rule changes to *KD-Means > HexTree > Pillow*.
 
 [^1]: On Windows, compiled binaries ship with libimagequant.dll and the PILIQ library embeds a copy for users of the package in a (virtual) environment.
 

@@ -357,10 +357,10 @@ class BDVideo:
             expected = [cls.FPS.FILM_NTSC, cls.FPS.FILM, cls.FPS.PALi, cls.FPS.NTSCi]
             valid &= fps in expected
         elif _format == cls.VideoFormat.SD576_43:
-            expected = [cls.FPS.PALp, cls.FPS.PALi]
+            expected = [cls.FPS.PALp]
             valid &= fps in expected
         elif _format == cls.VideoFormat.SD480_43:
-            expected = [cls.FPS.NTSCp, cls.FPS.NTSCi]
+            expected = [cls.FPS.NTSCp]
             valid &= fps in expected
         return valid, list(map(lambda x: round((float if x.value.denominator == 1001 else int)(x), 3), expected))
 

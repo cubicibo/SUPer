@@ -294,10 +294,14 @@ class BDNXMLEvent:
         should_warn = False
         if self._custom:
             self._img = Image.new('RGBA', (self._width, self._height), (0,0,0,0))
+            boxes = []
             for gfx in self._gfx:
                 gfxp = Image.open(os.path.join(self._bf, gfx.text))
                 should_warn = gfxp.mode == 'P'
-                self._img.paste(gfxp.convert('RGBA'), (int(gfx.get('X')) - self.x, int(gfx.get('Y')) - self.y))
+                box = Box(int(gfx.get('Y')), gfxp.height, int(gfx.get('X')), gfxp.width)
+                self._img.paste(gfxp.convert('RGBA'), (box.x - self.x, box.y - self.y))
+                boxes.append(box)
+            assert Box.intersect(*boxes).area == 0, f"Overlapping <Graphic>s at {self._intc}"
         else:
             gfximg = Image.open(self.gfxfile)
             should_warn = gfximg.mode == 'P'
@@ -458,11 +462,11 @@ class BDNXML:
         valid_fmt, valid_fps = BDVideo.check_format_fps(self._format, self.fps)
         str_fps = int(self._fps) if float(self._fps).is_integer() else round(float(self._fps), 3)
         if not valid_fmt:
-            logger.warning(f"Non standard VideoFormat-FPS ({self._format.value[1]}@{str_fps}) combination for a primary video stream!!")
-            logger.warning(f"Expected one of these framerate: {valid_fps}")
+            logger.error(f"Non standard VideoFormat-FPS combination for Blu-ray ({self._format.value[1]}@{str_fps})!")
+            logger.error(f"Expected one of these framerates: {valid_fps} for format {self._format.value[1]}.")
         elif self._format == BDVideo.VideoFormat.HD1080:
             if self._fps > BDVideo.FPS.NTSCp:
-                logger.info(f"UHD BD VideoFormat-FPS detected: 1080p@{str_fps} only exists with a HEVC video stream.")
+                logger.warning(f"UHD BD VideoFormat-FPS combination: 1080p@{str_fps} only exists with a HEVC video stream.")
 
     @property
     def fps(self) -> BDVideo.FPS:

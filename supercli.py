@@ -70,7 +70,7 @@ if __name__ == '__main__':
             super().__init__(option_strings, dest, **kwargs)
 
         def __call__(self, parser, namespace, values = None, option_string=None):
-            from brule import LayoutEngine, Brule, HexTree
+            from brule import LayoutEngine, Brule, HexTree, KDMeans
             f_strcap = lambda caps: ', '.join(caps)
 
             print(f"LayoutEngine: {f_strcap(LayoutEngine.get_capabilities())}")

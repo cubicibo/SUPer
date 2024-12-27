@@ -588,8 +588,6 @@ class EpochRenderer(mp.Process):
         elif Quantizer.Libs.KMEANS == self.kwargs['quantize_lib']:
             logger.debug(f"KD-Means quantizer capabilities: {', '.join(KDMeans.get_capabilities())}.")
 
-
-
         logger.debug(f"Bitmap encoder capabilities: {', '.join(Brule.get_capabilities())}.")
 
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
