@@ -276,10 +276,25 @@ class WindowsAnalyzer:
 
         self.filter_events(nodes, states, flags, absolutes, durs, pts_delta, allow_normal_case, allow_overlaps)
         cls = __class__
+        cls.fix_positions(nodes, flags)
         if allow_overlaps:
             cls.align_palette_updates(nodes, states, flags)
         cls.verify_palette_usage(nodes, states, flags, allow_overlaps)
         return states, flags, cboxes
+
+    def fix_positions(
+        nodes: list['DSNode'],
+        flags: list[int],
+    ) -> None:
+        running_pos = nodes[0].pos.copy()
+        for nk, (flag, node) in enumerate(zip(flags[1:], nodes[1:]), 1):
+            if flag == -1:
+                continue
+            for wid, is_new in enumerate(node.new_mask):
+                if is_new:
+                    running_pos[wid] = node.pos[wid]
+                else:
+                    node.pos[wid] = running_pos[wid]
 
     def align_palette_updates(
         nodes: list['DSNode'],
@@ -1056,8 +1071,8 @@ class WindowsAnalyzer:
                                 continue
                             has_two_objs += 1
 
-                        logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
                         c_pts = nodes[k-1].pts()
+                        logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
 
                         r = self._generate_acquisition_ds(k-1, k, pgobs_items, nodes[k-1], double_buffering,
                                                           has_two_objs > 1, ods_reg, c_pts, False, flags)
