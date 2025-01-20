@@ -813,7 +813,7 @@ class WindowsAnalyzer:
                         multiplier &= node.obj_carry[wid][j-i]
                     else:
                         multiplier = 0
-                    imgs_chain.append(Image.fromarray(multiplier*last_img, 'RGBA'))
+                    imgs_chain.append(Image.fromarray(multiplier*last_img, 'RGBA').crop(pgo.box.coords))
 
                 cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
                 # cparams = box_to_crop(pgo.box)
@@ -821,7 +821,9 @@ class WindowsAnalyzer:
                 #                                           cropped=True, **cparams))
                 clut_offset = 1 + (n_colors - 1 + bias)*(wid == 1 and has_two_objs)
                 wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors + (-1 if wid == 1 else 1)*bias, clut_offset, **self.kwargs)
-                wd_bitmap = wd_bitmap[oyl:oyl+node.slots[wid][0], oxl:oxl+node.slots[wid][1]]
+                window_bitmap = 0xFF*np.ones((self.windows[wid].dy, self.windows[wid].dx), np.uint8)
+                window_bitmap[pgo.box.slice] = wd_bitmap
+                wd_bitmap = window_bitmap[oyl:oyl+node.slots[wid][0], oxl:oxl+node.slots[wid][1]]
                 pals.append(wd_pal)
                 ods_data = PGraphics.encode_rle(wd_bitmap)
 

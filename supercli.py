@@ -129,7 +129,7 @@ if __name__ == '__main__':
         args.extra_acq = 0
 
     if args.max_kbps > 48000:
-        logger.warning("Max bitrate is beyond total BDAV limit.")
+        logger.warning("Max bitrate is beyond BDAV limit.")
     elif 10 < args.max_kbps < 500:
         logger.warning("Max bitrate is low. Buffer underflow errors will be spammed.")
     elif args.max_kbps < 10 and args.max_kbps != 0:
