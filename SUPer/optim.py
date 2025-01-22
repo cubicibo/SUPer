@@ -261,10 +261,13 @@ class Optimise:
         :return: bitmap, sequence of palette update to obtain the said input animation.
         """
 
+        if 1 == len(events):
+            img, clut = Preprocess.quantize(events[0], colors, single_bitmap=True, **kwargs)
+            return img.copy(), np.expand_dims(clut, 1).copy()
+
         sequences = np.zeros((len(events), *events[0].size[::-1], 4), np.uint8)
-        single_bitmap = len(events) == 1
         for ke, event in enumerate(events):
-            img, clut = Preprocess.quantize(event, colors, single_bitmap=single_bitmap, **kwargs)
+            img, clut = Preprocess.quantize(event, colors, single_bitmap=False, **kwargs)
             sequences[ke, :, :, :] = clut[img]
         sequences = np.moveaxis(sequences, 0, 2)
 
