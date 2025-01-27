@@ -463,7 +463,7 @@ class BDNXML:
         str_fps = int(self._fps) if float(self._fps).is_integer() else round(float(self._fps), 3)
         if not valid_fmt:
             logger.error(f"Non standard VideoFormat-FPS combination for Blu-ray ({self._format.value[1]}@{str_fps})!")
-            logger.error(f"Expected one of these framerates: {valid_fps} for format {self._format.value[1]}.")
+            logger.warning(f"Expected one of these framerates: {valid_fps} for format {'x'.join(map(str, self._format.value))}.")
         elif self._format == BDVideo.VideoFormat.HD1080:
             if self._fps > BDVideo.FPS.NTSCp:
                 logger.warning(f"UHD BD VideoFormat-FPS combination: 1080p@{str_fps} only exists with a HEVC video stream.")

@@ -493,6 +493,21 @@ class LogFacility:
         return None
 
     @classmethod
+    def exit_on_error(cls, logger: logging.Logger) -> None:
+        class ErrorExit:
+            def __init__(self, log_error_f) -> None:
+                self.f_log_error = log_error_f
+            def __call__(self, *args, **kwargs) -> None:
+                self.f_log_error(*args, **kwargs)
+                self.f_log_error("Error occured in strict mode. Terminating.")
+                import sys
+                sys.exit(1)
+
+        #isinstance on classes generated inside a function could be brittle?
+        if getattr(logger.error.__class__, "__name__", None) != 'ErrorExit':
+            logger.error = ErrorExit(logger.error)
+
+    @classmethod
     def set_logger_buffer(cls, logger: logging.Logger) -> None:
         hdl = BufferingHandler(float('inf'))
         hdl.setLevel(logging.INFO)
@@ -516,6 +531,8 @@ class LogFacility:
 
     @staticmethod
     def _extend_logger() -> None:
+        if getattr(logging.Logger, 'iinfo', None) is not None:
+            return
         INFO_OUT = logging.INFO + 5
         logging.addLevelName(INFO_OUT, "IINFO")
         def info_out(self, message, *args, **kws):

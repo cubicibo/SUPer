@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Copyright (C) 2024 cibo
+Copyright (C) 2023-2025 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 
 SUPer is free software: you can redistribute it and/or modify
@@ -43,7 +43,7 @@ if __name__ == '__main__':
     def exit_msg(msg: str, is_error: bool = True) -> NoReturn:
         if msg != '':
             if is_error:
-                logger.error(msg)
+                logger.critical(msg)
             else:
                 logger.info(msg)
         sys.exit(is_error)
@@ -104,7 +104,7 @@ if __name__ == '__main__':
     parser.add_argument("output", type=str)
     args = parser.parse_args()
 
-    print(f"SUPer version {LIB_VERSION} - (c) 2024 cubicibo")
+    print(f"SUPer version {LIB_VERSION} - (c) 2025 cubicibo")
     print("HDMV PGS encoder, with support from Masstock, Alllen and Emulgator.")
 
     #### Sanity checks and conversion
@@ -143,8 +143,8 @@ if __name__ == '__main__':
         exit_msg("Incorrect number of threads, aborting.")
 
     if args.prefer_normal and not args.allow_normal:
-        args.allow_normal = True
         logger.warning("--prefer-normal requires --allow-normal, forcefully enabling this flag.")
+        args.allow_normal = True
 
     if ext == 'pes' or args.withsup:
         if args.ahead:
@@ -154,7 +154,6 @@ if __name__ == '__main__':
         if not args.palette:
             logger.warning("PES output requires --palette, forcefully enabling this flag.")
             args.palette = True
-
     parameters = {'ini_opts': {'super_cfg': {}}}
 
     try:
@@ -174,6 +173,8 @@ if __name__ == '__main__':
         config.read(config_file)
         if (super_cfg := get_value_key(config, 'SUPer')) is not None:
             ini_opts['super_cfg'] |= dict(super_cfg)
+            if int(ini_opts['super_cfg'].pop('abort_on_error', 0)):
+                LogFacility.exit_on_error(logger)
 
         if args.qmode >= 3:
             exepath = None
@@ -187,7 +188,7 @@ if __name__ == '__main__':
             parameters['ini_opts'] |= ini_opts
     else:
         logger.error("config.ini not found!")
-    
+
     if args.layout >= 0:
         parameters['ini_opts']['super_cfg']['layout_mode'] = args.layout
     if parameters['ini_opts']['super_cfg'].get('layout_mode', None) is None:

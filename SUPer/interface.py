@@ -31,13 +31,13 @@ from enum import IntEnum
 from scenaristream import EsMuiStream
 from brule import LayoutEngine, Brule, HexTree, KDMeans
 
-from .utils import TC, LogFacility, Box, SSIMPW
+from .utils import LogFacility, Box, SSIMPW
 from .pgraphics import PGDecoder
 from .filestreams import BDNXML, BDNXMLEvent, remove_dupes
 from .segments import Epoch, DisplaySet
 from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext, debug_stats
-from .render2 import PaddingEngine, WindowsAnalyzer
+from .render2 import PaddingEngine, EpochEncoder
 
 class LayoutPreset(IntEnum):
     SAFE   = 0
@@ -351,7 +351,8 @@ class BDNRender:
         tc_inout, ep_timeline = [], []
 
         group_data = True
-        while group_data is not None:
+        healthy = True
+        while group_data is not None and healthy:
             time.sleep(0.05)
             for free_renderer in filter(lambda renderer: renderer.is_available(), renderers):
                 if (epoch_data := free_renderer.get()) is not None:
@@ -366,14 +367,16 @@ class BDNRender:
                         free_renderer.send((group_data, group_id))
                     else:
                         break
+            healthy = all(map(lambda encoder: encoder.is_healthy(), renderers))
             ####for
         ####while
 
         # Orchestrator is done distributing epochs, wait for everyone to finish
-        logger.info("Done distributing epochs, waiting for renderers to finish.")
+        if healthy:
+            logger.info("Done distributing epochs, waiting for renderers to finish.")
         time.sleep(0.2)
 
-        while any(busy_flags.values()):
+        while any(busy_flags.values()) and healthy:
             for free_renderer in filter(lambda renderer: busy_flags[renderer.iid] or renderer.is_available(), renderers):
                 if free_renderer.is_available() and (epoch_data := free_renderer.get()) is not None:
                     add_data(ep_timeline, epoch_data, self._report_log_hdl)
@@ -390,7 +393,8 @@ class BDNRender:
                     free_renderer.close()
             time.sleep(0.2)
 
-        logger.info("All jobs finished, cleaning-up.")
+        if healthy:
+            logger.info("All jobs finished, cleaning-up.")
         time.sleep(0.01)
         for renderer in renderers:
             try: renderer.terminate()
@@ -404,7 +408,10 @@ class BDNRender:
             try: renderer.join()
             except: ...
         self._workers.clear()
-
+        if not healthy:
+            logger.critical("One encoder process had an unrecoverable error, giving up.")
+            import sys
+            sys.exit(1)
         logger.debug("Unserializing workers data.")
         for eid, epoch in enumerate(ep_timeline):
             ep_timeline[eid] = Epoch.from_bytes(epoch)
@@ -413,7 +420,7 @@ class BDNRender:
 
     def optimise(self) -> None:
         bdn = self.prepare()
-        n_threads = n_threads_requested = self.kwargs.get('threads', 1)
+        n_threads = self.kwargs.get('threads', 1)
         if (n_threads_auto := isinstance(n_threads, str)):
             try:
                 import psutil
@@ -421,7 +428,6 @@ class BDNRender:
                 n_threads = max(1, mp.cpu_count() >> 1) #commonplace: logical = 2*physical cores
             else:
                 n_threads = psutil.cpu_count(logical=False)
-            n_threads_requested = n_threads
 
         if n_threads_auto:
             logger.info(f"Using {n_threads} thread(s).")
@@ -606,15 +612,18 @@ class EpochRenderer(mp.Process):
             for w_id, wd in enumerate(ectx.windows):
                 logger.debug(f"Window {w_id}: X={wd.x+ectx.box.x}, Y={wd.y+ectx.box.y}, W={wd.dx}, H={wd.dy}")
 
-        wds_analyzer = WindowsAnalyzer(ectx, self.bdn, pcs_id=pcs_id, **self.kwargs)
+        wds_analyzer = EpochEncoder(ectx, self.bdn, pcs_id=pcs_id, **self.kwargs)
         new_epoch, pcs_id = wds_analyzer.analyze()
-
         logger.debug(prefix + f" => optimised as {len(new_epoch)} display sets.")
         return new_epoch, pcs_id
 
     def is_available(self) -> bool:
         assert __class__.__threaded
-        return bool(self._available.value)
+        return self._available.value > 0
+
+    def is_healthy(self) -> bool:
+        assert __class__.__threaded
+        return self._available.value >= 0
 
     def send(self, data: Any):
         assert __class__.__threaded
@@ -644,7 +653,16 @@ class EpochRenderer(mp.Process):
                 break
             ectx, epoch_id = in_data
             logger.debug(f"WORKER {self.iid} on EPOCH {epoch_id}")
-            new_epoch, _ = self.convert2(ectx) #discard pcs_id
+            try:
+                new_epoch, _ = self.convert2(ectx) #discard pcs_id
+            except Exception as e:
+                tb = e.__traceback__
+                while (next_tb := tb.tb_next) is not None:
+                    tb = next_tb
+                prefix = f"W{self.iid} " if __class__.__threaded else ""
+                logger.critical(f"Encoder {prefix}died: {type(e).__name__}@{tb.tb_frame.f_code.co_name}::L{tb.tb_lineno}" + (f" - {e}." if len(e.args) else "."))
+                self._available.value = -1
+                break
             if self._buffering_logs:
                 self._q_tx.put((bytes(new_epoch), epoch_id, LogFacility.get_buffered_msgs(logger)))
             else:

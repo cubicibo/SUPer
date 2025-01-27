@@ -143,7 +143,7 @@ class PaddingEngine:
 ####
 
 #%%
-class WindowsAnalyzer:
+class EpochEncoder:
     def __init__(self, ectx: EpochContext, bdn: BDNXML, **kwargs):
         self.windows = ectx.windows
         self.events = ectx.events
@@ -310,7 +310,7 @@ class WindowsAnalyzer:
                 last_possible_dts = np.inf
                 current_dts = node.dts()
                 if f_ticks(current_dts) < first_possible_dts and first_possible_dts < f_ticks(node.pts()):
-                    for ckf, flag in enumerate(flags[ck+1:],ck+1):
+                    for ckf, flag in enumerate(flags[ck+1:], ck+1):
                         if flag >= 0:
                             last_possible_dts = f_ticks(nodes[ckf].dts())
                             break
