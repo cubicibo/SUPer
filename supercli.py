@@ -212,7 +212,7 @@ if __name__ == '__main__':
     }
     ts_start = time.monotonic()
     bdnr = BDNRender(args.input, parameters, args.output)
-    bdnr.optimise()
+    bdnr.encode_input()
     bdnr.write_output()
     exit_msg(f"Success. Duration: {timedelta(seconds=round(time.monotonic() - ts_start, 3))}", False)
 ####

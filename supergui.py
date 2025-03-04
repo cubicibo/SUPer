@@ -47,7 +47,7 @@ def from_bdnxml(queue: ...) -> None:
     ts_start = time.monotonic()
     logger.info(f"Loading input BDN: {bdnf}")
     sup_obj = BDNRender(bdnf, kwargs, supo)
-    sup_obj.optimise()
+    sup_obj.encode_input()
     sup_obj.write_output()
     logger.info(f"Finished in {timedelta(seconds=round(time.monotonic() - ts_start, 3))}, exiting...")
 ####
@@ -108,8 +108,9 @@ def wrapper_mp() -> None:
 
     do_super.enabled = False
     do_abort.enabled = True #and (1 == kwargs['threads'])
-    logger.info("Starting optimiser process.")
-    do_super.text = "Generating (check console)..."
+    logger.debug("Starting encoder process.")
+    do_super.text = "Encoding (check console)..."
+
     while True:
         try:
             do_super.queue.get_nowait()
@@ -177,7 +178,7 @@ def monitor_mp() -> None:
                     break
             abort(do_super.proc, False)
             do_super.proc = None
-            logger.info("Closed gracefully SUPer process.")
+            logger.info("Closed gracefully encoder process.")
             do_super.ts = time.time()
             do_reset = True
             do_abort.enabled = False
@@ -266,6 +267,7 @@ def init_extra_libs(CWD: Path, verbose: bool = True):
     return params
 
 if __name__ == '__main__':
+    is_win32 = sys.platform == 'win32'
     try:
         application_path = Path(sys.argv[0]).resolve().parent
     except:
@@ -283,16 +285,18 @@ if __name__ == '__main__':
 
     signal.signal(signal.SIGINT, terminate)
     signal.signal(signal.SIGTERM, terminate)
-    if sys.platform != 'win32':
-        signal.signal(signal.SIGQUIT, terminate)
-    else:
+    if is_win32:
         signal.signal(signal.SIGBREAK, terminate)
+    else:
+        signal.signal(signal.SIGQUIT, terminate)        
 
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
-    ico_paths = Path.cwd()
+    meipass = getattr(sys, '_MEIPASS', None)
+    ico_paths = Path(Path.cwd() if meipass is None else meipass)
     ico_paths = next(filter(lambda x: x.exists(), map(lambda fl: Path.joinpath(ico_paths, fl, 'icon.ico'), ['misc', 'lib', '.'])), None)
-    if ico_paths is not None:
-        app.tk.iconbitmap(str(ico_paths))
+    if ico_paths is not None and not (is_win32 and meipass is not None):
+        from PIL import Image
+        app.icon = Image.open(ico_paths)
 
     PushButton(app, command=get_bdnxml, text="Select bdn.xml file", grid=[0,pos_v:=pos_v+1],align='left', width=15)
     bdnname = Text(app, grid=[1,pos_v], align='left', size=10)
@@ -342,7 +346,7 @@ if __name__ == '__main__':
 
     prefer_normal_case = CheckBox(app, text="Prefer normal case object redefinition.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
     Hovertip(prefer_normal_case.tk, "Update only one composition out of the two, even when decoding time is sufficient to refresh both (default).\n"\
-                                    "It can reduce the bitrate, but the palette can no longer be shared across composition objects.")
+                                    "It can reduce the bitrate, but the palette is not shared across composition objects whenever it occurs.")
 
     allow_overlaps = CheckBox(app, text="Allow palette update buffering.", grid=[0,pos_v:=pos_v+1,2,1], align='left')
     Hovertip(allow_overlaps.tk, "Buffer palette updates whenever possible to drop fewer events.\n"\

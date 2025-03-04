@@ -266,17 +266,17 @@ class BDNRender:
     #####find_all
 
     def _convert_single(self, bdn: BDNXML) -> None:
-        EpochRenderer.set_mt(False)
-        renderer = EpochRenderer(bdn, self.kwargs, self.outfile)
-        renderer.setup_env()
+        EpochWorker.set_mt(False)
+        worker = EpochWorker(bdn, self.kwargs, self.outfile)
+        worker.setup_env()
 
         pcs_id = 0
         logger.debug("Finding all epochs and their screen layout (this can take a while)...")
         epochs_ctx = self.find_all_layouts(bdn)
-        logger.info(f"Identified {len(epochs_ctx)} epochs to render.")
+        logger.info(f"Identified {len(epochs_ctx)} epochs to encode.")
 
         for ectx in epochs_ctx:
-            epoch, pcs_id = renderer.convert2(ectx, pcs_id)
+            epoch, pcs_id = worker.convert2(ectx, pcs_id)
             self._epochs.append(epoch)
     ####
 
@@ -314,8 +314,8 @@ class BDNRender:
 
     def _convert_mt(self, bdn: BDNXML) -> None:
         import time
-        EpochRenderer.set_mt(True)
-        EpochRenderer.reset_module()
+        EpochWorker.set_mt(True)
+        EpochWorker.reset_module()
         self._setup_mt_main_logging()
 
         logger.debug("Finding all epochs and their screen layout (this can take a while)...")
@@ -324,16 +324,16 @@ class BDNRender:
 
         as_deamon = self.kwargs.get('daemonize', True)
         n_threads = min(self.kwargs.get('threads', 2), len(epochs_ctx))
-        renderers = [EpochRenderer(bdn, self.kwargs, self.outfile, as_deamon) for _ in range(n_threads)]
+        workers = [EpochWorker(bdn, self.kwargs, self.outfile, as_deamon) for _ in range(n_threads)]
 
-        self._workers = renderers
+        self._workers = workers
         self._setup_mt_env()
 
         logger.info("Starting workers...")
-        for renderer in renderers:
-            renderer.start()
+        for worker in workers:
+            worker.start()
 
-        while not all(map(lambda renderer: renderer.is_available(), renderers)):
+        while not all(map(lambda worker: worker.is_available(), workers)):
             time.sleep(0.2)
 
         def add_data(ep_timeline: list[bytes], epoch_data: tuple[bytes, int], hdl = None) -> None:
@@ -346,7 +346,7 @@ class BDNRender:
         ###
 
         #Orchestrator starts here
-        busy_flags = {renderer.iid: False for renderer in renderers}
+        busy_flags = {worker.iid: False for worker in workers}
         g_epochs = enumerate(chain(epochs_ctx, (None,)))
         tc_inout, ep_timeline = [], []
 
@@ -354,58 +354,58 @@ class BDNRender:
         healthy = True
         while group_data is not None and healthy:
             time.sleep(0.05)
-            for free_renderer in filter(lambda renderer: renderer.is_available(), renderers):
-                if (epoch_data := free_renderer.get()) is not None:
+            for free_worker in filter(lambda worker: worker.is_available(), workers):
+                if (epoch_data := free_worker.get()) is not None:
                     add_data(ep_timeline, epoch_data, self._report_log_hdl)
-                    busy_flags[free_renderer.iid] = False
-                if busy_flags[free_renderer.iid] is False:
+                    busy_flags[free_worker.iid] = False
+                if busy_flags[free_worker.iid] is False:
                     group_id, group_data = next(g_epochs)
                     if group_data is not None:
                         ep_timeline.append(None)
                         tc_inout.append((group_data.events[0].tc_in, group_data.events[-1].tc_out))
-                        busy_flags[free_renderer.iid] = True
-                        free_renderer.send((group_data, group_id))
+                        busy_flags[free_worker.iid] = True
+                        free_worker.send((group_data, group_id))
                     else:
                         break
-            healthy = all(map(lambda encoder: encoder.is_healthy(), renderers))
+            healthy = all(map(lambda worker: worker.is_healthy(), workers))
             ####for
         ####while
 
         # Orchestrator is done distributing epochs, wait for everyone to finish
         if healthy:
-            logger.info("Done distributing epochs, waiting for renderers to finish.")
+            logger.info("Done distributing epochs, waiting for all workers to finish.")
         time.sleep(0.2)
 
         while any(busy_flags.values()) and healthy:
-            for free_renderer in filter(lambda renderer: busy_flags[renderer.iid] or renderer.is_available(), renderers):
-                if free_renderer.is_available() and (epoch_data := free_renderer.get()) is not None:
+            for free_worker in filter(lambda worker: busy_flags[worker.iid] or worker.is_available(), workers):
+                if free_worker.is_available() and (epoch_data := free_worker.get()) is not None:
                     add_data(ep_timeline, epoch_data, self._report_log_hdl)
-                    busy_flags[free_renderer.iid] = False
-                if not busy_flags[free_renderer.iid] or not free_renderer.is_alive():
-                    if free_renderer.is_alive():
-                        free_renderer.send(None)
+                    busy_flags[free_worker.iid] = False
+                if not busy_flags[free_worker.iid] or not free_worker.is_alive():
+                    if free_worker.is_alive():
+                        free_worker.send(None)
                         time.sleep(0.1)
                     else:
-                        busy_flags[free_renderer.iid] = False
-                    logger.info(f"Worker {free_renderer.iid} closed.")
-                    free_renderer.terminate()
-                    free_renderer.join(0.2)
-                    free_renderer.close()
+                        busy_flags[free_worker.iid] = False
+                    logger.info(f"Worker {free_worker.iid} closed.")
+                    free_worker.terminate()
+                    free_worker.join(0.2)
+                    free_worker.close()
             time.sleep(0.2)
 
         if healthy:
             logger.info("All jobs finished, cleaning-up.")
         time.sleep(0.01)
-        for renderer in renderers:
-            try: renderer.terminate()
+        for worker in workers:
+            try: worker.terminate()
             except: ...
         time.sleep(0.05)
-        for renderer in renderers:
-            try: renderer.kill()
+        for worker in workers:
+            try: worker.kill()
             except: ...
         time.sleep(0.05)
-        for renderer in renderers:
-            try: renderer.join()
+        for worker in workers:
+            try: worker.join()
             except: ...
         self._workers.clear()
         if not healthy:
@@ -418,7 +418,7 @@ class BDNRender:
         self._epochs = ep_timeline
     ####
 
-    def optimise(self) -> None:
+    def encode_input(self) -> None:
         bdn = self.prepare()
         n_threads = self.kwargs.get('threads', 1)
         if (n_threads_auto := isinstance(n_threads, str)):
@@ -533,7 +533,7 @@ class BDNRender:
             raise RuntimeError("No data to write.")
 ####
 
-class EpochRenderer(mp.Process):
+class EpochWorker(mp.Process):
     __threaded = True
     _instance_cnt = 0
     def __init__(self, bdn: BDNXML, kwargs: dict[str, Any], outfile: str, daemonize: bool = True) -> None:
@@ -612,9 +612,9 @@ class EpochRenderer(mp.Process):
             for w_id, wd in enumerate(ectx.windows):
                 logger.debug(f"Window {w_id}: X={wd.x+ectx.box.x}, Y={wd.y+ectx.box.y}, W={wd.dx}, H={wd.dy}")
 
-        wds_analyzer = EpochEncoder(ectx, self.bdn, pcs_id=pcs_id, **self.kwargs)
-        new_epoch, pcs_id = wds_analyzer.analyze()
-        logger.debug(prefix + f" => optimised as {len(new_epoch)} display sets.")
+        epoch_data = EpochEncoder(ectx, self.bdn, pcs_id=pcs_id, **self.kwargs)
+        new_epoch, pcs_id = epoch_data.encode()
+        logger.debug(prefix + f" => encoded as {len(new_epoch)} display sets.")
         return new_epoch, pcs_id
 
     def is_available(self) -> bool:
