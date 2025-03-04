@@ -169,7 +169,7 @@ class EpochEncoder:
             return work_plane
         return None
 
-    def analyze(self):
+    def encode(self):
         ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
 
         #Adjust slightly SSIM threshold depending of res

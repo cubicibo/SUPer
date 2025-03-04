@@ -88,7 +88,7 @@ class Quantizer:
         ht_info = '(good, very fast)' if 'C' in HexTree.get_capabilities() else '(medium, avg)'
         cls._opts[cls.Libs.HEXTREE] = ("HexTree", ht_info)
         cls._opts[cls.Libs.PIL_KM] = ('Pillow', '(average, turbo)')
-        kdm_info = '(good, fast)' if 'C' in KDMeans.get_capabilities() else '(good, slow)'
+        kdm_info = '(medium, fast)' if 'C' in KDMeans.get_capabilities() else '(medium, slow)'
         cls._opts[cls.Libs.KMEANS] = ('KD-Means', kdm_info)
 
     @classmethod
