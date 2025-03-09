@@ -441,6 +441,12 @@ class BDNRender:
             logger.debug("Fixing PCS composition number.")
             self.fix_composition_id(True)
 
+        if (period := self.kwargs.get('refresh_period', 0)) >= 1:
+            new_epochs = []
+            for epoch in self._epochs:
+                new_epochs.append(EpochEncoder.add_refresh_in(epoch, period))
+            self._epochs = new_epochs
+
         self.test_output(bdn)
     ####
 

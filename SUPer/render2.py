@@ -209,6 +209,40 @@ class EpochEncoder:
         r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
         return self._convert(r_states, pgobjs, r_durs, r_flags, r_nodes)
 
+    @staticmethod
+    def add_refresh_in(epoch: Epoch, refresh_period: int):
+        """
+        Add acquisition points at the specified refresh_period interval.
+
+        Enforce refresh_period to be integer seconds to not worry about
+        PTS frame grid alignments.
+        """
+        assert isinstance(refresh_period, int), f"refresh_period must be an integer, got {type(refresh_period)}."
+        assert refresh_period >= 1
+        new_epoch = []
+        refresh_period = int(PGDecoder.FREQ * refresh_period)
+
+        for ds, ds_next in zip(epoch, epoch[1:]):
+            #take ds, but append refreshes only if it is not a normal case
+            new_epoch.append(ds)
+            if ds.pcs.composition_state == PCS.CompositionState.NORMAL:
+                continue
+
+            delay = ((ds_next.pcs.tpts - ds.pcs.tpts) & ((1 << 31) - 1))
+            num_refresh = int(delay//(2*refresh_period))
+            for _ in range(num_refresh):
+                #take last, add refresh period
+                bds = DisplaySet.from_bytes(bytes(new_epoch[-1]))
+                #we could be copying the Epoch Start, downgrade it to an acquisition
+                bds.pcs.composition_state = PCS.CompositionState.ACQUISITION
+                for seg in bds:
+                    seg.tpts += refresh_period
+                    seg.tdts += refresh_period
+                new_epoch.append(bds)
+        #copy closing DS
+        new_epoch.append(epoch[-1])
+        return Epoch(new_epoch)
+
     def shape_stream(self,
          durs: list[int],
          nodes: list['DSNode'],
