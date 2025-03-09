@@ -33,7 +33,7 @@ from brule import LayoutEngine, Brule, HexTree, KDMeans
 
 from .utils import LogFacility, Box, SSIMPW
 from .pgraphics import PGDecoder
-from .filestreams import BDNXML, BDNXMLEvent, remove_dupes
+from .filestreams import BDNXML, BDNXMLEvent, remove_dupes, add_periodic_refreshes
 from .segments import Epoch, DisplaySet
 from .optim import Quantizer
 from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext, debug_stats
@@ -605,6 +605,8 @@ class EpochWorker(mp.Process):
 
     def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
         ectx.events = remove_dupes(ectx.events)
+        if (redraw_period := self.kwargs.get('redraw_period', 0)) >= 1:
+            ectx.events = add_periodic_refreshes(ectx.events, self.bdn.fps, redraw_period)
         prefix = f"W{self.iid}: " if __class__.__threaded else ""
         logger.info(prefix + f"Encoding epoch {ectx.events[0].tc_in}->{ectx.events[-1].tc_out} with {len(ectx.events)} event(s), {len(ectx.windows)} window(s).")
 

@@ -204,6 +204,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                 if wd.h_pos + wd.width > epoch[0].pcs.width or wd.v_pos + wd.height > epoch[0].pcs.height:
                     logger.error(f"Window {wd.window_id} out of screen in epoch starting at {to_tc(epoch[0].pcs.pts)}.")
 
+        last_ds = []
         for kd, ds in enumerate(epoch.ds):
             compliant &= test_diplayset(ds)
             current_pts = ds.pcs.pts
@@ -213,9 +214,26 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
             else:
                 logger.warning(f"Two display sets at {to_tc(current_pts)}.")
 
+            is_dupe = False
+            if len(ds) == len(last_ds) and ds.pcs.composition_n == prev_pcs_id:
+                # Make copies and wipe fields that could change (timestamps, composition state)
+
+                ds1 = DisplaySet.from_bytes(bytes(ds))
+                ds2 = DisplaySet.from_bytes(bytes(last_ds))
+                for seg1, seg2 in zip(ds1, ds2):
+                    seg1.tpts = seg1.tdts = 0
+                    seg2.tpts = seg2.tdts = 0
+                # current DS must be an ACQ
+                # past DS is either an ACQ or ES
+                is_dupe = ds1.pcs.composition_state == PCS.CompositionState.ACQUISITION
+                is_dupe = is_dupe and ds2.pcs.composition_state in [PCS.CompositionState.ACQUISITION, PCS.CompositionState.EPOCH_START]
+                ds2.pcs.composition_state = ds1.pcs.composition_state = PCS.CompositionState.ACQUISITION
+                is_dupe = is_dupe and bytes(ds1) == bytes(ds2)
+            last_ds = ds
+
             for ks, seg in enumerate(ds.segments):
                 if isinstance(seg, PCS):
-                    if seg.composition_n != (prev_pcs_id + 1) & 0xFFFF and seg.composition_state != PCS.CompositionState.EPOCH_START:
+                    if not is_dupe and seg.composition_n != (prev_pcs_id + 1) & 0xFFFF and seg.composition_state != PCS.CompositionState.EPOCH_START:
                         logger.warning(f"Displayset does not increment composition number normally at {to_tc(current_pts)}.")
                     prev_pcs_id = seg.composition_n
                     if int(seg.composition_state) != 0:
@@ -239,7 +257,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                                 compliant = False
 
                 elif isinstance(seg, PDS):
-                    if (pds_vn[seg.p_id] + 1) & 0xFF != seg.p_vn:
+                    if (pds_vn[seg.p_id] + 1) & 0xFF != seg.p_vn and not is_dupe:
                         logger.warning(f"Palette version not incremented by one, may be discarded by decoder. Palette {seg.p_id} at DTS {to_tc(seg.pts)}.")
                     pds_vn[seg.p_id] = seg.p_vn
                     new_pal = seg.to_palette()

@@ -193,7 +193,7 @@ class BDNXMLEvent:
     graphics (files) shown at once.
     """
     can_warn_palettized = False
-    def __init__(self, te: dict[str, int], ie: dict[str, Any], others: dict[str, Any]) -> None:
+    def __init__(self, te: dict[str, int], ie: dict[str, Any], others: dict[str, Any] = {}) -> None:
         """
         Parameters
         ----------
@@ -238,8 +238,14 @@ class BDNXMLEvent:
         self._width = box.dx
         self._height = box.dy
 
+        # backup parameters
+        self._te = te
+        self._ie = ie
         #Apparently there's "Crop", "Position" and "Color" but god knows how these are even structured and
         # no commonly used program appears to generate any of those tags.
+
+    def copy(self) -> 'BDNXMLEvent':
+        return __class__(self._te, self._ie)
 
     @property
     def width(self) -> int:
@@ -281,6 +287,15 @@ class BDNXMLEvent:
     @property
     def tc_out(self) -> str:
         return self._outtc
+
+    def set_tc_in(self, tc_in: Union[str, TC]) -> None:
+        if isinstance(tc_in, str):
+            self._intc = TC(self._intc.fractional_fps, tc_in, force_non_drop_frame=True)
+        else:
+            self._intc = tc_in
+        assert self._intc.drop_frame == self._outtc.drop_frame
+        assert self._outtc > self._intc
+
 
     def set_tc_out(self, tc_out: Union[str, TC]) -> None:
         if isinstance(tc_out, str):
@@ -330,6 +345,40 @@ def remove_dupes(events: list[BDNXMLEvent]) -> list[BDNXMLEvent]:
     assert output_events[0].tc_in == events[0].tc_in and output_events[-1].tc_out == events[-1].tc_out
     logger.debug(f"Removed {len(events) - len(output_events)} duplicate event(s).")
     return output_events
+####
+
+def add_periodic_refreshes(events: list[BDNXMLEvent], fps: float, period: float) -> list[BDNXMLEvent]:
+    if period < 1:
+        return
+
+    frame_period = int(round(period*fps))
+
+    new_events = []
+    for event in events:
+        frames_duration = (event.tc_out - event.tc_in).frames
+        new_events.append(event)
+
+        count = (frames_duration//frame_period - 1)
+        if count >= 1:
+            original_tc_in = event.tc_in
+            final_tc_out = event.tc_out
+            start_idx = len(new_events)
+            prev_tc_out = event.tc_in + frame_period
+            event.set_tc_out(prev_tc_out)
+            for _ in range(count):
+                event = event.copy()
+                event.set_tc_in(prev_tc_out)
+                prev_tc_out = prev_tc_out + frame_period
+                event.set_tc_out(prev_tc_out)
+                new_events.append(event)
+            event.set_tc_out(final_tc_out)
+            assert len(new_events) == start_idx + count
+            # validate
+            for k in range(start_idx, len(new_events)):
+                assert new_events[k - 1].tc_out == new_events[k].tc_in
+        ####
+    ####
+    return new_events
 ####
 
 #%%
@@ -408,7 +457,9 @@ class BDNXML:
                 logger.warning(f"Ignored zero-duration graphic: '{ev.gfxfile.split(os.path.sep)[-1]}' @ '{ev.tc_in}'.")
         # for event
         self.events.sort(key=lambda e: e.tc_in.frames)
+        self.assert_event_list()
 
+    def assert_event_list(self) -> None:
         for k, ev in enumerate(self.events):
             assert ev.tc_in < ev.tc_out, f"Illegal event duration at InTC={ev.tc_in}."
             assert 0 == k or self.events[k-1].tc_out <= ev.tc_in, f"Two events overlap in time around InTC={ev.tc_in}."
