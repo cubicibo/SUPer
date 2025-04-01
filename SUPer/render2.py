@@ -1321,7 +1321,8 @@ class WindowAnalyzer:
                 else:
                     break
 
-            has_content = np.any(rgba)
+            #only look at alpha as RGB channels may contain anything
+            has_content = np.any(rgba[:, :, 3])
             if has_content or len(mask):
                 if not len(mask):
                     f_start = event_cnt
