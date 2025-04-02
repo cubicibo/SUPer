@@ -276,25 +276,10 @@ class EpochEncoder:
 
         self.filter_events(nodes, states, flags, absolutes, durs, pts_delta, allow_normal_case, allow_overlaps)
         cls = __class__
-        cls.fix_positions(nodes, flags)
         if allow_overlaps:
             cls.align_palette_updates(nodes, states, flags)
         cls.verify_palette_usage(nodes, states, flags, allow_overlaps)
         return states, flags, cboxes
-
-    def fix_positions(
-        nodes: list['DSNode'],
-        flags: list[int],
-    ) -> None:
-        running_pos = nodes[0].pos.copy()
-        for nk, (flag, node) in enumerate(zip(flags[1:], nodes[1:]), 1):
-            if flag == -1:
-                continue
-            for wid, is_new in enumerate(node.new_mask):
-                if is_new:
-                    running_pos[wid] = node.pos[wid]
-                else:
-                    node.pos[wid] = running_pos[wid]
 
     def align_palette_updates(
         nodes: list['DSNode'],
@@ -1015,8 +1000,19 @@ class EpochEncoder:
                         normal_case_refresh = nodes[z].new_mask
                         r = self._generate_acquisition_ds(z, k, get_obj(z, pgobjs).items(), nodes[z], double_buffering,
                                                           has_two_objs, ods_reg, c_pts, normal_case_refresh, flags)
-                        cobjs, n_pals, o_ods, new_pal = r
+                        new_cobjs, n_pals, o_ods, new_pal = r
+
+                        # this is a fix, the positions of the node could be already set up for the next acquisition (to maximize usable area)
+                        # hence we just carry the unchanged composition object (the second composition in the list is the unchanged object)
+                        if len(new_cobjs) > 1:
+                            cobj_to_carry = next(filter(lambda c: c.o_id == new_cobjs[1].o_id, cobjs), None)
+                            if cobj_to_carry is None:
+                                logger.warning(f"Cannot carry over unchanged composition object for NC @ PTS={self.events[z].tc_in}={c_pts:.03f}.")
+                            else:
+                                new_cobjs[1] = cobj_to_carry
+                        cobjs = new_cobjs
                         logger.debug(f"Normal Case: PTS={self.events[z].tc_in}={c_pts:.03f}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
+
                         pal |= new_pal
                         idxnc = nodes[z].new_mask.index(True)
                         for nz, new_p in enumerate(n_pals[idxnc], z):
