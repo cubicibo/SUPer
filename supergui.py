@@ -41,6 +41,9 @@ def from_bdnxml(queue: ...) -> None:
     bdnf = queue.get()
     supo = queue.get()
 
+    if int(kwargs.get('ini_opts', {}).get('super_cfg', {}).pop('abort_on_error', 0)):
+        LogFacility.exit_on_error(logger)
+
     ts_start = time.monotonic()
     logger.info(f"Loading input BDN: {bdnf}")
     sup_obj = BDNRender(bdnf, kwargs, supo)
