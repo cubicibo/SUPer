@@ -28,7 +28,7 @@ import numpy as np
 import cv2
 
 #%%
-from .utils import LogFacility, BDVideo, TC, Box, SSIMPW
+from .utils import LogFacility, BDVideo, TC, Box, SSIMPW, Pos
 from .segments import DisplaySet, PCS, WDS, PDS, ODS, ENDS, WindowDefinition, CObject, Epoch
 from .optim import Optimise
 from .pgraphics import PGraphics, PGDecoder, PGObjectBuffer, PaletteManager, ProspectiveObject
@@ -1246,6 +1246,7 @@ class WindowAnalyzer:
         self.overlap_threshold = overlap_threshold
         assert abs(ssim_offset) <= 1.0
         self.ssim_offset = ssim_offset
+        self.search_mv = True
 
     @staticmethod
     def get_grayscale(rgba: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -1253,7 +1254,63 @@ class WindowAnalyzer:
         img = np.round(0.2989*rgba[:,:,0] + 0.587*rgba[:,:,1] + 0.114*rgba[:,:,2])
         return (img.clip(0, 255) & (255*(rgba[:,:,3] > 0))).astype(np.uint8)
 
-    def compare(self, bitmap: Image.Image, current: Image.Image) -> tuple[float, float]:
+    def find_mvs(self, f_prev: Image.Image, f_current: Image.Image) -> ...:
+        # forward search
+        forward_likelihood, forward_mv = self.find_mv(f_prev, f_current)
+        backward_likelihood, backward_mv = self.find_mv(f_current, f_prev, True)
+
+        matched = forward_mv is not None and backward_mv is not None
+        if matched:
+            matched &= np.all(forward_mv == (-1)*backward_mv)
+
+        score = (forward_likelihood + backward_likelihood)/2 if matched else 0
+        return score, forward_mv
+
+
+    def find_mv(self, f_prev: Image.Image, f_current: Image.Image, backward=False) -> ...:
+        match_area = np.zeros((f_prev.height*3 - 2, f_prev.width*3 - 2), np.uint8)
+        bc = Pos(f_prev.width, f_prev.height)
+        match_area[bc.y:2*bc.y, bc.x:bc.x*2] = np.asarray(f_prev.convert('L'), np.uint8)
+
+        # grow the template mask
+        template = np.array(f_current.convert('LA'), np.uint8)
+        #template_mask = np.array(template[:, :, 1])
+        #template_mask[template_mask > 0] = 255
+        #template_mask = cv2.GaussianBlur(template_mask, (7, 7), 0)
+        #template_mask[template_mask > 0] = 255
+
+        #forw = (template_mask > 0)*template[:, :, 0]
+        #tret = np.stack((forw, template_mask), axis=2)
+        #print(tret.shape)
+        #Image.fromarray(tret, "LA").show()
+        #assert 0
+
+        res = cv2.matchTemplate(match_area, template[:, :, 0], cv2.TM_CCORR_NORMED, )#mask=np.uint8(template_mask > 0))
+        _, goodness, _, best_guess = cv2.minMaxLoc(res)
+        #goodness, _, best_guess, _ = cv2.minMaxLoc(res)
+        logger.debug(f"mva bw={int(backward)}, {goodness}, {best_guess}")
+        if goodness > 0.94:
+            return goodness, np.int32(best_guess) - np.array([bc.y, bc.x], np.int32)
+        if np.isnan(goodness):
+            return 1.0, np.asarray([0, 0], np.int32)
+        return 0, None
+
+    def aggregate_scores(self, mv, score, score_mv, overlap_perc) -> int:
+        if mv is not None:
+            norm_mv = (mv[0]**2) + (mv[1]**2)
+        else:
+            return 0
+
+        if norm_mv > 0 and overlap_perc > 0 and score_mv > 0.75:
+            return 0
+        if norm_mv == 0 or score > 0.99 or overlap_perc < 0.1:
+            return 1
+        logger.debug(f"bad cond {mv}, {score}, {score_mv}, {overlap_perc}")
+        if score_mv < 0.5:
+            return 0
+        return 0
+
+    def compare(self, bitmap: Image.Image, current: Image.Image) -> tuple[float, float, float]:
         """
         :param bitmap: (cropped or padded) aggregate of the previous bitmaps
         :param current: current bitmap under analysis
@@ -1292,13 +1349,13 @@ class WindowAnalyzer:
         else:
             cross_percentage = 1.0
             score = 1.0
-        return score, cross_percentage
+        return score, cross_percentage, overlap
 
     def analyze(self):
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
-        f_start = unseen = event_cnt = 0
-        pgo_yield = None
+        f_start = unseen = event_cnt = pf_has_content = 0
+        pgo_yield = prev_frame = None
         containers, mask = [], []
 
         while True:
@@ -1330,10 +1387,21 @@ class WindowAnalyzer:
                 if has_content:
                     event_container = Box.from_coords(*rgba_i.getbbox())
 
-                score, cross_percentage = self.compare(alpha_compo, rgba_i)
+                if self.search_mv:
+                    if has_content and pf_has_content:
+                        mv_score, mv = self.find_mvs(rgba_i, prev_frame)
+                    else:
+                        mv_score, mv = 1.0, np.asarray([0, 0], np.int32)
+                    prev_frame = rgba_i
+                    pf_has_content = has_content
+
+                score, cross_percentage, overlap_score = self.compare(alpha_compo, rgba_i)
+
+                score_modifier = self.aggregate_scores(mv, score, mv_score, overlap_score)
+
                 thr_score = min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333*(1.0-self.ssim_offset))
                 logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}")
-                if score >= thr_score:
+                if score * score_modifier >= thr_score:
                     alpha_compo.alpha_composite(rgba_i)
                     mask.append(has_content)
                     containers.append(event_container)
