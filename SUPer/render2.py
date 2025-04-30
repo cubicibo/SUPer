@@ -481,7 +481,7 @@ class EpochEncoder:
                     # ... We're now in big trouble: this event may be followed by normal cases that are now orphaned
                     # we need to find a new acquisition point, or drop all of these NCs until the next one.
                     ze = ze_max = k
-                    while (ze_max := ze_max+1) < len(states) and states[ze_max] != PCS.CompositionState.ACQUISITION: pass
+                    while (ze_max := ze_max+1) < len(states) and (states[ze_max] != PCS.CompositionState.ACQUISITION or flags[ze_max] < 0): pass
                     # The next acquisition is known to be valid
                     dts_next, pts_next = (nodes[ze_max].dts(), nodes[ze_max].pts()) if ze_max != len(states) else [np.inf]*2
                     assert ze_max == len(states) or (flags[ze_max] == 0 and states[ze_max] > 0)
@@ -521,7 +521,7 @@ class EpochEncoder:
                             if margin_left > desired_margin:
                                 dts_start, dts_stop = nodes[ze].dts(), nodes[ze].dts_end()
                                 nodes[ze].set_dts(max(nodes[ze].dts()-desired_margin, nodes[j].dts_end()))
-                                logger.debug(f"Buffered acquisition at {nodes[ze].tc_pts}={nodes[ze].pts()}, DTS={dts_start}->{dts_stop}, now: {nodes[ze].dts()}->{nodes[ze].dts_end()}")
+                                logger.debug(f"Buffered acquisition (A) at {nodes[ze].tc_pts}={nodes[ze].pts():.04f}, DTS={dts_start:.04f}->{dts_stop:.04f}, now: {nodes[ze].dts():.04f}->{nodes[ze].dts_end():.04f}")
                                 right = True
                         if left and right:
                             break
@@ -530,9 +530,15 @@ class EpochEncoder:
                             nodes[ze].set_dts(keep_dts)
 
                     if left and right:
+                        logger.info("oups")
                         states[ze] = PCS.CompositionState.ACQUISITION
                         flags[ze] = 0
                         max_z = ze
+                        candidate_dts = nodes[j].dts_end()+4/PGDecoder.FREQ
+                        if allow_overlaps and not nodes[ze].is_custom_dts() and (nodes[ze].dts() - candidate_dts)*PGDecoder.FREQ > 0:
+                            dts_start, dts_stop = nodes[ze].dts(), nodes[ze].dts_end()
+                            nodes[ze].set_dts(min(candidate_dts, nodes[ze].dts()))
+                            logger.debug(f"Buffered acquisition (B) at {nodes[ze].tc_pts}={nodes[ze].pts():.04f}, DTS={dts_start:.04f}->{dts_stop:.04f}, now: {nodes[ze].dts():.04f}->{nodes[ze].dts_end():.04f}")
                     else:
                         max_z = ze_max
                     buffered = 0
@@ -605,9 +611,10 @@ class EpochEncoder:
                 if any(nodes[l].new_mask) and flags[l] == 0 and allow_overlaps:
                     wd_occupied_count = sum(map(lambda x: x is not None, nodes[l].objects))
                     if wd_occupied_count == 2:
-                        logger.warning(f"Downgraded event at {nodes[l].tc_pts} to a palette update to perform a mendatory acquisition.")
+                        logger.warning(f"Partial screen refresh at {nodes[l].tc_pts} to decode the next acquisition.")
                     else:
-                        logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
+                        flags[l] = -1
+                        logger.warning(f"Discarded partial refresh at {nodes[l].tc_pts} to decode the next acquisition.")
                 states[l] = PCS.CompositionState.NORMAL
                 #Update object mask on which PUs are performed.
                 # evaluated at the end since the above could be a valid wipe
@@ -670,7 +677,7 @@ class EpochEncoder:
                     node.pal_vn = pm.get_palette_version(node.palette_id)
             else:
                 deb_hdlr = logger.hdebug
-            deb_hdlr(f"{state:02X} {flag:02}-{node.partial} DTS={node.dts():.04f}->{node.dts_end():.04f} PTS={node.pts():.04f}={node.tc_pts} OM={node.new_mask} {node.palette_id} {node.pal_vn} cdts={node.is_custom_dts()}")
+            deb_hdlr(f"{k} {state:02X} {flag:02}-{node.partial} DTS={node.dts():.04f}->{node.dts_end():.04f} PTS={node.pts():.04f}={node.tc_pts} OM={node.new_mask} {node.palette_id} {node.pal_vn} cdts={node.is_custom_dts()}")
         ####
     ####
 
