@@ -1317,7 +1317,7 @@ class WindowAnalyzer:
                 else:
                     break
 
-            #only look at alpha as RGB channels may contain anything
+            #only look at alpha as RGB channels may be random
             has_content = np.any(rgba[:, :, 3])
             if has_content or len(mask):
                 if not len(mask):
@@ -1327,10 +1327,17 @@ class WindowAnalyzer:
 
                 #If no content, bounding box keeps the last value
                 #TODO: maybe do NOT use the bbox when the object is masked!!
+                score_crop, cross_perc_crop = 1.0, 1.0
                 if has_content:
                     event_container = Box.from_coords(*rgba_i.getbbox())
 
-                score, cross_percentage = self.compare(alpha_compo, rgba_i)
+                if len(mask) and has_content:
+                    ccont = Box.union(event_container, Box.from_coords(*alpha_compo.getbbox()))
+                    score, cross_percentage = self.compare(alpha_compo.crop((ccont.x, ccont.y, ccont.x2, ccont.y2)),
+                                                                   rgba_i.crop((ccont.x, ccont.y, ccont.x2, ccont.y2)))
+                else:
+                    score, cross_percentage = self.compare(alpha_compo, rgba_i)
+
                 thr_score = min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333*(1.0-self.ssim_offset))
                 logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}")
                 if score >= thr_score:
