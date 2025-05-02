@@ -98,6 +98,7 @@ if __name__ == '__main__':
     parser.add_argument('--layout', help="Set window layout mode. [0: safe, 1: normal, 2: aggressive] (def: config.ini)", type=int, default=-1, required=False)
     parser.add_argument('--capabilities', help="Display Brule library capabilities and exit.", action=BruleCapAction)
 
+    parser.add_argument('--redraw-period', help="Add redraws every X >= 1.0 seconds [0: Disabled] - also known as 'acquisition point interval'. (def:  %(default)s)", type=float, default=0.0, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
@@ -113,6 +114,7 @@ if __name__ == '__main__':
     assert abs(args.ssim_tol) <= 100
     assert 0 <= args.compression <= 100
     assert 0 <= args.acqrate <= 100
+    assert 0 <= args.redraw_period
     if args.qmode not in range(0, 5):
         logger.warning("Unknown quantization mode, attempting to use pngquant/libimagequant.")
         args.qmode = 3
@@ -141,6 +143,10 @@ if __name__ == '__main__':
 
     if args.threads < 0 or args.threads > 10:
         exit_msg("Incorrect number of threads, aborting.")
+
+    if args.redraw_period < 1.0:
+        logger.warning("Meaningless redraw_period, setting to zero.")
+        args.redraw_period = 0
 
     if args.prefer_normal and not args.allow_normal:
         logger.warning("--prefer-normal requires --allow-normal, forcefully enabling this flag.")
@@ -208,6 +214,7 @@ if __name__ == '__main__':
         'log_to_file': args.log_to_file,
         'insert_acquisitions': args.extra_acq,
         'ssim_tol': args.ssim_tol/100,
+        'redraw_period': args.redraw_period,
         'threads': 'auto' if args.threads == 0 else args.threads,
     }
     ts_start = time.monotonic()
