@@ -602,6 +602,12 @@ class EpochEncoder:
                         logger.debug(f"Shift DTS {dts_iter:.04f}, {nodes[l].dts():.04f}, {nodes[l].pts():.04f}={nodes[l].tc_pts} {dts_end_iter}")
                         nodes[l].set_dts(max(dts_iter - 1/PGDecoder.FREQ, dts_end_iter))
                 assert flags[l] != 1
+                if any(nodes[l].new_mask) and flags[l] == 0 and allow_overlaps:
+                    wd_occupied_count = sum(map(lambda x: x is not None, nodes[l].objects))
+                    if wd_occupied_count == 2:
+                        logger.warning(f"Downgraded event at {nodes[l].tc_pts} to a palette update to perform a mendatory acquisition.")
+                    else:
+                        logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
                 states[l] = PCS.CompositionState.NORMAL
                 #Update object mask on which PUs are performed.
                 # evaluated at the end since the above could be a valid wipe
