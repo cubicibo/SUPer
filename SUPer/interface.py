@@ -74,7 +74,7 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, preset: LayoutPreset
     cbox, w1, w2, is_vertical = leng.get_layout()
     cbox, w1, w2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, w1, w2)))
     cwd = (w1, w2) if w1 != w2 else (w1,)
-    cwd = PaddingEngine(cbox, container=container, n_groups=2).directional_pad(cwd, is_vertical)
+    cwd = PaddingEngine(cbox, container=container).directional_pad(cwd, is_vertical)
 
     scores = []
     for cwdo in (cwd, reversed(cwd)):

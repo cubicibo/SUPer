@@ -40,12 +40,9 @@ logger = LogFacility.get_logger('SUPer')
 
 #%%
 class PaddingEngine:
-    def __init__(self, box: Box, container: Box, n_groups: int = 2) -> None:
-        if n_groups not in range(1, 3):
-            raise AssertionError(f"PaddingEngine expects 1 or 2 groups, not '{n_groups}'.")
+    def __init__(self, box: Box, container: Box) -> None:
         self.box = box
         self.container = container
-        self.n_groups = n_groups
 
     @staticmethod
     def _pad_any_box(box: Box, container: Box, min_dx: int, min_dy: int) -> Box:
@@ -1253,12 +1250,6 @@ class WindowAnalyzer:
         assert abs(ssim_offset) <= 1.0
         self.ssim_offset = ssim_offset
 
-    @staticmethod
-    def get_grayscale(rgba: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
-        rgba = rgba.astype(np.uint16)
-        img = np.round(0.2989*rgba[:,:,0] + 0.587*rgba[:,:,1] + 0.114*rgba[:,:,2])
-        return (img.clip(0, 255) & (255*(rgba[:,:,3] > 0))).astype(np.uint8)
-
     def compare(self, bitmap: Image.Image, current: Image.Image) -> tuple[float, float]:
         """
         :param bitmap: (cropped or padded) aggregate of the previous bitmaps
@@ -1307,17 +1298,21 @@ class WindowAnalyzer:
         pgo_yield = None
         containers, mask = [], []
 
+        def generate_object(alpha_compo: Image.Image, mask: list[bool], unseen: int, containers: list[Box], f_start: int) -> ProspectiveObject:
+            bbox = alpha_compo.getbbox()
+            if unseen > 0:
+                mask = mask[:-unseen]
+                containers = containers[:-unseen]
+            return ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
+
+
         while True:
             rgba = yield pgo_yield
             pgo_yield = None
 
             if rgba is None:
                 if len(mask):
-                    bbox = alpha_compo.getbbox()
-                    if unseen > 0:
-                        mask = mask[:-unseen]
-                        containers = containers[:-unseen]
-                    pgo_yield = ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
+                    pgo_yield = generate_object(alpha_compo, mask, unseen, containers, f_start)
                     mask, containers = [], []
                     continue
                 else:
@@ -1352,18 +1347,14 @@ class WindowAnalyzer:
                     containers.append(event_container)
                 else:
                     assert has_content, "New PGObject must have visible content!!"
-                    bbox = alpha_compo.getbbox()
-                    if unseen > 0:
-                        mask = mask[:-unseen]
-                        containers = containers[:-unseen]
-                    pgo_yield = ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
+                    pgo_yield = generate_object(alpha_compo, mask, unseen, containers, f_start)
 
-                    #new bitmap
+                    #prepare for the next bitmap
                     mask = [has_content]
                     containers = [event_container]
                     f_start = event_cnt
                     alpha_compo = Image.fromarray(rgba.copy())
-                unseen = (not has_content)*(unseen + 1)
+                unseen = (unseen + 1) if (not has_content) else 0
             event_cnt += 1
         ####while
         return # StopIteration
