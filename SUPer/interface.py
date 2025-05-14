@@ -29,7 +29,7 @@ from functools import partial
 from enum import IntEnum
 
 from scenaristream import EsMuiStream
-from brule import LayoutEngine, Brule, HexTree, KDMeans
+from brule import LayoutEngine, Brule, HexTree, QtzrUTC
 
 from .utils import LogFacility, Box, SSIMPW
 from .pgraphics import PGDecoder
@@ -591,8 +591,8 @@ class EpochWorker(mp.Process):
 
         if Quantizer.Libs.HEXTREE == self.kwargs['quantize_lib']:
             logger.debug(f"HexTree quantizer capabilities: {', '.join(HexTree.get_capabilities())}.")
-        elif Quantizer.Libs.KMEANS == self.kwargs['quantize_lib']:
-            logger.debug(f"KD-Means quantizer capabilities: {', '.join(KDMeans.get_capabilities())}.")
+        elif Quantizer.Libs.QTZR == self.kwargs['quantize_lib']:
+            logger.debug(f"QtzrUTC quantizer capabilities: {', '.join(QtzrUTC.get_capabilities())}.")
 
         logger.debug(f"Bitmap encoder capabilities: {', '.join(Brule.get_capabilities())}.")
 

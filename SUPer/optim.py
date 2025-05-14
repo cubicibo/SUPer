@@ -28,7 +28,7 @@ from typing import Optional, Union, Any
 from collections.abc import Iterable
 from enum import IntEnum, auto
 from piliq import PILIQ, PNGQuantWrapper
-from brule import HexTree, KDMeans
+from brule import HexTree, QtzrUTC
 
 from .palette import Palette, PaletteEntry
 from .utils import LogFacility, get_matrix, SSIMPW
@@ -42,7 +42,7 @@ class FadeCurve(IntEnum):
 
 class Quantizer:
     class Libs(IntEnum):
-        KMEANS  = 0
+        QTZR  = 0
         PIL_KM  = 1
         HEXTREE = 2
         PILIQ   = 3
@@ -88,8 +88,8 @@ class Quantizer:
         ht_info = '(good, very fast)' if 'C' in HexTree.get_capabilities() else '(medium, avg)'
         cls._opts[cls.Libs.HEXTREE] = ("HexTree", ht_info)
         cls._opts[cls.Libs.PIL_KM] = ('Pillow', '(average, turbo)')
-        kdm_info = '(medium, fast)' if 'C' in KDMeans.get_capabilities() else '(medium, slow)'
-        cls._opts[cls.Libs.KMEANS] = ('KD-Means', kdm_info)
+        qtzr_info = '(better, fast)' if 'C' in QtzrUTC.get_capabilities() else '(good, slow)'
+        cls._opts[cls.Libs.QTZR] = ('QtzrUTC', qtzr_info)
 
     @classmethod
     def init_piliq(cls,
@@ -180,11 +180,11 @@ class Preprocess:
                 lib_piq.set_quality(original_quality)
             return qtz_img, pal
 
-        elif Quantizer.Libs.KMEANS == quant_method:
+        elif Quantizer.Libs.QTZR == quant_method:
             # Use PIL to get approximate number of clusters
             nk = len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
             nk = min(colors, int(np.ceil(20+nk*235/255)))
-            return KDMeans.quantize(np.asarray(img, dtype=np.uint8), nk)
+            return QtzrUTC.quantize(np.asarray(img, dtype=np.uint8), nk)
 
         elif Quantizer.Libs.HEXTREE == quant_method:
             nc = colors if single_bitmap else len(img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)

@@ -70,13 +70,13 @@ if __name__ == '__main__':
             super().__init__(option_strings, dest, **kwargs)
 
         def __call__(self, parser, namespace, values = None, option_string=None):
-            from brule import LayoutEngine, Brule, HexTree, KDMeans
+            from brule import LayoutEngine, Brule, HexTree, QtzrUTC
             f_strcap = lambda caps: ', '.join(caps)
 
             print(f"LayoutEngine: {f_strcap(LayoutEngine.get_capabilities())}")
             print(f"   RLE codec: {f_strcap(Brule.get_capabilities())}")
-            print(f"    kd-Means: {f_strcap(KDMeans.get_capabilities())}")
             print(f"     HexTree: {f_strcap(HexTree.get_capabilities())}")
+            print(f"     QtzrUTC: {f_strcap(QtzrUTC.get_capabilities())}")
             exit_msg('', is_error=False)
 
     parser = ArgumentParser()
