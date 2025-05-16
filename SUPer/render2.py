@@ -203,7 +203,9 @@ class EpochEncoder:
         durs, nodes = self.get_durations()
         states, flags, cboxes = self.shape_stream(durs, nodes, pgobjs)
 
+        self.set_pgobjects_extended_visibilities(nodes)
         r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
+
         return self._convert(r_states, pgobjs, r_durs, r_flags, r_nodes)
 
     def shape_stream(self,
@@ -401,6 +403,51 @@ class EpochEncoder:
         ####for k, node
     ####
 
+    def set_pgobjects_extended_visibilities(self, nodes: list['DSNode']) -> None:
+        """
+        Set the _ext_range visibility of a PGObject, used in partial screen refreshes
+
+        Brief: Buffered palette updates are basic screen updates that are stacked up
+         before a mandatory acquisition that takes a long time to decode.
+         This makes some animation smoother (such as fades) and drop fewer events
+         however these palette updates must operate on consistent data. some PGObject
+         may be outdated but shall remain on screen for consistency (no blinking!)
+
+         This function essentially look at the window occupancies and determine the lifetime of
+         every pgobject. An empty window enforces them to be undisplayed!
+
+         Everything done here is relevant solely if both --ahead and --allow-normal are used.
+        """
+        running_objs = [[] for _ in range(len(self.windows))]
+        nk = 0
+        for node in nodes:
+            # skip wipes: composition objects encoding is agnostic to them
+            if 0 == len(node.objects):
+                continue
+            nk = node.idx
+            assert nk >= 0
+            wipe_everything = [False] * len(self.windows)
+            for wid, obj in enumerate(node.objects):
+                empty_wd = obj is None
+                assert empty_wd or obj.is_active(nk), (nk, obj.f, len(obj.mask), obj.mask)
+                if empty_wd or not obj.is_visible(nk): # ext range of a masked object will be updated several time
+                    wipe_everything[wid] = True
+            for wid, _ in filter(lambda tw: tw[1], enumerate(wipe_everything)):
+                for past_object in running_objs[wid]:
+                    past_object.set_extended_visibility_limit(nk)
+                running_objs[wid].clear()
+            for wid, obj in enumerate(node.objects):
+                if obj is not None and (0 == len(running_objs[wid]) or running_objs[wid][-1] != obj):
+                    running_objs[wid].append(obj)
+        #overly careful - set extended visibility of remaining objects to epoch length
+        for past_object in running_objs[0] + (running_objs[1] if (2 == len(running_objs)) else []):
+            past_object.set_extended_visibility_limit(nk+1)
+
+        for nk, node in enumerate(nodes):
+            for obj in filter(lambda x: x is not None, node.objects):
+                assert obj.ext_range >= obj.f + len(obj.mask)
+    ####
+
     def filter_events(self,
           nodes: list['DSNode'],
           states: list[PCS.CompositionState],
@@ -555,7 +602,7 @@ class EpochEncoder:
                         else:
                             assert False, f"S={states[zek]}, R={nodes[zek].nc_refresh} {nodes[zek].tc_pts}"
 
-                    #we iterate here only if left and right are never true -> we h
+                    #we iterate here only if left and right are never true
                     for zek in range(ze+1, max_z):
                         if -1 != flags[zek]:
                             flags[zek] = -1
@@ -571,22 +618,12 @@ class EpochEncoder:
             dts_end_iter = nodes[max(j_iter-1, 0)].dts_end()
 
             num_pcs_buffered = 0
-            if len(nodes[j_iter].objects):
-                objs = nodes[j_iter].objects
-            else:
-                #screen wipes don't contain objects, take the previous list
-                assert j_iter > 0
-                objs = nodes[j_iter-1].objects
+
+            #screen wipes don't contain objects, take the previous list
+            objs = nodes[j_iter if len(nodes[j_iter].objects) else (j_iter-1)].objects
             objs = list(map(lambda obj: obj is not None, objs))
-            refs = [[obj] for obj in objs]
             for l in range(j_iter+1, k):
-                if allow_overlaps:
-                    for ko, obj in enumerate(nodes[l].objects):
-                        #an object was previously there, and there is still an object that is visible?
-                        #transitions from true to false in this list means perform a wipe
-                        refs[ko].append(refs[ko][-1] and obj is not None and obj.is_visible(nodes[l].idx))
                 # We ran out of PCS to buffer or the objects are too different or min delta PTS -> drop
-                #logger.debug(f"{l}, {j_iter+1}-{k}, {objs} {refs}, PTSR={nodes[l].pts() >= nodes[k].pts()-pts_delta-0.1/PGDecoder.FREQ}")
                 if flags[l] >= 0 and (not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or (nodes[l].pts() + pts_delta + 0.1/PGDecoder.FREQ >= nodes[k].pts())):
                     logger.warning(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
                     flags[l] = -1
@@ -612,18 +649,6 @@ class EpochEncoder:
                     for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
                         objs[ko] &= (obj is not None) and (not mask)
 
-            # Palette update needs to keep the screen consistency - empty windows shall be conveyed accurately
-            if allow_overlaps and max(map(len, refs)) > 1:
-                #Seek back first NC with ODS or ACQ
-                j_acq = j_iter
-                while j_acq > 0 and ((states[j_acq] == 0 and flags[j_acq] != 1) or (states[j_acq] > 0 and flags[j_acq] == -1)): j_acq -= 1
-                assert flags[j_acq] != -1 and (states[j_acq] != PCS.CompositionState.NORMAL or flags[j_acq] == 1)
-                assert j_acq <= j_iter
-                #Pad to size, visibility assumed to False as the object is properly set within these boundaries
-                for rid in range(len(refs)):
-                    refs[rid] = [False]*(j_iter-j_acq) + refs[rid]
-                nodes[j_acq].obj_carry = refs
-                logger.hdebug(f"Visibility flags override for PUs tied to {nodes[j_acq].tc_pts}: {refs}.")
             states[k] = PCS.CompositionState.NORMAL if is_normal_case else PCS.CompositionState.ACQUISITION
             nodes[k].partial = is_normal_case
             flags[k] = int(is_normal_case)
@@ -667,7 +692,7 @@ class EpochEncoder:
                     node.pal_vn = pm.get_palette_version(node.palette_id)
             else:
                 deb_hdlr = logger.hdebug
-            deb_hdlr(f"{state:02X} {flag:02}-{node.partial} DTS={node.dts():.04f}->{node.dts_end():.04f} PTS={node.pts():.04f}={node.tc_pts} OM={node.new_mask} {node.palette_id} {node.pal_vn} cdts={node.is_custom_dts()}")
+            deb_hdlr(f"{k}: {state:02X} {flag:02}-{node.partial} DTS={node.dts():.04f}->{node.dts_end():.04f} PTS={node.pts():.04f}={node.tc_pts} OM={node.new_mask} {node.palette_id} {node.pal_vn} cdts={node.is_custom_dts()}")
         ####
     ####
 
@@ -703,11 +728,8 @@ class EpochEncoder:
                     if len(pgo.mask[j-pgo.f:j+1-pgo.f]) == 1:
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
                         last_imgs[wid] = (self.mask_event(self.windows[wid], self.events[j]), paste_box, pgo.box.coords)
-                    elif node.obj_carry is not None and len(node.obj_carry[wid]) > j-i and last_imgs[wid] is not None:
-                        assert j-i > 0
-                        multiplier &= node.obj_carry[wid][j-i]
                     else:
-                        multiplier = 0
+                        multiplier &= pgo.is_visible_extended(j)
                     a_img.paste(Image.fromarray(multiplier*last_imgs[wid][0], 'RGBA').crop(last_imgs[wid][2]), last_imgs[wid][1])
                     coords += offset
                 imgs_chain.append(a_img)
@@ -797,10 +819,8 @@ class EpochEncoder:
                     multiplier = np.uint8(flags[j] >= 0)
                     if pgo.is_active(j):
                         last_img = self.mask_event(self.windows[wid], self.events[j])
-                    elif node.obj_carry is not None and len(node.obj_carry[wid]) > j-i:
-                        multiplier &= node.obj_carry[wid][j-i]
                     else:
-                        multiplier = 0
+                        multiplier &= pgo.is_visible_extended(j)
                     imgs_chain.append(Image.fromarray(multiplier*last_img, 'RGBA').crop(pgo.box.coords))
 
                 cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
@@ -942,16 +962,6 @@ class EpochEncoder:
 
             #Normal case refresh implies we are refreshing one object out of two displayed.
             has_two_objs = has_two_objs > 1 or normal_case_refresh
-            if normal_case_refresh:
-                obj_carry = [[] for _ in self.windows]
-                for kc, future_node in enumerate(nodes[i:k]):
-                    if len(obj_carry[0]) > kc or flags[i+kc] == -1 or (states[i+kc] == PCS.CompositionState.NORMAL and flags[i+kc] != 1):
-                        continue
-                    for wid, _ in enumerate(self.windows):
-                        obj_carry[wid] += [False] if future_node.obj_carry is None else future_node.obj_carry[wid]
-                nodes[i].obj_carry = obj_carry
-                nodes[i].obj_carry += [False] * ((k-i)-len(obj_carry))
-
             r = self._generate_acquisition_ds(i, k, pgobs_items, nodes[i], double_buffering,
                                               has_two_objs, ods_reg, c_pts, normal_case_refresh, flags)
             cobjs, pals, o_ods, pal = r
@@ -1141,9 +1151,9 @@ class EpochEncoder:
             #NC palette updates don't need to know about the objects
             if not node.nc_refresh:
                 assert node.idx != -1
-                for wid, wd in enumerate(self.windows):
+                for wid, _ in enumerate(self.windows):
                     is_new[wid] = False
-                    if objs[wid] and not objs[wid].is_active(node.idx):
+                    if objs[wid] is not None and not objs[wid].is_active(node.idx):
                         objs[wid] = None
                     if len(pgobjs_proc[wid]):
                         if not objs[wid] and pgobjs_proc[wid][0].is_active(node.idx):
@@ -1378,7 +1388,6 @@ class DSNode:
         self.new_mask = []
         self.partial = False
         self.idx = 0
-        self.obj_carry = None
 
         self.parent = None
         self.palette_id = None

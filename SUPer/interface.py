@@ -29,7 +29,7 @@ from functools import partial
 from enum import IntEnum
 
 from scenaristream import EsMuiStream
-from brule import LayoutEngine, Brule, HexTree, QtzrUTC
+from brule import LayoutEngine, Brule
 
 from .utils import LogFacility, Box, SSIMPW
 from .pgraphics import PGDecoder
@@ -184,7 +184,7 @@ class BDNRender:
         stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
 
         if self.kwargs.get('quantize_lib', None) is None:
-            self.kwargs['quantize_lib'] = Quantizer.Libs.HEXTREE
+            self.kwargs['quantize_lib'] = Quantizer.Libs.QTZR
 
         self._report_log_hdl = None
         if self.kwargs.get('log_to_file', False) < 0:
@@ -580,20 +580,15 @@ class EpochWorker(mp.Process):
         requested_qtz = Quantizer.Libs(self.kwargs['quantize_lib'])
         if requested_qtz >= Quantizer.Libs.PILIQ:
             if not Quantizer.init_piliq(**libs_params.get('quant', {})):
-                logger.warning("Failed to initialise imagequant/pngquant. Falling back to lower quality 'HexTree'.")
-                self.kwargs['quantize_lib'] = Quantizer.Libs.HEXTREE.value
+                fallback = Quantizer.get_brule_fallback()
+                logger.warning(f"Failed to initialise imagequant/pngquant. Using lower quality {fallback.name}.")
+                self.kwargs['quantize_lib'] = fallback.value
             else:
                 self.kwargs['quantize_lib'] = Quantizer.select_quantizer(self.kwargs['quantize_lib'])
-                logger.debug(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
         else:
-            logger.debug(f"Image quantizer: '{requested_qtz.name}'.")
             self.kwargs['quantize_lib'] = requested_qtz.value
 
-        if Quantizer.Libs.HEXTREE == self.kwargs['quantize_lib']:
-            logger.debug(f"HexTree quantizer capabilities: {', '.join(HexTree.get_capabilities())}.")
-        elif Quantizer.Libs.QTZR == self.kwargs['quantize_lib']:
-            logger.debug(f"QtzrUTC quantizer capabilities: {', '.join(QtzrUTC.get_capabilities())}.")
-
+        Quantizer.log_selection(self.kwargs['quantize_lib'])
         logger.debug(f"Bitmap encoder capabilities: {', '.join(Brule.get_capabilities())}.")
 
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
