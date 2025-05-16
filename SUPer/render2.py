@@ -24,6 +24,7 @@ from functools import reduce
 
 from PIL import Image
 from numpy import typing as npt
+from brule import LayoutEngine
 import numpy as np
 import cv2
 
@@ -1245,22 +1246,55 @@ class EpochEncoder:
     ####
 ####
 #%%
+class CTU:
+    MAX_DEPTH = 4
+    def __init__(self, region: Box, *, _depth: int = 0):
+        self.region = Box.from_coords(0, 0, region.dx, region.dy)
+        self.depth = _depth
+    
+    def _get_layout(self, composite: Image.Image, frame: Image.Image) -> tuple[bool, tuple[Box, Box, Box]]:
+        leng = LayoutEngine((self.region.dx, self.region.dy))
+        leng.add_to_layout(0, 0, np.asarray(composite.getchannel('A')))
+        leng.add_to_layout(0, 0, np.asarray(frame.getchannel('A')))
+        cbox, reg1, reg2, is_vertical = leng.get_layout()
+        leng.destroy()
+        cbox, reg1, reg2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, reg1, reg2)))
+        return self._validate_layout(cbox, is_vertical, reg1, reg2)
 
-class WindowAnalyzer:
-    def __init__(self,
-        window: Box, ssim_threshold: float = 0.986,
-        ssim_offset: float = 0.0,
-        overlap_threshold: float = 0.995
-    ) -> None:
-        self.window = window
-        assert ssim_threshold < 1.0, "Not a valid SSIM threshold"
-        self.ssim_threshold = ssim_threshold
-        assert 0 < overlap_threshold < 1.0, "Not a valid overlap threshold."
-        self.overlap_threshold = overlap_threshold
-        assert abs(ssim_offset) <= 1.0
-        self.ssim_offset = ssim_offset
+    def _validate_layout(self, cbox: Box, is_vertical: int, reg1: Box, reg2: Box) -> ...:
+        is_valid = is_vertical >= 0
+        if is_valid:
+            lwds = PaddingEngine(cbox, self.region).directional_pad((reg1, reg2), is_vertical)
+            is_valid &= (2 == len(lwds))
+            #become more and more demanding on the gain to justify the split
+            is_valid &= (lwds[0].area + lwds[1].area)/self.region.area < 0.9 - self.depth/13
+        return is_valid, cbox, (lwds if is_valid else None)
 
-    def compare(self, bitmap: Image.Image, current: Image.Image) -> tuple[float, float]:
+    def get_score(self, composite: Image.Image, frame: Image.Image) -> tuple[float, float]:
+        assert composite.size == frame.size == (self.region.dx, self.region.dy)
+        split_valid = self.depth < __class__.MAX_DEPTH
+        if split_valid:
+            split_valid, cbox, split_layout = self._get_layout(composite, frame)
+            assert Box.intersect(cbox, self.region) == cbox, f"{cbox}, {self.region}, {split_valid}, {split_layout}"
+
+        #perform recursion up to depth
+        if split_valid:
+            nd = self.depth+1
+            costs = map(lambda r: CTU(r, _depth=nd).get_score(composite.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2)),
+                                                                  frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))),
+                        split_layout)
+            costs = list(costs) #recursion happens here
+            return tuple(map(lambda x: sum(x)/len(costs), zip(*costs)))
+        else:
+            return __class__.get_region_cost(composite, frame, self.region)
+
+    @classmethod
+    def get_region_cost(cls, composite: Image.Image, frame: Image.Image, cbox: Box) -> tuple[float, float]:
+        cropbbox = (cbox.x, cbox.y, cbox.x2, cbox.y2)
+        return cls._compare_f(composite.crop(cropbbox), frame.crop(cropbbox))
+
+    @staticmethod
+    def _compare_f(bitmap: Image.Image, current: Image.Image) -> tuple[float, float]:
         """
         :param bitmap: (cropped or padded) aggregate of the previous bitmaps
         :param current: current bitmap under analysis
@@ -1301,6 +1335,23 @@ class WindowAnalyzer:
             score = 1.0
         return score, cross_percentage
 
+###
+
+class WindowAnalyzer:
+    def __init__(self,
+        window: Box, ssim_threshold: float = 0.986,
+        ssim_offset: float = 0.0,
+        overlap_threshold: float = 0.995
+    ) -> None:
+        self.window = window
+        assert ssim_threshold < 1.0, "Not a valid SSIM threshold"
+        self.ssim_threshold = ssim_threshold
+        assert 0 < overlap_threshold < 1.0, "Not a valid overlap threshold."
+        self.overlap_threshold = overlap_threshold
+        assert abs(ssim_offset) <= 1.0
+        self.ssim_offset = ssim_offset
+
+
     def analyze(self):
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
@@ -1314,7 +1365,7 @@ class WindowAnalyzer:
                 mask = mask[:-unseen]
                 containers = containers[:-unseen]
             return ProspectiveObject(f_start, mask, containers, Box.from_coords(*bbox))
-
+        ##
 
         while True:
             rgba = yield pgo_yield
@@ -1338,16 +1389,12 @@ class WindowAnalyzer:
 
                 #If no content, bounding box keeps the last value
                 #TODO: maybe do NOT use the bbox when the object is masked!!
-                score_crop, cross_perc_crop = 1.0, 1.0
                 if has_content:
                     event_container = Box.from_coords(*rgba_i.getbbox())
-
-                if len(mask) and has_content:
-                    ccont = Box.union(event_container, Box.from_coords(*alpha_compo.getbbox()))
-                    score, cross_percentage = self.compare(alpha_compo.crop((ccont.x, ccont.y, ccont.x2, ccont.y2)),
-                                                                   rgba_i.crop((ccont.x, ccont.y, ccont.x2, ccont.y2)))
+                if len(mask) or has_content:
+                    score, cross_percentage = CTU(self.window).get_score(alpha_compo, rgba_i)
                 else:
-                    score, cross_percentage = self.compare(alpha_compo, rgba_i)
+                    score, cross_percentage = 1.0, 1.0
 
                 thr_score = min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333*(1.0-self.ssim_offset))
                 logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}")
