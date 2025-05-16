@@ -158,8 +158,10 @@ class ProspectiveObject:
 
     def __post_init__(self) -> None:
         assert len(self.mask) == len(self.boxes)
+        assert any(self.mask)
         assert self.box.area > 0
         assert self.f >= 0
+        self.ext_range = self.f + len(self.mask)
 
     def is_active(self, frame: int) -> bool:
         """
@@ -183,7 +185,6 @@ class ProspectiveObject:
             return self.boxes[frame-self.f]
         return None
 
-
     def pad_left(self, padding: int) -> None:
         """
         Activate an object earlier by padding it to the left on the event grid.
@@ -193,6 +194,13 @@ class ProspectiveObject:
         self.f -= padding
         self.mask[0:0] = [False] * padding
         self.boxes[0:0] = [self.boxes[0]] * padding
+
+    def set_extended_visibility_limit(self, f_max: int) -> None:
+        self.ext_range = f_max
+
+    def is_visible_extended(self, frame: int) -> bool:
+        assert frame > self.f and not self.is_active(frame), f"{frame} < {self.f} ? act={self.is_active(frame)}"
+        return frame < self.ext_range
 ####
 
 #%%

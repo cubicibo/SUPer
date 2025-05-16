@@ -85,11 +85,11 @@ class Quantizer:
             cls._opts[cls.Libs.PILIQ] = (cls.get_piliq().lib_name,'(best, fast)')
         if cls._alt_piliq is not None:
             cls._opts[cls.Libs.PNGQNT] = (cls._alt_piliq.lib_name,'(best, fast)')
-        ht_info = '(good, very fast)' if 'C' in HexTree.get_capabilities() else '(medium, avg)'
-        cls._opts[cls.Libs.HEXTREE] = ("HexTree", ht_info)
-        cls._opts[cls.Libs.PIL_KM] = ('Pillow', '(average, turbo)')
+        if 'C' in HexTree.get_capabilities():
+            cls._opts[cls.Libs.HEXTREE] = ("HexTree", '(good, very fast)')
         qtzr_info = '(better, fast)' if 'C' in QtzrUTC.get_capabilities() else '(good, slow)'
         cls._opts[cls.Libs.QTZR] = ('QtzrUTC', qtzr_info)
+        cls._opts[cls.Libs.PIL_KM] = ('Pillow', '(average, turbo)')
 
     @classmethod
     def init_piliq(cls,
@@ -144,13 +144,30 @@ class Quantizer:
                     logger.error("Requesting specifically pngquant, but executable not found.")
             option_id = cls.Libs.PILIQ
         if option_id == cls.Libs.PILIQ and not cls.get_piliq():
-            logger.error("Unable to find an advanced quantizer (pngquant, libimagequant). Using lower quality: 'HexTree'.")
-            option_id = cls.Libs.HEXTREE
+            fallback = cls.get_brule_fallback()
+            logger.error(f"Unable to find an advanced quantizer (pngquant, libimagequant). Using lower quality: {fallback.name}.")
+            option_id = fallback
         return int(option_id)
+
+    @classmethod
+    def get_brule_fallback(cls) -> 'Quantizer.Libs':
+        if 'C' in HexTree.get_capabilities():
+            return cls.Libs.HEXTREE
+        return cls.Libs.QTZR
 
     @classmethod
     def get_piliq(cls) -> Optional[PILIQ]:
         return cls._piliq
+
+    @classmethod
+    def log_selection(cls, idx: Union[int, 'Quantizer.Libs']) -> None:
+        idxi = cls.Libs(idx)
+        if idxi in [cls.Libs.QTZR, cls.Libs.HEXTREE]:
+            cap_string = (', capabilities: ') + (', '.join((QtzrUTC if idxi == cls.Libs.QTZR else HexTree).get_capabilities()))
+        else:
+            cap_string = ''
+        logger.debug(f"RGBA quantizer '{idxi.name}'{cap_string}.")
+    ####
 ####
 
 class Preprocess:
