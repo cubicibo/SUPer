@@ -32,7 +32,7 @@ Both the standalone executables and `python3 supergui.py` will display the graph
  -i, --input         Input BDNXML file.
  -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
  -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
- -q, --qmode         Set the image quantization mode. [0: KD-Means, 1: Pillow, 2: HexTree, 3: libimagequant/pngquant, def: 3]
+ -q, --quantizer     Set the image quantization mode. [0: QtzrUTC, 1: Pillow, 2: HexTree, 3: libimagequant/pngquant, def: 3]
  -n, --allow-normal  Flag to allow normal case object redefinition, can reduce the number of dropped events on complex animations.
  -k, --prefer-normal Flag to always prefer normal case object redefinition, can reduce the overall bitrate.
  -t, --threads       Set the number of concurrent threads to use. Default is 0 (autoselect), maximum is 8.
@@ -62,18 +62,18 @@ Here are some additional informations on selected options, especially those that
 - Layout mode: steer the epoch definition algorithm way of defining windows. Opportunist is the best and coded buffer-safe, but may be disliked by Scenarist "Build/Rebuild" operation. 1 is an acceptable fall-back. 0 Should never be used.
 
 ### Image quantizers
-SUPer ships with various internal image quantizers and supports two external ones. The different methods (values for `--qmode`) are enumerated here:
+SUPer ships with various internal image quantizers and supports two external ones. The different methods (values for `--quantizer`) are enumerated here:
 
-0. **KD-Means**: Fair quality quantizer. Should only be used if quality is a must and *PILIQ* (3) is not available or *HexTree* (2) is forced on the sub-optimal fallback. Handles poorly crossfades.
-1. **Pillow**: Fast, medium quality. Excellent for low bitrates and files with solely dialogue and karaoke. Glows and gradients will be hideous.
-2. **HexTree**: Fast, good quality. Suits nicely files with moderate typesetting effects (no heavy gradients + large glows).
-3. **PILIQ** (libimagequant / pngquant): High quality, acceptably fast. Recommended default, and it preserves glows and gradients.
+0. **QtzrUTC**: High quality and reasonably fast quantizer, albeit generates the largest file sizes.
+1. **Pillow**: Fastest quantizer, but average quality. Excellent for low bitrates and files with solely dialogue and karaoke. Glows and gradients will be hideous.
+2. **HexTree**: Fast and good quality. Suits nicely files with moderate typesetting effects (no heavy gradients + large glows).
+3. **PILIQ** (libimagequant / pngquant): delivers the best quality, acceptably fast.
     - macOS users must install pngquant via brew, or specify the pngquant executable in config.ini
     - Linux and Windows[^1] users can specify either *libimagequant[.dll, .so]* or pngquant executable in config.ini.
 
-Higher quality quantizers will generally use more bandwidth: (highest quality + bandwidth) *PILIQ > HexTree >= KD-Means >> Pillow* (lowest).
-
-SUPer is properly installed if every item listed by `python3 supercli.py --capabilities` displays a 'C'. Else, only sub-optimal fallbacks are availables ("Python"). In sub-optimal environments (no C extensions, no pngquant/imagequant), this rule changes to *KD-Means > HexTree > Pillow*.
+Higher quality quantizers will generally consume more bandwidth:
+- Quality: (highest) *PILIQ > QtzrUTC > HexTree >> Pillow* (lowest).
+- Bandwidth usage: (highest) *QtzrUTC > PILIQ > HexTree >> Pillow* (lowest).
 
 [^1]: On Windows, compiled binaries ship with libimagequant.dll and the PILIQ library embeds a copy for users of the package in a (virtual) environment.
 
@@ -83,7 +83,7 @@ SUPer is properly installed if every item listed by `python3 supercli.py --capab
 - If `--allow-normal` (`--prefer-normal`) or `--ahead` is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Building or rebuilding the PES is not mandatory to mux a project.
 
 ### Example
-`python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --qmode 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`
+`python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --quantizer 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`
 
 ### How SUPer works
 SUPer implements a conversion engine that makes use of most of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities like palette updates, object redefinition and events buffering. Notably, SUPer analyzes each input images and encodes a sequence of similar images together into a single presentation graphic (bitmap). This dramatically reduces the decoding and composition bandwidth and allows to perform complex animations while the decoder is decoding the next bitmaps.

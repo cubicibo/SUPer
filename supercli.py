@@ -83,7 +83,7 @@ if __name__ == '__main__':
     parser.add_argument("-i", "--input", type=str, help="Set input BDNXML file.", default='', required=True)
     parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=80, required=False)
     parser.add_argument('-a', '--acqrate', help="Set acquisition rate [int, 0-100] (def:  %(default)s)", type=int, default=100, required=False)
-    parser.add_argument('-q', '--qmode', help="Set image quantization mode. [0: KD-Means, 1: Pillow, 2: HexTree, 3: PNGQ/LIQ] (def:  %(default)s)", type=int, default=3, required=False)
+    parser.add_argument('-q', '--quantizer', help="Set image quantizer. [0: QtzrUTC, 1: Pillow, 2: HexTree, 3: PNGQ/LIQ] (def:  %(default)s)", type=int, default=3, required=False)
     parser.add_argument('-k', '--prefer-normal', help="Flag to prefer normal case over acquisitions.", action='store_true', default=False, required=False)
     parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object refreshes.", action='store_true', default=False, required=False)
     parser.add_argument('-b', '--bt', help="Set target Rec. BT matrix [601, 709, 2020] (def:  %(default)s)", type=int, default=709, required=False)
@@ -115,9 +115,9 @@ if __name__ == '__main__':
     assert 0 <= args.compression <= 100
     assert 0 <= args.acqrate <= 100
     assert 0 <= args.redraw_period
-    if args.qmode not in range(0, 5):
+    if args.quantizer not in range(0, 5):
         logger.warning("Unknown quantization mode, attempting to use pngquant/libimagequant.")
-        args.qmode = 3
+        args.quantizer = 3
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown transfer matrix, using bt709.")
         args.bt = 709
@@ -182,7 +182,7 @@ if __name__ == '__main__':
             if int(ini_opts['super_cfg'].pop('abort_on_error', 0)):
                 LogFacility.exit_on_error(logger)
 
-        if args.qmode >= 3:
+        if args.quantizer >= 3:
             exepath = None
             piq_values = {}
             if (piq_sect := get_value_key(config, 'PILIQ')) is not None:
@@ -203,7 +203,7 @@ if __name__ == '__main__':
     parameters |= {
         'quality_factor': int(args.compression)/100,
         'refresh_rate': int(args.acqrate)/100,
-        'quantize_lib': args.qmode,
+        'quantize_lib': args.quantizer,
         'bt_colorspace': f"bt{args.bt}",
         'allow_overlaps': args.ahead,
         'full_palette': args.palette,
