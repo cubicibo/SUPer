@@ -179,6 +179,7 @@ class BDNRender:
 
         self._epochs = []
         self._first_pts = 0
+        self.valid_stream = True
 
     def prepare(self) -> BDNXML:
         stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
@@ -463,6 +464,7 @@ class BDNRender:
             compliant &= check_pts_dts_sanity(self._epochs, final_fps)
             if not compliant:
                 logger.error("=> Stream has a PTS/DTS issue!!")
+                self.valid_stream = False
             elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
                 logger.info(f"Checking PGS bitrate and buffer usage w.r.t max bitrate: {max_bitrate} Kbps...")
                 max_bitrate = int(max_bitrate*1000/8)
@@ -494,22 +496,25 @@ class BDNRender:
 
     def write_output(self) -> None:
         fp = self.outfile
-        if self._epochs:
-            is_pes = fp.lower().endswith('pes')
-            is_sup = fp.lower().endswith('sup')
-            if not (is_pes or is_sup):
-                logger.warning("Unknown extension, assuming a .SUP file...")
-                is_sup = True
-            if self.kwargs.get('output_all_formats', False):
-                is_pes = is_sup = True
-            if len(filepath := fp.split('.')) > 1:
-                fp_pes = '.'.join(filepath[:-1]) + '.pes'
-                fp_sup = '.'.join(filepath[:-1]) + '.sup'
-            else:
-                fp_pes = filepath[0] + '.pes'
-                fp_sup = filepath[0] + '.sup'
+        if not self._epochs:
+            raise RuntimeError("No data to write.")
 
-            if is_pes:
+        is_pes = fp.lower().endswith('pes')
+        is_sup = fp.lower().endswith('sup')
+        if not (is_pes or is_sup):
+            logger.warning("Unknown extension, assuming a .SUP file...")
+            is_sup = True
+        if self.kwargs.get('output_all_formats', False):
+            is_pes = is_sup = True
+        if len(filepath := fp.split('.')) > 1:
+            fp_pes = '.'.join(filepath[:-1]) + '.pes'
+            fp_sup = '.'.join(filepath[:-1]) + '.sup'
+        else:
+            fp_pes = filepath[0] + '.pes'
+            fp_sup = filepath[0] + '.sup'
+
+        if is_pes:
+            if self.valid_stream:
                 logger.info(f"Writing output file {fp_pes}")
 
                 decode_duration = (self._epochs[0][0].pcs.tpts - self._epochs[0][0].pcs.tdts) & ((1<<32) - 1)
@@ -524,13 +529,15 @@ class BDNRender:
                 # Close ESMUI writer
                 writer.send(None)
                 writer.close()
-            if is_sup:
-                logger.info(f"Writing output file {fp_sup}")
+            else:
+                logger.error("PES+MUI not generated as the stream is not compliant.")
+        ##if is_pes
+        if is_sup:
+            logger.info(f"Writing output file {fp_sup}")
 
-                with open(fp_sup, 'wb') as f:
-                    f.write(b''.join(map(bytes, self._epochs)))
-        else:
-            raise RuntimeError("No data to write.")
+            with open(fp_sup, 'wb') as f:
+                f.write(b''.join(map(bytes, self._epochs)))
+    ####def            
 ####
 
 class EpochWorker(mp.Process):
