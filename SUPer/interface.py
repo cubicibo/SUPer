@@ -601,7 +601,9 @@ class EpochWorker(mp.Process):
     def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
         ectx.events = remove_dupes(ectx.events)
         if (redraw_period := self.kwargs.get('redraw_period', 0)) >= 1:
-            ectx.events = add_periodic_refreshes(ectx.events, self.bdn.fps, redraw_period)
+            ectx.events, ectx.redraw_flags = add_periodic_refreshes(ectx.events, self.bdn.fps, redraw_period)
+        else:
+            ectx.redraw_flags = [False] * len(ectx.events)
         prefix = f"W{self.iid}: " if __class__.__threaded else ""
         logger.info(prefix + f"Encoding epoch {ectx.events[0].tc_in}->{ectx.events[-1].tc_out} with {len(ectx.events)} event(s), {len(ectx.windows)} window(s).")
 

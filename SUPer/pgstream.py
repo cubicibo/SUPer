@@ -19,7 +19,7 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from typing import Type, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 
 from .segments import PGSegment, PCS, WDS, PDS, ODS, ENDS, Epoch, DisplaySet
@@ -36,6 +36,7 @@ class EpochContext:
     events: list[...]
     min_dts: float = -np.inf
     max_pts: float = np.inf
+    redraw_flags: list[bool] = field(default_factory=list)
 
 @dataclass
 class BufferStats:

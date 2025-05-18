@@ -352,17 +352,20 @@ def add_periodic_refreshes(events: list[BDNXMLEvent], fps: float, period: float)
         return
 
     frame_period = int(round(period*fps))
+    end_tc = events[-1].tc_out
 
     new_events = []
+    redraw_flags = []
     for event in events:
         frames_duration = (event.tc_out - event.tc_in).frames
         new_events.append(event)
+        redraw_flags.append(False)
 
+        start_idx = len(new_events)
         count = (frames_duration//frame_period - 1)
         if count >= 1:
             original_tc_in = event.tc_in
             final_tc_out = event.tc_out
-            start_idx = len(new_events)
             prev_tc_out = event.tc_in + frame_period
             event.set_tc_out(prev_tc_out)
             for _ in range(count):
@@ -371,14 +374,19 @@ def add_periodic_refreshes(events: list[BDNXMLEvent], fps: float, period: float)
                 prev_tc_out = prev_tc_out + frame_period
                 event.set_tc_out(prev_tc_out)
                 new_events.append(event)
+                redraw_flags.append(True)
             event.set_tc_out(final_tc_out)
             assert len(new_events) == start_idx + count
             # validate
             for k in range(start_idx, len(new_events)):
                 assert new_events[k - 1].tc_out == new_events[k].tc_in
+            assert new_events[start_idx - 1].tc_in == original_tc_in and new_events[-1].tc_out == final_tc_out
         ####
     ####
-    return new_events
+
+    assert events[0].tc_in == new_events[0].tc_in and redraw_flags[0] is False
+    assert end_tc == new_events[-1].tc_out
+    return new_events, redraw_flags
 ####
 
 #%%

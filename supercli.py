@@ -144,7 +144,7 @@ if __name__ == '__main__':
     if args.threads < 0 or args.threads > 10:
         exit_msg("Incorrect number of threads, aborting.")
 
-    if args.redraw_period < 1.0:
+    if 0 < args.redraw_period < 1.0:
         logger.warning("Meaningless redraw_period, setting to zero.")
         args.redraw_period = 0
 

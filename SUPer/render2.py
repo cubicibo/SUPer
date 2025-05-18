@@ -138,6 +138,7 @@ class PaddingEngine:
             return (Box.union(*lwd),)
         assert Box.intersect(*new_lwd).area == 0, f"Padded windows overlap: {new_lwd} from {lwd}."
         return new_lwd
+    ####
 ####
 
 #%%
@@ -147,6 +148,7 @@ class EpochEncoder:
         self.events = ectx.events
         self.box = ectx.box
         self.max_pts = ectx.max_pts
+        self.redraw_flags = ectx.redraw_flags
         self.bdn = bdn
         self.kwargs = kwargs
         self.buffer = PGObjectBuffer()
@@ -183,7 +185,7 @@ class EpochEncoder:
         pbar.set_description("Analyzing", False)
         #get all windowed bitmaps
         pgobjs = [[] for k in range(len(self.windows))]
-        for event in chain(self.events, [None]*2):
+        for event, rflag in chain(zip(self.events, self.redraw_flags), [(None, False)]*2):
             if event is not None:
                 logger.hdebug(f"Event TCin={event.tc_in}")
                 pbar.n += 1
@@ -191,7 +193,7 @@ class EpochEncoder:
                     pbar.refresh()
             for wid, (window, gen) in enumerate(zip(self.windows, gens)):
                 try:
-                    pgobj = gen.send(self.mask_event(window,  event))
+                    pgobj = gen.send((self.mask_event(window,  event), rflag))
                 except StopIteration:
                     pgobj = None
                 if pgobj is not None:
@@ -1281,17 +1283,15 @@ class CTU:
         if split_valid:
             nd = self.depth+1
             costs = map(lambda r: CTU(r, _depth=nd).get_score(composite.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2)),
-                                                                  frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))),
-                        split_layout)
+                                                              frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))), split_layout)
             costs = list(costs) #recursion happens here
             return tuple(map(lambda x: sum(x)/len(costs), zip(*costs)))
         else:
-            return __class__.get_region_cost(composite, frame, self.region)
+            return self.get_region_cost(composite, frame)
 
-    @classmethod
-    def get_region_cost(cls, composite: Image.Image, frame: Image.Image, cbox: Box) -> tuple[float, float]:
-        cropbbox = (cbox.x, cbox.y, cbox.x2, cbox.y2)
-        return cls._compare_f(composite.crop(cropbbox), frame.crop(cropbbox))
+    def get_region_cost(self, composite: Image.Image, frame: Image.Image) -> tuple[float, float]:
+        cropbbox = (self.region.x, self.region.y, self.region.x2, self.region.y2)
+        return __class__._compare_f(composite.crop(cropbbox), frame.crop(cropbbox))
 
     @staticmethod
     def _compare_f(bitmap: Image.Image, current: Image.Image) -> tuple[float, float]:
@@ -1300,7 +1300,7 @@ class CTU:
         :param current: current bitmap under analysis
         :return: comparison score between the two
         """
-        assert bitmap.width == current.width and bitmap.height == current.height, "Different shapes."
+        assert bitmap.size == current.size, "Different shapes."
 
         # Intersect alpha planes
         a_bitmap = np.array(bitmap)
@@ -1334,8 +1334,9 @@ class CTU:
             cross_percentage = 1.0
             score = 1.0
         return score, cross_percentage
-
-###
+    ####
+####
+#%%
 
 class WindowAnalyzer:
     def __init__(self,
@@ -1350,7 +1351,6 @@ class WindowAnalyzer:
         self.overlap_threshold = overlap_threshold
         assert abs(ssim_offset) <= 1.0
         self.ssim_offset = ssim_offset
-
 
     def analyze(self):
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
@@ -1368,7 +1368,7 @@ class WindowAnalyzer:
         ##
 
         while True:
-            rgba = yield pgo_yield
+            rgba, rflag = yield pgo_yield
             pgo_yield = None
 
             if rgba is None:
@@ -1391,13 +1391,17 @@ class WindowAnalyzer:
                 #TODO: maybe do NOT use the bbox when the object is masked!!
                 if has_content:
                     event_container = Box.from_coords(*rgba_i.getbbox())
-                if len(mask) or has_content:
-                    score, cross_percentage = CTU(self.window).get_score(alpha_compo, rgba_i)
-                else:
-                    score, cross_percentage = 1.0, 1.0
+
+                if not rflag:
+                    if len(mask) and has_content:
+                        score, cross_percentage = CTU(self.window).get_score(alpha_compo, rgba_i)
+                    else:
+                        score, cross_percentage = 1.0, 1.0
+                elif has_content: #Don't force a new object when there's nothing...
+                    score, cross_percentage = 0, 1.0
 
                 thr_score = min(1.0, self.ssim_threshold + (1-self.ssim_threshold)*(1-cross_percentage) - 0.008333*(1.0-self.ssim_offset))
-                logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}")
+                logger.hdebug(f"Image analysis: score={score:.05f} cross={cross_percentage:.05f}, fuse={score >= thr_score}, forced={rflag}")
                 if score >= thr_score:
                     alpha_compo.alpha_composite(rgba_i)
                     mask.append(has_content)
@@ -1415,9 +1419,9 @@ class WindowAnalyzer:
             event_cnt += 1
         ####while
         return # StopIteration
-
-#%%
+    ####
 ####
+#%%
 class DSNode:
     def __init__(self,
             objects: list[Optional[ProspectiveObject]],

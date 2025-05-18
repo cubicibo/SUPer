@@ -46,7 +46,8 @@ Both the standalone executables and `python3 supergui.py` will display the graph
  -l, --log-to-file   Set (enable) logging to file and set logging level: [-10: main report, 10: debug, 20: info, 25: iinf, 30: warnings]
  -v, --version       Print the version and exit.
  --layout            Set the epoch and window definition mode. 2 is the preferred default [2: opportunist, 1: normal, 0: basic].
- --ssim-tol          Adjust the SSIM tolerance threshold. This threshold is used for bitmaps classification in effects [-100; 100, def: 0] 
+ --ssim-tol          Adjust the SSIM tolerance threshold. This threshold is used for bitmaps classification in effects [-100; 100, def: 0]
+ --redraw-period     Set the period to redraw the screen, useful for streams with long lasting events [1.0+, def: 0 (off)]
 ```
 
 ### GUI/CLI options
