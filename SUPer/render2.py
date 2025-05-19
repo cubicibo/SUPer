@@ -1272,7 +1272,7 @@ class CTU:
             is_valid &= (lwds[0].area + lwds[1].area)/self.region.area < 0.9 - self.depth/13
         return is_valid, cbox, (lwds if is_valid else None)
 
-    def get_score(self, composite: Image.Image, frame: Image.Image) -> tuple[float, float]:
+    def _get_score(self, composite: Image.Image, frame: Image.Image) -> ...:
         assert composite.size == frame.size == (self.region.dx, self.region.dy)
         split_valid = self.depth < __class__.MAX_DEPTH
         if split_valid:
@@ -1282,16 +1282,40 @@ class CTU:
         #perform recursion up to depth
         if split_valid:
             nd = self.depth+1
-            costs = map(lambda r: CTU(r, _depth=nd).get_score(composite.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2)),
-                                                              frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))), split_layout)
-            costs = list(costs) #recursion happens here
-            return tuple(map(lambda x: sum(x)/len(costs), zip(*costs)))
+            lwd_area = sum(map(lambda b: b.area, split_layout))
+            costs = map(lambda r: CTU(r, _depth=nd)._get_score(composite.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2)),
+                                                                               frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))), split_layout)
+            #recursion happens here
+            return list(costs)
         else:
             return self.get_region_cost(composite, frame)
 
+    def evaluate(self, composite: Image.Image, frame: Image.Image) -> tuple[float, float]:
+        ls_costs = __class__._flatten_costs(self._get_score(composite, frame))
+        sum_area = 0
+        for cost in ls_costs:
+            sum_area += cost[1]
+        score, cross_p = 0, 0
+        for cost in ls_costs:
+            score += cost[1]*cost[0][0]
+            cross_p += cost[1]*cost[0][1]
+        return score/sum_area, cross_p/sum_area
+
     def get_region_cost(self, composite: Image.Image, frame: Image.Image) -> tuple[float, float]:
         cropbbox = (self.region.x, self.region.y, self.region.x2, self.region.y2)
-        return __class__._compare_f(composite.crop(cropbbox), frame.crop(cropbbox))
+        return __class__._compare_f(composite.crop(cropbbox), frame.crop(cropbbox)), self.region.area
+
+    @classmethod
+    def _flatten_costs(cls, costs) -> tuple[float, float, int]:
+        ls_costs = []
+        if isinstance(costs, tuple):
+            return [costs]
+        for cost in costs:
+            if isinstance(cost, list):
+                ls_costs.extend(cls._flatten_costs(cost))
+            elif isinstance(cost, tuple):
+                ls_costs.append(cost)
+        return ls_costs
 
     @staticmethod
     def _compare_f(bitmap: Image.Image, current: Image.Image) -> tuple[float, float]:
@@ -1394,7 +1418,7 @@ class WindowAnalyzer:
 
                 if not rflag:
                     if len(mask) and has_content:
-                        score, cross_percentage = CTU(self.window).get_score(alpha_compo, rgba_i)
+                        score, cross_percentage = CTU(self.window).evaluate(alpha_compo, rgba_i)
                     else:
                         score, cross_percentage = 1.0, 1.0
                 elif has_content: #Don't force a new object when there's nothing...
