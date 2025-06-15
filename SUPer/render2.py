@@ -522,97 +522,16 @@ class EpochEncoder:
                             logger.warning(f"Discarded event at {nodes[ze].tc_pts} to perform a mendatory acquisition right after epoch start.")
                             flags[ze] = -1
                 else:
-                    # event is short, we can't shift it so we just discard it.
-                    logger.warning(f"Discarded event at {nodes[k].tc_pts} colliding with epoch start.")
-                    flags[k] = -1
-                    # ... We're now in big trouble: this event may be followed by normal cases that are now orphaned
-                    # we need to find a new acquisition point, or drop all of these NCs until the next one.
-                    ze = ze_max = k
-                    while (ze_max := ze_max+1) < len(states) and states[ze_max] != PCS.CompositionState.ACQUISITION: pass
-                    # The next acquisition is known to be valid
-                    dts_next, pts_next = (nodes[ze_max].dts(), nodes[ze_max].pts()) if ze_max != len(states) else [np.inf]*2
-                    assert ze_max == len(states) or (flags[ze_max] == 0 and states[ze_max] > 0)
-
-                    #start over: we now need to try to promote a normal case in-between
-                    right = nodes[ze].dts_end() < dts_next and nodes[ze].pts() + pts_delta < pts_next
-                    left = nodes[ze].dts() > nodes[j].dts_end() and nodes[ze].pts() - pts_delta > nodes[j].pts()
-                    drop_from = np.inf
-                    while (ze := ze+1) < ze_max and nodes[ze].dts_end() < dts_next:
-                        # screen wipes are not usable for promotion
-                        if nodes[ze].objects == []:
-                            assert nodes[ze].nc_refresh
-                            continue
-                        #unpromote normal case redefinition (excessively careful).
-                        if nodes[ze].partial:
-                            logger.debug(f"Unpromoted NC with ODS in epoch start collision at {nodes[ze].tc_pts}.")
-                            assert flags[ze] == 1
-                            flags[ze] = 0
-                            nodes[ze].partial = False
-                            drop_from = min(drop_from, ze)
-                        elif any(nodes[ze].new_mask):
-                            drop_from = min(drop_from, ze)
-                        was_refresh = nodes[ze].nc_refresh
-                        keep_dts = nodes[ze].dts() if nodes[ze].is_custom_dts() else None
-                        nodes[ze].set_dts(None)
-                        #simplicity: assume we need a full acquisition
-                        nodes[ze].nc_refresh = False
-
-                        right = nodes[ze].dts_end() < dts_next and nodes[ze].pts() + pts_delta < pts_next
-                        left  = nodes[ze].dts() > nodes[j].dts_end() and nodes[ze].pts() - pts_delta > nodes[j].pts()
-
-                        #allow overlaps -> allow buffering -> try to buffer this acquisition
-                        if allow_overlaps and not right and left and nodes[ze].pts() + pts_delta < pts_next:
-                            margin_left = nodes[ze].dts() - nodes[j].dts_end()
-                            desired_margin = nodes[ze].dts_end() - dts_next + 4/PGDecoder.FREQ
-                            #shift entire acquisition by a few ticks.
-                            if margin_left > desired_margin:
-                                dts_start, dts_stop = nodes[ze].dts(), nodes[ze].dts_end()
-                                nodes[ze].set_dts(max(nodes[ze].dts()-desired_margin, nodes[j].dts_end()))
-                                logger.debug(f"Buffered acquisition at {nodes[ze].tc_pts}={nodes[ze].pts()}, DTS={dts_start}->{dts_stop}, now: {nodes[ze].dts()}->{nodes[ze].dts_end()}")
-                                right = True
-                        if left and right:
-                            break
-                        else:
-                            nodes[ze].nc_refresh = was_refresh
-                            nodes[ze].set_dts(keep_dts)
-
-                    if left and right:
-                        states[ze] = PCS.CompositionState.ACQUISITION
-                        flags[ze] = 0
-                        max_z = ze
-                    else:
-                        max_z = ze_max
-                    buffered = 0
-
-                    for zek in range(j+1, ze):
-                        if -1 == flags[zek]:
-                            continue
-                        pts_rule = nodes[zek].pts() + pts_delta < nodes[ze].pts()
-                        dts_rule = nodes[zek].dts_end() < nodes[ze].dts()
-                        if allow_overlaps and nodes[zek].nc_refresh and pts_rule and buffered < 6 and zek < drop_from:
-                            assert states[zek] == PCS.CompositionState.NORMAL and flags[zek] == 0 and not nodes[zek].partial
-                            if not dts_rule:
-                                if nodes[zek].is_custom_dts():
-                                    logger.debug(f"Encountered custom DTS in epoch start collision id={zek}, overwriting.")
-                                new_dts = max(nodes[j].dts_end(), nodes[ze].dts()-1/PGDecoder.FREQ)
-                                logger.debug(f"Buffered PU at {nodes[zek].tc_pts}={nodes[zek].pts():.04f}, DTS={nodes[zek].dts():.04f} to {new_dts:.04f}.")
-                                nodes[zek].set_dts(new_dts)
-                                buffered += 1
-                        elif (not pts_rule or not dts_rule or buffered >= 6 or zek >= drop_from or not nodes[zek].nc_refresh):
-                            flags[zek] = -1
-                            drop_from = -np.inf #Start dropping everything that follows
-                            logger.warning(f"Discarded event at {nodes[zek].tc_pts} hindering the promoted acquisition at {nodes[ze].tc_pts}.")
-                        else:
-                            assert False, f"S={states[zek]}, R={nodes[zek].nc_refresh} {nodes[zek].tc_pts}"
-
-                    #we iterate here only if left and right are never true
-                    for zek in range(ze+1, max_z):
-                        if -1 != flags[zek]:
-                            flags[zek] = -1
-                            logger.warning(f"Discarded event at {nodes[zek].tc_pts} tied to the dropped event at {nodes[k].tc_pts}.")
-                    ###while ze
+                    #epoch start up to k are all cluttered together... we just move epoch start to k.
+                    logger.warning(f"Epoch Start squeeze: dropping {k} event(s) before new ES at {nodes[k].tc_pts}.")
+                    for zk in range(0, k):
+                        logger.debug(f"Discarded event at {nodes[zk].tc_pts} preceeding new Epoch Start.")
+                        flags[zk] = -1
+                    states[k] = PCS.CompositionState.EPOCH_START
+                    # the encoder function initializes the iterator to the index of epoch start - remove unused one.
+                    states[0] = PCS.CompositionState.ACQUISITION
                     k -= 1
-                    continue
+                    continue # all events up to k are dropped, no need to continue further down.
                 ###event shift
             #Filter the events
             is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or prefer_normal_case or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
@@ -905,7 +824,7 @@ class EpochEncoder:
             return pal_id, pal_manager.get_palette_version(pal_id)
         ####
 
-        i = 0
+        i = states.index(PCS.CompositionState.EPOCH_START)
         double_buffering = [len(self.windows)]*len(self.windows)
         ods_reg = [0]*(2*len(self.windows))
         pcs_id = self.pcs_id
@@ -923,7 +842,7 @@ class EpochEncoder:
         pbar = LogFacility.get_progress_bar(logger, range(n_actions))
         pbar.set_description("Encoding", False)
         pbar.reset(n_actions)
-        #Main conversion loop, using all assets
+        #Generate datastream according to all assets
         while i < n_actions:
             if durs[i][1] != 0:
                 assert i > 0
@@ -1283,8 +1202,8 @@ class CTU:
         if split_valid:
             nd = self.depth+1
             lwd_area = sum(map(lambda b: b.area, split_layout))
-            costs = map(lambda r: CTU(r, _depth=nd)._get_score(composite.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2)),
-                                                                               frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))), split_layout)
+            costs = map(lambda r: __class__(r, _depth=nd)._get_score(composite.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2)),
+                                                                     frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))), split_layout)
             #recursion happens here
             return list(costs)
         else:
