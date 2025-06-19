@@ -210,6 +210,12 @@ class Preprocess:
             return npbm, nppal
 
         else:
+            odim = (img.height, img.width)
+            oimg = img
+            if min(odim) < 8:
+                img_padded = Image.new('RGBA', (max(img.width, 8), max(img.height, 8)), (0, 0, 0, 0))
+                img_padded.paste(img, (0, 0))
+                img = img_padded
             img_out = img.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
             npimg = np.asarray(img_out, dtype=np.uint8)
             nppal = np.asarray(list(img_out.palette.colors.keys()), dtype=np.uint8)
@@ -217,14 +223,14 @@ class Preprocess:
             #Somehow, pillow may sometimes not return all palette entries?? I've seen a case where one ID was consistently missing.
             pil_failed = len(img_out.palette.colors) != 1+max(img_out.palette.colors.values())
 
-            #When PIl fails to quantize alpha channel, there's a clear discrepancy between original and quantized image.
+            #When PIL fails to quantize alpha channel, there's a clear discrepancy between original and quantized image.
             pil_failed = pil_failed or SSIMPW.compare(Image.fromarray(nppal[npimg], 'RGBA'), img) < 0.95
 
             if pil_failed:
                 logger.ldebug("Pillow failed to palettize image, falling back to HexTree.")
-                return cls.quantize(img, colors, quantize_lib=Quantizer.Libs.HEXTREE, **kwargs)
+                return cls.quantize(oimg, colors, quantize_lib=Quantizer.Libs.HEXTREE, **kwargs)
 
-            return npimg, nppal
+            return npimg[:odim[0], :odim[1]], nppal
 
     @staticmethod
     def find_most_opaque(events: list[Image.Image]) -> int:
