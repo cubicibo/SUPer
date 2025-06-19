@@ -82,6 +82,7 @@ def get_kwargs() -> dict[str, Any]:
         'max_kbps': int(max_kbps.value),
         'log_to_file': opts_log[logcombo.value],
         'ssim_tol': int(ssim_tolb.value)/100,
+        'redraw_period': float(acqinttb.value),
         'threads': int(threadscombo.value) if threadscombo.value.lower() != 'auto' else 'auto',
         'daemonize': False,
     }
@@ -91,19 +92,20 @@ def wrapper_mp() -> None:
         return
     try:
         kwargs = get_kwargs()
-    except ValueError:
-        logger.error("Incorrect parameter(s), aborting.")
+    except ValueError as e:
+        logger.error(f"Aborting, incorrect parameter found: {e}.")
         return
     else:
         invalid = False
-        invalid |= not (abs(kwargs['ssim_tol']) <= 1)
-        invalid |= not (0 <= kwargs['insert_acquisitions'])
-        invalid |= not (0 <= kwargs['quality_factor'] <= 1)
-        invalid |= not (0 <= kwargs['refresh_rate'] <= 1)
-        invalid |= not (kwargs['threads'] == 'auto' or 1 <= kwargs['threads'] <= 8)
-        invalid |= not (0 <= kwargs['max_kbps'] <= 48000)
+        invalid = invalid or not (abs(kwargs[evkey := 'ssim_tol']) <= 1)
+        invalid = invalid or not (0 <= kwargs[evkey := 'insert_acquisitions'])
+        invalid = invalid or not (0 <= kwargs[evkey := 'quality_factor'] <= 1)
+        invalid = invalid or not (0 <= kwargs[evkey := 'refresh_rate'] <= 1)
+        invalid = invalid or not (kwargs[evkey := 'threads'] == 'auto' or 1 <= kwargs['threads'] <= 8)
+        invalid = invalid or not (0 <= kwargs[evkey := 'max_kbps'] <= 48000)
+        invalid = invalid or not (kwargs[evkey := 'redraw_period'] == 0 or (kwargs['redraw_period'] >= 1.0 and kwargs['redraw_period'] <= 3600.0))
         if invalid:
-            logger.error("Invalid parameter found, aborting.")
+            logger.error(f"Invalid parameter range found for '{evkey}', aborting.")
             return
 
     do_super.enabled = False
@@ -359,11 +361,18 @@ if __name__ == '__main__':
     all_formats = CheckBox(app, text="Generate both SUP and PES+MUI files.", grid=[0,pos_v:=pos_v+1,2,1], align='left', command=hide_chkbox)
 
     biacqs = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
-    biacqs_val = TextBox(biacqs, width=4, height=1, grid=[1,0], text="2")
-    Text(biacqs, "Insert acquisition after N palette updates. [0: off, 2-5: advised]: ", grid=[0,0], align='left', size=11)
+    biacqs_val = TextBox(biacqs, width=4, height=1, grid=[1,0], text="3")
+    Text(biacqs, "Insert acquisition after N palette updates [0: off, 2-5: advised]: ", grid=[0,0], align='left', size=11)
     Hovertip(biacqs.tk, "Long palette effects can alter the bitmap quality and be visible to the viewer if the end\n"\
                         "result remains on screen. To improve psychovisual quality, an acquisition can be added after\n"\
                         "to hide small artifacts originating from the palette animation encoding.")
+
+    bacqint = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
+    acqinttb = TextBox(bacqint, width=4, height=1, grid=[1,0], text="0.0")
+    Text(bacqint, "Anchor interval [1.0 or above, 0: disabled] (seconds): ", grid=[0,0], align='left', size=11)
+    Hovertip(bacqint.tk, "Insert anchors at the specified interval to let decoders catch-up on long-lasting events.\n"\
+                         "0: disabled. minimum: 1 second. Small values may increase bitrate significantly.")
+
 
     bssimtol = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1, 2, 1], align='left')
     ssim_tolb = TextBox(bssimtol, width=4, height=1, grid=[1,0], text="0")

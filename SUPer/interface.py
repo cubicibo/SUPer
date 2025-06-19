@@ -140,6 +140,7 @@ def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[L
 
     # All events in list are fully transparent, return empty context list.
     if 0 == len(running_ev):
+        leng.destroy()
         return ectx
 
     for ev in reversed(events[:-k]):
@@ -466,14 +467,14 @@ class BDNRender:
                 logger.error("=> Stream has a PTS/DTS issue!!")
                 self.valid_stream = False
             elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
-                logger.info(f"Checking PGS bitrate and buffer usage w.r.t max bitrate: {max_bitrate} Kbps...")
-                max_bitrate = int(max_bitrate*1000/8)
-                warnings += not test_rx_bitrate(self._epochs, max_bitrate, final_fps)
+                logger.info(f"Checking PGS bitrate and buffer usage w.r.t user max bitrate: {max_bitrate} Kbps...")
+                if not test_rx_bitrate(self._epochs, int(max_bitrate*1000/8), final_fps):
+                    logger.warning("Detected buffer underflow(s) given the provided test bitrate.")
         if compliant:
             if warnings == 0:
-                logger.info("=> Output PGS seems compliant.")
+                logger.info("=> Output PGS is compliant.")
             if warnings > 0:
-                logger.warning("=> Excessive bandwidth detected, testing with mux required.")
+                logger.warning("=> Output PGS seems compliant but has minor issues (see warnings).")
         else:
             logger.error("=> Output PGS is not compliant. Expect display issues or decoder crash.")
 
