@@ -80,7 +80,7 @@ class LeakyBuffer:
         self.good_ds &= self.used_bytes >= 0
 
         if not self.good_ds and isinstance(segment, ENDS):
-            logger.error(f"PG stream underflow at {self._tc_func(segment.tpts)}: {self.used_bytes} bytes.")
+            logger.warning(f"PG stream underflow at {self._tc_func(segment.tpts)}: {self.used_bytes} bytes.")
         return self.used_bytes >= 0
 
     def set_bitrate(self, size_ds: int, curr_ts: int, prev_ts: int) -> None:
@@ -137,9 +137,9 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
     stats = leaky.get_stats()
 
     avg_bitrate = sum(map(lambda x: len(bytes(x)), epochs))/(dur_offset/PGDecoder.FREQ)
-    logger.iinfo(f"Bitrate: AVG={avg_bitrate/(128*1024):.04f} Mbps, PEAK_1s={stats[2]:.03f} Mbps @ {leaky.stats.tsavg}.")
+    logger.iinfo(f"Bitrate: AVG={avg_bitrate/(128*1024):.04f} Mbps, PEAK(1s)={stats[2]:.03f} Mbps @ {leaky.stats.tsavg}.")
 
-    f_log_fun = logger.iinfo if is_ok else logger.error
+    f_log_fun = logger.iinfo if is_ok else logger.warning
     f_log_fun(f"Target bitrate underflow margin (higher is better): AVG={stats[1]:.02f}%, MIN={stats[0]:.02f}% @ {leaky.stats.tsmin}")
     return is_ok
 ####
@@ -154,17 +154,21 @@ def test_diplayset(ds: DisplaySet) -> bool:
     :param ds: Display Set to test for structural compliancy
     """
     comply = ds.pcs is not None and isinstance(ds[0], PCS)
+    comply = comply and 0 <= ds.pcs.n_objects <= 2 and ds.pcs.n_objects == len(ds.pcs.cobjects)
     if ds.pcs.composition_state != PCS.CompositionState.NORMAL:
         comply &= ds.pcs.pal_flag is False # "Palette update on epoch start or acquisition."
-        comply &= ds.pcs.pal_id < 8 # "Using undefined palette ID."
+        comply &= ds.wds is not None
+    comply = comply and ds.pcs.pal_id < 8 # "Using undefined palette ID."
     if ds.wds:
         comply &= isinstance(ds[1], WDS)
         comply &= ds.pcs.pal_flag is False # "Manipulating windows on palette update (conflicting display updates)."
-        comply &= len(ds.wds.windows) <= 2 # "More than two windows."
+        comply &= 1 <= len(ds.wds.windows) <= 2 # "Unusual window count."
     if ds.pds:
+        pds_ids = set()
         for pds in ds.pds:
+            comply &= pds.p_id not in pds_ids
+            pds_ids.add(pds.p_id)
             if ds.pcs.pal_flag:
-                comply &= len(ds) == 3 # "Unusual display set structure for a palette update."
                 comply &= ds.pcs.pal_id == pds.p_id # "Palette ID mismatch between PCS and PDS on palette update."
             comply &= pds.p_id < 8 # "Using undefined palette ID."
             comply &= pds.n_entries <= 256 # "Defining more than 256 palette entries."
@@ -204,6 +208,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
             for wd in epoch[0].wds.windows:
                 if wd.h_pos + wd.width > epoch[0].pcs.width or wd.v_pos + wd.height > epoch[0].pcs.height:
                     logger.error(f"Window {wd.window_id} out of screen in epoch starting at {to_tc(epoch[0].pcs.pts)}.")
+                    compliant = False
 
         last_ds = []
         for kd, ds in enumerate(epoch.ds):
@@ -214,6 +219,9 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                 prev_pts = epoch.ds[kd-1].pcs.pts
             else:
                 logger.warning(f"Two display sets at {to_tc(current_pts)}.")
+            if kd > 0 and ds.pcs.composition_state == PCS.CompositionState.EPOCH_START:
+                logger.error(f"Found an Epoch Start at {to_tc(current_pts)} in the middle of an epoch.")
+                compliant = False
 
             is_dupe = False
             if len(ds) == len(last_ds) and ds.pcs.composition_n == prev_pcs_id:
@@ -265,10 +273,10 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                     pals[seg.p_id] |= new_pal
                     if next(filter(lambda x: not (16 <= x.y <= 235 and 16 <= x.cb <= 240 and 16 <= x.cr <= 240), new_pal), None) is not None:
                         logger.warning(f"Palette is not limited range at {to_tc(current_pts)}.")
-                        warnings += 1
+                        compliant = False
                     if (pal_ff_entry := pals[seg.p_id].get(0xFF, None)) is not None and pal_ff_entry.alpha != 0:
                         logger.warning(f"Palette entry 0xFF is set and not transparent at {to_tc(current_pts)}.")
-                        warnings += 1
+                        compliant = False
 
                 elif isinstance(seg, ODS):
                     if seg.flags & ODS.ODSFlags.SEQUENCE_FIRST:
@@ -305,8 +313,8 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                         # The Coded Object Buffer can hold up to 1 MiB of raw PES data
                         # This is roughly: "16 full PES packets" or "16 full b'PG' segments + 16*9 bytes"
                         if cumulated_ods_size >= PGDecoder.CODED_BUF_SIZE-(16*9):
-                            logger.warning(f"Coded object size >1 MiB at {to_tc(current_pts)} is unsupported by old decoders. UHD BD will be OK.")
-                            warnings += 1
+                            logger.error(f"Coded buffer overflow at {to_tc(current_pts)}: coded object size exceed 1 MiB.")
+                            compliant = False
                         cumulated_ods_size = 0
 
                         if seg.o_id in ods_filled and ods_hash.get(seg.o_id, None) != data_hash:
