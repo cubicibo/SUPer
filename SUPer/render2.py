@@ -529,37 +529,16 @@ class EpochEncoder:
             nc_not_ok = normal_case_possible and j_nc == 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts())
             #Impossible normal case (could be disabled) or Not a normal case and collide with epoch start
             if nc_not_ok or (not normal_case_possible and j == 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts())):
-                needed_shift_f = max(1, int(np.ceil((5 + PGDecoder.FREQ*max(nodes[j].dts_end() - dts_start, nodes[j].pts() + pts_delta - nodes[k].pts()))/(PGDecoder.FREQ/self.bdn.fps))))
+                #epoch start up to k are all cluttered together... we just move epoch start to k.
+                logger.warning(f"Epoch Start squeeze: dropping {k} event(s) before new ES at {nodes[k].tc_pts} (old ES: {nodes[0].tc_pts}).")
+                for zk in range(0, k):
+                    logger.debug(f"Discarded event at {nodes[zk].tc_pts} preceeding new Epoch Start.")
+                    flags[zk] = -1
+                states[k] = PCS.CompositionState.EPOCH_START
+                # the encoder function initializes the iterator to the index of epoch start - remove unused one.
+                states[0] = PCS.CompositionState.ACQUISITION
+                continue #(or break)
 
-                #K-node are always a mandatory acquisition: do we have time to decode and compose this (worst case)?
-                if needed_shift_f < (durs[k] - 1) >> 1 and (durs[k] - 1 - needed_shift_f)/self.bdn.fps > pts_delta:
-                    prev_tc = nodes[k].tc_pts
-                    nodes[k].tc_pts = nodes[k].tc_pts + needed_shift_f
-                    logger.warning(f"Shifted event at {prev_tc} to {nodes[k].tc_pts} to account for epoch start and compliancy.")
-                    #wipe all events in between epoch start and this point
-                    can_buffer = allow_overlaps
-                    for ze in range(j+1, k):
-                        can_buffer &= not any(nodes[ze].new_mask)
-                        pts_rule = nodes[ze].pts() + pts_delta < nodes[k].pts()
-                        dts_rule = nodes[ze].dts_end() < nodes[k].dts()
-                        if flags[ze] >= 0 and can_buffer and nodes[ze].nc_refresh and pts_rule:
-                            if not dts_rule:
-                                nodes[ze].set_dts(max(nodes[k].dts()-1/PGDecoder.FREQ, nodes[j].dts_end()))
-                            flags[ze] = 0
-                        elif flags[ze] >= 0 and (not dts_rule or not pts_rule or not can_buffer or not nodes[ze].nc_refresh):
-                            logger.warning(f"Discarded event at {nodes[ze].tc_pts} to perform a mendatory acquisition right after epoch start.")
-                            flags[ze] = -1
-                else:
-                    #epoch start up to k are all cluttered together... we just move epoch start to k.
-                    logger.warning(f"Epoch Start squeeze: dropping {k} event(s) before new ES at {nodes[k].tc_pts}.")
-                    for zk in range(0, k):
-                        logger.debug(f"Discarded event at {nodes[zk].tc_pts} preceeding new Epoch Start.")
-                        flags[zk] = -1
-                    states[k] = PCS.CompositionState.EPOCH_START
-                    # the encoder function initializes the iterator to the index of epoch start - remove unused one.
-                    states[0] = PCS.CompositionState.ACQUISITION
-                    continue #(or break)
-                ###event shift
             #Filter the events
             is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or prefer_normal_case or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
             j_iter = j_nc if is_normal_case else j
@@ -604,6 +583,8 @@ class EpochEncoder:
                 states[k] = PCS.CompositionState.NORMAL #else equals Acquisition
                 logger.einfo(f"Object refreshed with a Normal Case at {nodes[k].tc_pts}.")
             last_dts = nodes[k].dts()
+
+        assert 1 == sum(map(lambda cs: cs == PCS.CompositionState.EPOCH_START, states))
         ####while (k := k - 1) > 0
     ####filter_events
 
