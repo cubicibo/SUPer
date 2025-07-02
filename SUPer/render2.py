@@ -465,14 +465,43 @@ class EpochEncoder:
         #At this point, we have the stream acquisitions. Some may be impossible,
         # so we have to filter out some less relevant events.
         logger.debug("Backtracking to filter acquisitions and events.")
-        k = len(states)-1
-        while k > 0:
-            #If the acquisition is not a mandatory one or was already discarded
-            if not absolutes[k] or flags[k] == -1: #or acqs[k]:
-                if flags[k] == -1:
-                    logger.ldebug(f"Not analyzing event at {nodes[k].tc_pts} due to filtering (f={absolutes[k]}, a={flags[k]}).")
-                k -= 1
+        k = len(states)
+        last_dts = nodes[-1].dts() + 1.0
+
+        while (k := k - 1) > 0:
+            if flags[k] < 0:
+                logger.ldebug(f"Not analyzing event at {nodes[k].tc_pts} due to filtering (f={absolutes[k]}, a={flags[k]}).")
                 continue
+            if states[k] == PCS.CompositionState.NORMAL:
+                last_dts = nodes[k].dts()
+                continue
+
+            #look-up to next acquisition to see which objects are relevant in our case
+            zk = k
+            while (zk := zk + 1) < len(states) and states[zk] == PCS.CompositionState.NORMAL: pass
+            upper_bound = (nodes[-1].idx+1) if zk == len(states) else nodes[zk].idx
+            assert upper_bound > nodes[k].idx > 0
+            dec_objs = [obj if __class__._object_is_relevant(obj, flags, slice(nodes[k].idx, upper_bound)) else None for obj in nodes[k].objects]
+            diff = sum(map(lambda x: x is not None, nodes[k].objects)) - sum(map(lambda x: x is not None, dec_objs))
+
+            if 1 == diff and 2 == len(self.windows):
+                old_object_list = nodes[k].objects
+                nodes[k].objects = dec_objs
+                real_dts_end = nodes[k].dts_end()
+                real_margin = last_dts - real_dts_end
+                if round(PGDecoder.FREQ*real_margin) < 0:
+                    if allow_overlaps:
+                        new_dts = nodes[k].dts()+real_margin
+                        logger.debug(f"Shifted DTS of Acq at {nodes[k].tc_pts} from {nodes[k].dts():.04f} to {new_dts:.04f} (collision due to reduced ODS count).")
+                        nodes[k].set_dts(new_dts)
+                    else:
+                        # force object to be encoded despite having nothing visible at all
+                        logger.debug(f"Adding an empty object in Acq at {nodes[k].tc_pts} due to DTS collision with a reduced ODS count.")
+                        nodes[k].objects = old_object_list
+                        discarded_obj_id = dec_objs.index(None)
+                        nodes[k].objects[discarded_obj_id].mask[nodes[k].idx - nodes[k].objects[discarded_obj_id].f] = True
+                ### if round
+            #### if 1 ==
 
             assert states[k] == PCS.CompositionState.ACQUISITION, f"Filtering error: {nodes[k].tc_pts} k={nodes[k].idx} is not an acquisition. NM={nodes[k].new_mask} OM={list(map(lambda x: x is not None, nodes[k].objects))}."
             dts_start_nc = dts_start = nodes[k].dts()
@@ -501,38 +530,16 @@ class EpochEncoder:
             nc_not_ok = normal_case_possible and j_nc == 0 and (nodes[j_nc].dts_end() >= dts_start_nc or nodes[j_nc].pts() + pts_delta >= nodes[k].pts())
             #Impossible normal case (could be disabled) or Not a normal case and collide with epoch start
             if nc_not_ok or (not normal_case_possible and j == 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts())):
-                needed_shift_f = max(1, int(np.ceil((5 + PGDecoder.FREQ*max(nodes[j].dts_end() - dts_start, nodes[j].pts() + pts_delta - nodes[k].pts()))/(PGDecoder.FREQ/self.bdn.fps))))
+                #epoch start up to k are all cluttered together... we just move epoch start to k.
+                logger.warning(f"Epoch Start squeeze: dropping {k} event(s) before new ES at {nodes[k].tc_pts} (old ES: {nodes[0].tc_pts}).")
+                for zk in range(0, k):
+                    logger.debug(f"Discarded event at {nodes[zk].tc_pts} preceeding new Epoch Start.")
+                    flags[zk] = -1
+                states[k] = PCS.CompositionState.EPOCH_START
+                # the encoder function initializes the iterator to the index of epoch start - remove unused one.
+                states[0] = PCS.CompositionState.ACQUISITION
+                continue #(or break)
 
-                #K-node are always a mandatory acquisition: do we have time to decode and compose this (worst case)?
-                if needed_shift_f < (durs[k] - 1) >> 1 and (durs[k] - 1 - needed_shift_f)/self.bdn.fps > pts_delta:
-                    prev_tc = nodes[k].tc_pts
-                    nodes[k].tc_pts = nodes[k].tc_pts + needed_shift_f
-                    logger.warning(f"Shifted event at {prev_tc} to {nodes[k].tc_pts} to account for epoch start and compliancy.")
-                    #wipe all events in between epoch start and this point
-                    can_buffer = allow_overlaps
-                    for ze in range(j+1, k):
-                        can_buffer &= not any(nodes[ze].new_mask)
-                        pts_rule = nodes[ze].pts() + pts_delta < nodes[k].pts()
-                        dts_rule = nodes[ze].dts_end() < nodes[k].dts()
-                        if flags[ze] >= 0 and can_buffer and nodes[ze].nc_refresh and pts_rule:
-                            if not dts_rule:
-                                nodes[ze].set_dts(max(nodes[k].dts()-1/PGDecoder.FREQ, nodes[j].dts_end()))
-                            flags[ze] = 0
-                        elif flags[ze] >= 0 and (not dts_rule or not pts_rule or not can_buffer or not nodes[ze].nc_refresh):
-                            logger.warning(f"Discarded event at {nodes[ze].tc_pts} to perform a mendatory acquisition right after epoch start.")
-                            flags[ze] = -1
-                else:
-                    #epoch start up to k are all cluttered together... we just move epoch start to k.
-                    logger.warning(f"Epoch Start squeeze: dropping {k} event(s) before new ES at {nodes[k].tc_pts}.")
-                    for zk in range(0, k):
-                        logger.debug(f"Discarded event at {nodes[zk].tc_pts} preceeding new Epoch Start.")
-                        flags[zk] = -1
-                    states[k] = PCS.CompositionState.EPOCH_START
-                    # the encoder function initializes the iterator to the index of epoch start - remove unused one.
-                    states[0] = PCS.CompositionState.ACQUISITION
-                    k -= 1
-                    continue # all events up to k are dropped, no need to continue further down.
-                ###event shift
             #Filter the events
             is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or prefer_normal_case or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
             j_iter = j_nc if is_normal_case else j
@@ -571,13 +578,15 @@ class EpochEncoder:
                     for ko, (obj, mask) in enumerate(zip(nodes[l].objects, nodes[l].new_mask)):
                         objs[ko] &= (obj is not None) and (not mask)
 
-            states[k] = PCS.CompositionState.NORMAL if is_normal_case else PCS.CompositionState.ACQUISITION
             nodes[k].partial = is_normal_case
             flags[k] = int(is_normal_case)
             if is_normal_case:
+                states[k] = PCS.CompositionState.NORMAL #else equals Acquisition
                 logger.einfo(f"Object refreshed with a Normal Case at {nodes[k].tc_pts}.")
-            k -= 1
-        ####while k > 0
+            last_dts = nodes[k].dts()
+
+        assert 1 == sum(map(lambda cs: cs == PCS.CompositionState.EPOCH_START, states))
+        ####while (k := k - 1) > 0
     ####filter_events
 
     @staticmethod
@@ -627,6 +636,13 @@ class EpochEncoder:
             return np.array([widths[0], 0], np.int32), (sum(widths), max(heights))
         return np.array([0, heights[0]], np.int32), (max(widths), sum(heights))
 
+    @staticmethod
+    def _object_is_relevant(pgo: ProspectiveObject, flags: list[int], sl: slice) -> bool:
+        if pgo is None:
+            return False
+        assert len(flags) >= len(pgo.mask)
+        return any(map(lambda z: z[0] and z[1] >= 0, zip(pgo.mask[sl.start-pgo.f:sl.stop-pgo.f], flags[sl])))
+
     def _generate_acquisition_ds(self, i: int, k: int, pgobs_items, node: 'DSNode', double_buffering: list[int],
                                  has_two_objs: bool, ods_reg: list[int], c_pts: float, normal_case_refresh: bool, flags: list[int]) -> ...:
         #box_to_crop = lambda cbox: {'hc_pos': cbox.x, 'vc_pos': cbox.y, 'c_w': cbox.dx, 'c_h': cbox.dy}
@@ -635,7 +651,7 @@ class EpochEncoder:
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
         # and then pass that to the optimiser. Colors are efficiently distributed on the objects.
         if has_two_objs and normal_case_refresh is False:
-            compositions = [(wid, pgo) for wid, pgo in pgobs_items if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]))]
+            compositions = [(wid, pgo) for wid, pgo in pgobs_items if __class__._object_is_relevant(pgo, flags, slice(i, k))]
             assert len(compositions) == 2
             #todo: stack using slot dimensions?
             offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x[1].box, compositions)))
@@ -662,7 +678,7 @@ class EpochEncoder:
 
             coords = np.zeros((2,), np.int32)
             for wid, pgo in pgobs_items:
-                if not (pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f])):
+                if __class__._object_is_relevant(pgo, flags, slice(i, k)):
                     double_buffering[wid] = len(self.windows) - double_buffering[wid]
                     oid = wid + double_buffering[wid]
 
@@ -707,7 +723,7 @@ class EpochEncoder:
 
             id_skipped = None
             for wid, pgo in pgobs_items:
-                if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
+                if not __class__._object_is_relevant(pgo, flags, slice(i, k)):
                     if normal_case_refresh:
                         #An object may exist but be masked for the whole acquisition: pad palette.
                         pals.append([Palette()] * (k-i))
@@ -878,7 +894,7 @@ class EpochEncoder:
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
             for wid, pgo in pgobs_items:
-                if pgo is None or not np.any(pgo.mask[i-pgo.f:k-pgo.f]):
+                if not __class__._object_is_relevant(pgo, flags, slice(i, k)):
                     continue
                 has_two_objs += 1
 
@@ -1000,7 +1016,7 @@ class EpochEncoder:
                         pgobs_items = get_obj(k-1, pgobjs).items()
                         has_two_objs = 0
                         for wid, pgo in pgobs_items:
-                            if pgo is None or not np.any(pgo.mask[k-1-pgo.f:k-pgo.f]):
+                            if not __class__._object_is_relevant(pgo, flags, slice(k-1, k)):
                                 continue
                             has_two_objs += 1
 
@@ -1214,6 +1230,8 @@ class CTU:
         sum_area = 0
         for cost in ls_costs:
             sum_area += cost[1]
+        if sum_area == 0: #no active area, everything fits
+            return 1.0, 1.0
         score, cross_p = 0, 0
         for cost in ls_costs:
             score += cost[1]*cost[0][0]
@@ -1222,7 +1240,9 @@ class CTU:
 
     def get_region_cost(self, composite: Image.Image, frame: Image.Image) -> tuple[float, float]:
         cropbbox = (self.region.x, self.region.y, self.region.x2, self.region.y2)
-        return __class__._compare_f(composite.crop(cropbbox), frame.crop(cropbbox)), self.region.area
+        scores = __class__._compare_f(composite.crop(cropbbox), frame.crop(cropbbox))
+        area_coeff = 0.325 if all(map(lambda s: s == 1.0, scores)) else 1.0
+        return scores, self.region.area*area_coeff
 
     @classmethod
     def _flatten_costs(cls, costs) -> tuple[float, float, int]:
@@ -1395,7 +1415,7 @@ class DSNode:
         return sum(map(lambda w: np.ceil(PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC), self.windows))
 
     def set_dts(self, dts: Optional[float]) -> None:
-        assert dts is None or dts <= self.dts() or self.nc_refresh
+        assert dts is None or dts <= self.dts() or (self.nc_refresh and dts < self.pts())
         self._dts = round(dts*PGDecoder.FREQ) if dts is not None else None
 
     def dts_end(self) -> float:
