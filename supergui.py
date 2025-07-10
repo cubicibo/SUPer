@@ -24,9 +24,6 @@ import time
 import signal
 from typing import Optional, Any, Callable
 
-from warnings import filterwarnings
-filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
-
 ### CONSTS
 SUPER_STRING = "Make it SUPer!"
 
@@ -296,7 +293,7 @@ if __name__ == '__main__':
     meipass = getattr(sys, '_MEIPASS', None)
     ico_paths = Path(Path.cwd() if meipass is None else meipass)
     ico_paths = next(filter(lambda x: x.exists(), map(lambda fl: Path.joinpath(ico_paths, fl, 'icon.ico'), ['misc', 'lib', '.'])), None)
-    if ico_paths is not None and not (is_win32 and meipass is not None):
+    if ico_paths is not None:#and not (is_win32 and meipass is not None):
         from PIL import Image
         app.icon = Image.open(ico_paths)
 

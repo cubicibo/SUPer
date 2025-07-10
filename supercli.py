@@ -18,9 +18,6 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from warnings import filterwarnings
-filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
-
 import multiprocessing as mp
 if __name__ == '__main__':
     mp.freeze_support()

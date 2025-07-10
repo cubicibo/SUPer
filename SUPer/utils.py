@@ -21,6 +21,10 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 import logging
 import numpy as np
 
+from warnings import filterwarnings
+filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
+filterwarnings("ignore", message=r"Kernel", module="SSIM_PIL")
+
 from typing import Optional, TypeVar, Union
 from logging.handlers import BufferingHandler
 from enum import Enum, IntEnum
@@ -31,6 +35,7 @@ from dataclasses import dataclass
 from contextlib import nullcontext
 from functools import lru_cache
 from SSIM_PIL import compare_ssim
+
 
 try:
     from tqdm import tqdm

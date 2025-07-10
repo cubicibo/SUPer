@@ -29,7 +29,7 @@ Both the standalone executables and `python3 supergui.py` will display the graph
  -i, --input         Input BDNXML file [Mandatory]
  -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
  -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
- -q, --quantizer     Set the image quantization mode. [0: QtzrUTC, 1: Pillow, 2: HexTree, 3: libimagequant/pngquant, def: 3]
+ -q, --quantizer     Set the image quantization mode. [0: Qtzr, 1: Pillow, 2: HexTree, 3: libimagequant/pngquant, def: 3]
  -n, --allow-normal  Flag to allow normal case object redefinition, can reduce the number of dropped events on complex animations.
  -k, --prefer-normal Flag to always prefer normal case object redefinition, can reduce the overall bitrate.
  -t, --threads       Set the number of concurrent threads to use. Default is 0 (autoselect), maximum is 8.
@@ -82,11 +82,15 @@ Higher quality quantizers will generally consume more bandwidth:
 ### Example
 `python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --quantizer 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`
 
-### How SUPer works
-SUPer implements an encoding engine that exploits most of the Presentation Graphic format specification described in patents US8638861B2 and US20090185789A1. PG decoders, while designed to be cheap, feature a few nifty capabilities like palette updates, object redefinition and events buffering and shift all of the complexity on the encoder end. SUPer bears that complexity, analyzes each input images and encodes a sequence of similar images together into a single presentation graphic (bitmap). This dramatically reduces the decoding and composition bandwidth and allows to perform complex animations while the decoder is decoding the next bitmaps.
+### References
+- US20090185789A1 (Panasonic) - Stream shaping, decoder model, segments timing and stream compliance
+- US8638861B2 (Sony)- Segments syntax and buffering
+- US7620297B2 (Panasonic) - Decoder model, references management
 
-- Official PG decoders have a specified bandwidth and can refresh the display ever so often. The size of the largest graphic in an epoch sets the decoding time, and SUPer may be obligated to drop events sporadically to produce a compliant datastream.
-- Palette updates are instantaneous and not subject to decoding constraints. SUPer tries to use them whenever possible.
+### How SUPer works
+SUPer implements an encoding engine that exploits most of the Presentation Graphic features presented in the aforementionned patents. These nifty capabilities like palette updates, events buffering and objects management must be taken care of by the encoder, which SUPer does. Notably, it analyzes every input images and encodes sequences of similar images together into a single presentation graphic (bitmap) to reduce bandwidth and enables for complex animations within the strict specifications.
+
+Decoders are specified to operate at a fixed bandwidth and can refresh the display ever so often. The size of the largest graphic in an epoch sets the decoding delay: SUPer may drop events sporadically to produce compliant datastreams.
 
 ## Special Thanks
 - Masstock for advanced testing

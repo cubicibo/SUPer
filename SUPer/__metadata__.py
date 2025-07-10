@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Copyright (C) 2024 cibo
+Copyright (C) 2025 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 
 SUPer is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 __MAJOR = 0
 __MINOR = 2
-__REVISION = 7
+__REVISION = 8
 
 __name__    = "SUPer"
 __version__ = '.'.join(map(str, [__MAJOR, __MINOR, __REVISION]))
