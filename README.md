@@ -1,35 +1,32 @@
 # SUPer
-SUPer is a HDMV PGS ("BD SUP") encoder. It generates fully compliant Presentation Graphic Streams from BDN XML + PNG assets.
-Unlike existing free and professionnal SUP converters, SUPer analyzes and re-renders the caption graphics internally to fully exploit the PGS format. Caption files generated with SUPer may feature soft-sub typesetting effects like karaokes, masking, fades, basic moves, and are guaranteed to work on your favorite Blu-ray Disc player.
-
-Two output formats are supported: SUP and PES+MUI. The later is commonly used in professional authoring suites.
+SUPer is a HDMV PGS ("BD SUP") encoder. It generates fully compliant Presentation Graphic Streams from BDN XML + PNG assets. Caption files generated with SUPer may feature soft-sub typesetting effects like karaokes, masking, fades, basic moves, and are guaranteed to work on your favorite Blu-ray Disc player.
 
 ## Usage
 SUPer is distributed as stand-alone executable, or as an installable Python package with gui/cli user scripts.
 
-If you wish to execute SUPer in your own Python environment, you may first install the package:<br/>
-`python3 -m pip install ./SUPer`,  where `SUPer` is the present repository.
+If you wish to execute SUPer in your own Python environment, you may first install the package: `python3 -m pip install ./SUPer`,  where `SUPer` is the present repository.
 
-## Input file format
-SUPer only accepts Sony BDN + PNG assets as input. These may be generated via [ass2bdnxml](https://github.com/cubicibo/ass2bdnxml) or avs2bdnxml. Exports from other tools like SubtitleEdit are untested but should work nonetheless.
+## Input and Output formats
+- Only Sony BDN + PNG assets are accepted as input. These may be generated via [ass2bdnxml](https://github.com/cubicibo/ass2bdnxml) or avs2bdnxml.
+- Output: SUP and/or PES+MUI. The later is commonly used in professional authoring suites.
 
 ## config.ini
-The config.ini file contains permanent configuration items. Notably, a relative or absolute path to an image quantizer (either pngquant[.exe] or libimagequant[.dll, .so]) and options can be specified. If pngquant is in PATH, the name is sufficient. An external quantizer will offer higher quality than the internal one.
+The config.ini file stores permanent configurations. Notably, a relative or absolute path to an image quantizer (either pngquant[.exe] or libimagequant[.dll, .so]). If pngquant is in PATH, the name is sufficient. An external quantizer may offer higher quality than the internal ones.
 
-### Graphical User Interface
-Both the standalone executables and `python3 supergui.py` will display the graphical user interface. You can select the input BDN XML, the output file name and adapt the stream structure with some options. The GUI always executes aside of a command-line window providing progress and logging information.
+### Graphical user interface
+Both the standalone executables and `python3 supergui.py` will display the graphical user interface. You can select the input BDN, the output file name and select the encoder features. The GUI always executes aside of a command-line window providing progress and logging information.
 
-- Select the input BDN XML file. The file must resides in the same directory as the PNG assets.
-- Select the desired output file and extension using the Windows explorer.
+- Select the input BDN XML file. It must be in the same directory as the PNG assets.
+- Select the desired output file and extension.
 - "Make it SUPer" starts the conversion process. The actual progress is printed in the command line window.
 
 ### Command line interface
-`supercli.py` is essentially the command line equivalent to `supergui.py`. 
+`supercli.py` is the command line equivalent to `supergui.py`.
 
 `python3 supercli.py [PARAMETERS] outputfile`
 
 ```
- -i, --input         Input BDNXML file.
+ -i, --input         Input BDNXML file [Mandatory]
  -c, --compression   Set the time margin required to perform an acquisition, affects stream compression. [int, 0-100, def: 65]
  -a, --acqrate       Set the acquisition rate, lower values will compress the stream but lower quality. [int, 0-100, def: 100]
  -q, --quantizer     Set the image quantization mode. [0: QtzrUTC, 1: Pillow, 2: HexTree, 3: libimagequant/pngquant, def: 3]
@@ -38,7 +35,7 @@ Both the standalone executables and `python3 supergui.py` will display the graph
  -t, --threads       Set the number of concurrent threads to use. Default is 0 (autoselect), maximum is 8.
  -b, --bt            Set the target BT matrix [601, 709, 2020, def: 709]
  -p, --palette       Flag to always write the full palette (enforced for PES).
- -d, --ahead         Flag to enable palette update buffering to drop fewer events.
+ -d, --ahead         Flag to enable display set buffering to drop fewer events.
  -y, --yes           Flag to overwrite output file if it already exists.
  -w, --withsup       Flag to write both SUP and PES+MUI files.
  -m, --max-kbps      Set the maximum bitrate to test the output against. Recommended range: [500-16000].
@@ -50,44 +47,43 @@ Both the standalone executables and `python3 supergui.py` will display the graph
  --redraw-period     Set the period to redraw the screen, useful for streams with long lasting events [1.0+, def: 0 (off)]
 ```
 
-### GUI/CLI options
-Here are some additional informations on selected options, especially those that shape the datastream and affect the output:
-- Compression rate: minimum time margin (in %) between two events to perform an acquisition.
+### Options breakdown
+Here is a brief summary of the features that shape the output datastream:
+- Compression rate: minimum time threshold (in %) between two events to perform a mandatory refresh over a palette update.
 - Acquisition rate: Secondary compression parameter. Leave it untouched unless a lower bitrate is needed.
 - Quantization: [Image quantizer](#image-quantizers) to use. pngquant/libimagequant (3) is recommended.
-- Allow normal case: allow to update a single object out of two when there's no enough time to refresh both, it may reduce the count of dropped events.
-- Prefer normal case: Update only one composition out of the two, even when decoding time is sufficient to refresh both (which is the default). This can significantly reduce the bitrate, but the composition objects can no longer share palette entries.
-- Palette update buffering: decode palette updates early to drop fewer events, right before decoding of new bitmaps.
+- Allow normal case[^1]: allow to update a single object out of two when there is not enough time to refresh both. It may reduce the count of dropped events.
+- Prefer normal case[^1]: Update only one composition out of the two, even when decoding time is sufficient to refresh both. This can significantly reduce the bitrate, but compositions cannot share palette entries in these situations.
+- display set buffering[^1]: allow to decode data early to drop fewer events.
 - Insert acquisition: perform a screen refresh after a palette animation. Some palette animations may cause artifacts that remain on the display, a refresh will hide them. This can impact the bitrate as new bitmaps are inserted in the stream.
-- Logging: logging level -10 creates a single file listing solely the filtering decisions, if any (e.g. dropped events, normal case object redefinition).
-- Layout mode: steer the epoch definition algorithm way of defining windows. Opportunist is the best and coded buffer-safe, but may be disliked by Scenarist "Build/Rebuild" operation. 1 is an acceptable fall-back. 0 Should never be used.
+- Logging to file: level -10 creates a single file listing solely the filtering decisions, if any (e.g. dropped events, normal case object redefinition).
+- Layout mode: steer the epoch definition algorithm way of defining windows. Opportunist is the best and coded buffer-safe but may be disliked by authoring suites "Build/Rebuild" feature. 1 is an acceptable fall-back. 0 Should never be used.
+- Redraw period: Insert periodic screen refreshes on long lasting events that exceed the specified value. Low values may dramatically increase the bitrate.
+- Maximum bitrate: merely a bitrate to test the output against. It does not shape the stream, it is merely to help authorers budget the bitrate.
+
+[^1]: If `--allow-normal` (`--prefer-normal`) or `--ahead` is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Building or rebuilding the PES is not mandatory to mux a project.
 
 ### Image quantizers
 SUPer ships with various internal image quantizers and supports two external ones. The different methods (values for `--quantizer`) are enumerated here:
 
-0. **QtzrUTC**: High quality and reasonably fast quantizer, albeit generates the largest file sizes.
-1. **Pillow**: Fastest quantizer, but average quality. Excellent for low bitrates and files with solely dialogue and karaoke. Glows and gradients will be hideous.
+0. **Qtzr**: High quality and reasonably fast quantizer, albeit generates the largest file sizes.
+1. **Pillow**: Fastest but low quality. Excellent for low bitrates and files with solely dialogue and karaoke. Glows and gradients will be hideous.
 2. **HexTree**: Fast and good quality. Suits nicely files with moderate typesetting effects (no heavy gradients + large glows).
 3. **PILIQ** (libimagequant / pngquant): delivers the best quality, acceptably fast.
     - macOS users must install pngquant via brew, or specify the pngquant executable in config.ini
-    - Linux and Windows[^1] users can specify either *libimagequant[.dll, .so]* or pngquant executable in config.ini.
+    - Linux and Windows[^2] users can specify either *libimagequant[.dll, .so]* or pngquant executable in config.ini.
 
 Higher quality quantizers will generally consume more bandwidth:
-- Quality: (highest) *PILIQ > QtzrUTC > HexTree >> Pillow* (lowest).
-- Bandwidth usage: (highest) *QtzrUTC > PILIQ > HexTree >> Pillow* (lowest).
+- Quality: (highest) *PILIQ > Qtzr > HexTree >> Pillow* (lowest).
+- Bandwidth usage: (highest) *Qtzr > PILIQ > HexTree >> Pillow* (lowest).
 
-[^1]: On Windows, compiled binaries ship with libimagequant.dll and the PILIQ library embeds a copy for users of the package in a (virtual) environment.
-
-### Additional tips  
-- The output file extension is used to infer the desired output type (SUP or PES).
-- `--max-kbps` does not shape the stream, it is simply a limit to compare it to. Only `--compression` and `--qmode` may be used to reduce the filesize.
-- If `--allow-normal` (`--prefer-normal`) or `--ahead` is used in a Scenarist BD project, one must not "Encode->Build" or "Encode->Rebuild" the PES assets. Building or rebuilding the PES is not mandatory to mux a project.
+[^2]: On Windows, compiled binaries ship with libimagequant.dll and the PILIQ library embeds a copy for users of the package in a (virtual) environment.
 
 ### Example
 `python3 supercli.py -i ./subtitle01/bdn.xml -c 80 -a 100 --quantizer 3 --allow-normal --ahead --palette --bt 709 -m 10000 --threads 6 --withsup ./output/01/out.pes`
 
 ### How SUPer works
-SUPer implements a conversion engine that makes use of most of the PG specs described in the two patents US8638861B2 and US20090185789A1. PG decoders, while designed to be as cheap as possible, feature a few nifty capabilities like palette updates, object redefinition and events buffering. Notably, SUPer analyzes each input images and encodes a sequence of similar images together into a single presentation graphic (bitmap). This dramatically reduces the decoding and composition bandwidth and allows to perform complex animations while the decoder is decoding the next bitmaps.
+SUPer implements an encoding engine that exploits most of the Presentation Graphic format specification described in patents US8638861B2 and US20090185789A1. PG decoders, while designed to be cheap, feature a few nifty capabilities like palette updates, object redefinition and events buffering and shift all of the complexity on the encoder end. SUPer bears that complexity, analyzes each input images and encodes a sequence of similar images together into a single presentation graphic (bitmap). This dramatically reduces the decoding and composition bandwidth and allows to perform complex animations while the decoder is decoding the next bitmaps.
 
 - Official PG decoders have a specified bandwidth and can refresh the display ever so often. The size of the largest graphic in an epoch sets the decoding time, and SUPer may be obligated to drop events sporadically to produce a compliant datastream.
 - Palette updates are instantaneous and not subject to decoding constraints. SUPer tries to use them whenever possible.

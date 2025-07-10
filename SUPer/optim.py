@@ -88,7 +88,7 @@ class Quantizer:
         if 'C' in HexTree.get_capabilities():
             cls._opts[cls.Libs.HEXTREE] = ("HexTree", '(good, very fast)')
         qtzr_info = '(better, fast)' if 'C' in QtzrUTC.get_capabilities() else '(good, slow)'
-        cls._opts[cls.Libs.QTZR] = ('QtzrUTC', qtzr_info)
+        cls._opts[cls.Libs.QTZR] = ('Qtzr', qtzr_info)
         cls._opts[cls.Libs.PIL_KM] = ('Pillow', '(average, turbo)')
 
     @classmethod
