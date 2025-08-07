@@ -294,8 +294,6 @@ class BDNXMLEvent:
         else:
             self._intc = tc_in
         assert self._intc.drop_frame == self._outtc.drop_frame
-        assert self._outtc > self._intc
-
 
     def set_tc_out(self, tc_out: Union[str, TC]) -> None:
         if isinstance(tc_out, str):
@@ -380,6 +378,7 @@ def add_periodic_refreshes(events: list[BDNXMLEvent], fps: float, period: float)
             # validate
             for k in range(start_idx, len(new_events)):
                 assert new_events[k - 1].tc_out == new_events[k].tc_in
+                assert new_events[k].tc_in < new_events[k].tc_out
             assert new_events[start_idx - 1].tc_in == original_tc_in and new_events[-1].tc_out == final_tc_out
         ####
     ####
