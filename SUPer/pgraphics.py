@@ -155,6 +155,7 @@ class ProspectiveObject:
     mask:  list[bool]
     boxes: list[Box]
     box: Box
+    wid: int = None
 
     def __post_init__(self) -> None:
         assert len(self.mask) == len(self.boxes)
@@ -253,17 +254,20 @@ class PGObjectBuffer:
     This class represents a PG Object Buffer with some functions to interact with it.
     The buffer allocates BufferSlots that are acquired at specified times.
     """
-    _MAX_OBJECTS = 64
-    def __init__(self, /, *, _max_size: Optional[int] = None, _margin: int = 0) -> None:
+    def __init__(self, /, *, _max_size: Optional[int] = None, _margin: int = 0, _max_slots: int = 64) -> None:
         self._max_size = (PGDecoder.DECODED_BUF_SIZE if _max_size is None else _max_size)
         self._max_size -= _margin
+        self._max_slots = _max_slots
         self._slots = {}
+
+    def get_usage(self) -> int:
+        return sum(map(lambda x: x.size, self._slots.values()))
 
     def get_free_size(self) -> int:
         """
         Get the remaining bytes available in the buffer.
         """
-        diff = self._max_size - sum(map(lambda x: x.size, self._slots.values()))
+        diff = self._max_size - self.get_usage()
         return max(diff, 0)
 
     def reset(self) -> None:
@@ -276,7 +280,7 @@ class PGObjectBuffer:
         """
         Find the first available object ID.
         """
-        for k in range(__class__._MAX_OBJECTS):
+        for k in range(self._max_slots):
             if self._slots.get(k, None) is None:
                 return k
         return None
@@ -321,7 +325,7 @@ class PGObjectBuffer:
         :param width: Object width
         :return: success of the operation
         """
-        assert 0 <= slot_id < 64
+        assert 0 <= slot_id < self._max_slots
         bs = BufferSlot(width, height)
 
         if self.get(slot_id) is None and self.get_free_size() - bs.size >= 0:

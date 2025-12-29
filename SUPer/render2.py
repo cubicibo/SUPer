@@ -19,7 +19,7 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from typing import Optional, Callable
-from itertools import chain, zip_longest
+from itertools import chain, zip_longest, product
 from functools import reduce
 
 from PIL import Image
@@ -169,12 +169,7 @@ class EpochEncoder:
             return work_plane
         return None
 
-    def encode(self):
-        ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
-
-        #Adjust slightly SSIM threshold depending of res
-        ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480))
-
+    def identify_primary_objects(self, ssim_offset: float, ssim_score: float) -> list[list[ProspectiveObject]]:
         #Init
         gens = []
         for k, window in enumerate(self.windows):
@@ -202,26 +197,111 @@ class EpochEncoder:
             if event is not None:
                 event.unload()
         pbar.clear()
+        return pgobjs
 
-        durs, nodes = self.get_durations()
-        states, flags, cboxes = self.shape_stream(durs, nodes, pgobjs)
+    def perform_nested_analysis(self, nodes, ssim_offset, ssim_score) -> dict[int, list[list[ProspectiveObject]]]:
+        k = 0
+        sub_objects = {}
+        while k < len(nodes):
+            if 1 != sum(map(lambda x: x is not None, nodes[k].objects)):
+                k += 1
+                continue
 
+            wid = 0 if nodes[k].objects[0] is not None else 1
+            window = self.windows[wid]
+
+            leng = LayoutEngine((window.dx, window.dy))
+            k_max = k + 1
+            for node in nodes[k_max:]:
+                if len(node.objects) == 2 and (node.objects[wid] is None or node.objects[1-wid] is not None):
+                    break
+                # if there's a single window, we stop the analysis every primary object change to find a sub split.
+                # else the analysis is strictly identical to the one performed at the window level.
+                if len(node.objects) == 1 and node.new_mask[0]:
+                    break
+                if node.idx >= 0:
+                    leng.add_to_layout(0, 0, np.ascontiguousarray(self.mask_event(window, self.events[node.idx])[:, :, -1]))
+                    self.events[node.idx].unload()
+                k_max += 1
+            cbox, reg1, reg2, is_vertical = leng.get_layout()
+            leng.destroy()
+
+            if reg1 == reg2:
+                k = k_max
+                continue
+
+            cbox, reg1, reg2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, reg1, reg2)))
+            sub_wds = list(PaddingEngine(cbox, window).directional_pad((reg1, reg2), is_vertical))
+
+            swas = []
+            for k, sub_wd in enumerate(sub_wds):
+                #Use coordinates with respect to the window (and not to the container within the window)
+                sub_wds[k] = Box(sub_wd.y + cbox.y, sub_wd.dy, sub_wd.x + cbox.x, sub_wd.dx)
+                swas.append(WindowAnalyzer(sub_wds[k], ssim_threshold=ssim_score, ssim_offset=ssim_offset, start_offset=node.idx).analyze())
+                next(swas[-1])
+
+            pgobjs = [[] for _ in range(2)]
+            for node in chain(filter(lambda n: n.idx >= 0, nodes[k:k_max]), [None]*2):
+                if node:
+                    event = self.events[node.idx]
+                    redraw = self.redraw_flags[node.idx]
+                else:
+                    event, redraw = None, False
+                for swid, (swd, swa) in enumerate(zip(sub_wds, swas)):
+                    try:
+                        pgobj = swa.send((self.mask_event(swd, event), self.redraw_flags[node.idx]))
+                    except StopIteration:
+                        pgobj = None
+                    if pgobj is not None:
+                        logger.info(f"Sub-window={swid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
+                        pgobjs[wid].append(pgobj)
+                if event is not None:
+                    event.unload()
+            sub_objects[nodes[k].idx] = pgobjs
+            k = k_max
+        ###
+        return sub_objects
+
+    def plan_buffer_slots(nodes: list['DSNode']) -> PGObjectBuffer:
+        raise NotImplementedError
+        ideal_buffer = PGObjectBuffer(_max_size=np.inf, _max_slots=2*len(nodes))
+        real_buffer = PGObjectBuffer()
+        for node in nodes:
+            for obj in node.objects:
+                ...
+
+    def encode(self):
+        ssim_offset = 0.014 * min(1, max(-1, self.kwargs.get('ssim_tol', 0)))
+
+        #Adjust slightly SSIM threshold depending of res
+        ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480))
+
+        pgobjs = self.identify_primary_objects(ssim_offset, ssim_score)
+        durs, nodes = self.get_events_nodes()
+        self.set_objects_to_nodes(nodes, [objs.copy() for objs in pgobjs])
+
+        #self.perform_nested_analysis(nodes, ssim_offset, ssim_score)
+        #self.plan_buffer_slots(nodes)
+
+        #Plan datastream
+        states, flags, cboxes = self.shape_stream(durs, nodes)
+
+        #Set-up datastructures for bytestream generation
         self.set_pgobjects_extended_visibilities(nodes)
         r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
 
+        #Generate datastream according to plan
         return self._convert(r_states, pgobjs, r_durs, r_flags, r_nodes)
 
     def shape_stream(self,
          durs: list[int],
          nodes: list['DSNode'],
-         pgobjs_proc: list[list[ProspectiveObject]],
     ) -> tuple[list[PCS.CompositionState], list[int], list[list[Box]]]:
-        pgobjs_proc = [objs.copy() for objs in pgobjs_proc]
 
         allow_normal_case = self.kwargs.get('allow_normal_case', False)
         allow_overlaps = self.kwargs.get('allow_overlaps', False)
 
-        acqs, absolutes, margins, bslots, cboxes = self.find_acqs(durs, nodes, pgobjs_proc)
+        acqs, absolutes, margins, bslots, cboxes = self.find_acqs(durs, nodes)
         flags = [0] * len(durs)
 
         states = [PCS.CompositionState.NORMAL] * len(acqs)
@@ -651,7 +731,7 @@ class EpochEncoder:
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
         # and then pass that to the optimiser. Colors are efficiently distributed on the objects.
         if has_two_objs and normal_case_refresh is False:
-            compositions = [(wid, pgo) for wid, pgo in pgobs_items if __class__._object_is_relevant(pgo, flags, slice(i, k))]
+            compositions = [(oix, pgo) for oix, pgo in pgobs_items if __class__._object_is_relevant(pgo, flags, slice(i, k))]
             assert len(compositions) == 2
             #todo: stack using slot dimensions?
             offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x[1].box, compositions)))
@@ -661,14 +741,14 @@ class EpochEncoder:
             for j in range(i, k):
                 coords = np.zeros((2,), np.int32)
                 a_img = Image.new('RGBA', dims, (0, 0, 0, 0))
-                for wid, pgo in compositions:
+                for oix, pgo in compositions:
                     multiplier = np.uint8(flags[j] >= 0)
                     if len(pgo.mask[j-pgo.f:j+1-pgo.f]) == 1:
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
-                        last_imgs[wid] = (self.mask_event(self.windows[wid], self.events[j]), paste_box, pgo.box.coords)
+                        last_imgs[oix] = (self.mask_event(self.windows[pgo.wid], self.events[j]), paste_box, pgo.box.coords)
                     else:
                         multiplier &= pgo.is_visible_extended(j)
-                    a_img.paste(Image.fromarray(multiplier*last_imgs[wid][0], 'RGBA').crop(last_imgs[wid][2]), last_imgs[wid][1])
+                    a_img.paste(Image.fromarray(multiplier*last_imgs[oix][0], 'RGBA').crop(last_imgs[oix][2]), last_imgs[oix][1])
                     coords += offset
                 imgs_chain.append(a_img)
             ####
@@ -677,30 +757,30 @@ class EpochEncoder:
             pals.append(palettes)
 
             coords = np.zeros((2,), np.int32)
-            for wid, pgo in pgobs_items:
+            for oix, pgo in pgobs_items:
                 if __class__._object_is_relevant(pgo, flags, slice(i, k)):
-                    double_buffering[wid] = len(self.windows) - double_buffering[wid]
-                    oid = wid + double_buffering[wid]
+                    double_buffering[oix] = len(self.windows) - double_buffering[oix]
+                    oid = pgo.wid + double_buffering[oix]
 
                     #get bitmap
-                    window_bitmap = 0xFF*np.ones((self.windows[wid].dy, self.windows[wid].dx), np.uint8)
+                    window_bitmap = 0xFF*np.ones((self.windows[pgo.wid].dy, self.windows[pgo.wid].dx), np.uint8)
                     nx, ny = coords
                     window_bitmap[pgo.box.slice] = bitmap[ny:ny+pgo.box.dy, nx:nx+pgo.box.dx]
 
                     #Generate object related segments objects
-                    oxl = max(0, node.pos[wid].x2 - node.slots[wid][1])
-                    oyl = max(0, node.pos[wid].y2 - node.slots[wid][0])
-                    cpx = self.windows[wid].x + self.box.x + oxl
-                    cpy = self.windows[wid].y + self.box.y + oyl
+                    oxl = max(0, node.pos[oix].x2 - node.slots[oix][1])
+                    oyl = max(0, node.pos[oix].y2 - node.slots[oix][0])
+                    cpx = self.windows[pgo.wid].x + self.box.x + oxl
+                    cpy = self.windows[pgo.wid].y + self.box.y + oyl
 
-                    cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
+                    cobjs.append(CObject.from_scratch(oid, pgo.wid, cpx, cpy, False))
                     # cparams = box_to_crop(pgo.box)
-                    # cobjs_cropped.append(CObject.from_scratch(oid, wid, self.windows[wid].x+self.box.x+cparams['hc_pos'], self.windows[wid].y+self.box.y+cparams['vc_pos'], False,
+                    # cobjs_cropped.append(CObject.from_scratch(oid, pgo.wid, self.windows[pgo.wid].x+self.box.x+cparams['hc_pos'], self.windows[pgo.wid].y+self.box.y+cparams['vc_pos'], False,
                     #                                           cropped=True, **cparams))
-                    window_bitmap = window_bitmap[oyl:oyl+node.slots[wid][0], oxl:oxl+node.slots[wid][1]]
+                    window_bitmap = window_bitmap[oyl:oyl+node.slots[oix][0], oxl:oxl+node.slots[oix][1]]
                     ods_data = PGraphics.encode_rle(window_bitmap)
                     o_ods += ODS.from_scratch(oid, ods_reg[oid] & 0xFF, window_bitmap.shape[1], window_bitmap.shape[0], ods_data, pts=c_pts)
-                    assert window_bitmap.shape == node.slots[wid]
+                    assert window_bitmap.shape == node.slots[pgo.wid]
                     ods_reg[oid] += 1
                     coords += offset
             pals.append([Palette()] * len(pals[0]))
@@ -722,32 +802,32 @@ class EpochEncoder:
                 logger.debug(f"Split colour distribution: r={ratio_area:.03f}, b={bias} -> w0={n_colors+bias}, w1={n_colors-bias}")
 
             id_skipped = None
-            for wid, pgo in pgobs_items:
+            for oix, pgo in pgobs_items:
                 if not __class__._object_is_relevant(pgo, flags, slice(i, k)):
                     if normal_case_refresh:
                         #An object may exist but be masked for the whole acquisition: pad palette.
                         pals.append([Palette()] * (k-i))
                     continue
 
-                oxl = max(0, node.pos[wid].x2 - node.slots[wid][1])
-                oyl = max(0, node.pos[wid].y2 - node.slots[wid][0])
-                cpx = self.windows[wid].x + self.box.x + oxl
-                cpy = self.windows[wid].y + self.box.y + oyl
+                oxl = max(0, node.pos[oix].x2 - node.slots[oix][1])
+                oyl = max(0, node.pos[oix].y2 - node.slots[oix][0])
+                cpx = self.windows[pgo.wid].x + self.box.x + oxl
+                cpy = self.windows[pgo.wid].y + self.box.y + oyl
 
-                if isinstance(normal_case_refresh, list) and not normal_case_refresh[wid]:
+                if isinstance(normal_case_refresh, list) and not normal_case_refresh[oix]:
                     assert 1 == sum(normal_case_refresh) and id_skipped is None
                     #Take latest used object id
-                    oid = wid + double_buffering[wid]
-                    cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
+                    oid = pgo.wid + double_buffering[oix]
+                    cobjs.append(CObject.from_scratch(oid, pgo.wid, cpx, cpy, False))
                     # cparams = box_to_crop(pgo.box)
-                    # cobjs_cropped.append(CObject.from_scratch(oid, wid, self.windows[wid].x+self.box.x+cparams['hc_pos'], self.windows[wid].y+self.box.y+cparams['vc_pos'],
+                    # cobjs_cropped.append(CObject.from_scratch(oid, pgo.wid, self.windows[pgo.wid].x+self.box.x+cparams['hc_pos'], self.windows[pgo.wid].y+self.box.y+cparams['vc_pos'],
                     #                                           False, cropped=True, **cparams))
                     pals.append([Palette()] * (k-i))
                     id_skipped = oid
                     continue
 
-                double_buffering[wid] = abs(len(self.windows) - double_buffering[wid])
-                oid = wid + double_buffering[wid]
+                double_buffering[oix] = abs(len(self.windows) - double_buffering[oix])
+                oid = pgo.wid + double_buffering[oix]
 
                 assert len(flags[i:k]) >= len(pgo.mask[i-pgo.f:k-pgo.f])
 
@@ -756,20 +836,20 @@ class EpochEncoder:
                 for j in range(i, k):
                     multiplier = np.uint8(flags[j] >= 0)
                     if pgo.is_active(j):
-                        last_img = self.mask_event(self.windows[wid], self.events[j])
+                        last_img = self.mask_event(self.windows[pgo.wid], self.events[j])
                     else:
                         multiplier &= pgo.is_visible_extended(j)
                     imgs_chain.append(Image.fromarray(multiplier*last_img, 'RGBA').crop(pgo.box.coords))
 
-                cobjs.append(CObject.from_scratch(oid, wid, cpx, cpy, False))
+                cobjs.append(CObject.from_scratch(oid, pgo.wid, cpx, cpy, False))
                 # cparams = box_to_crop(pgo.box)
-                # cobjs_cropped.append(CObject.from_scratch(oid, wid, self.windows[wid].x+self.box.x+cparams['hc_pos'], self.windows[wid].y+self.box.y+cparams['vc_pos'], False,
+                # cobjs_cropped.append(CObject.from_scratch(oid, pgo.wid, self.windows[pgo.wid].x+self.box.x+cparams['hc_pos'], self.windows[pgo.wid].y+self.box.y+cparams['vc_pos'], False,
                 #                                           cropped=True, **cparams))
-                clut_offset = 1 + (n_colors - 1 + bias)*(wid == 1 and has_two_objs)
-                wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors + (-1 if wid == 1 else 1)*bias, clut_offset, **self.kwargs)
-                window_bitmap = 0xFF*np.ones((self.windows[wid].dy, self.windows[wid].dx), np.uint8)
+                clut_offset = 1 + (n_colors - 1 + bias)*(oix == 1 and has_two_objs)
+                wd_bitmap, wd_pal = Optimise.solve_and_remap(imgs_chain, n_colors + (-1 if oix == 1 else 1)*bias, clut_offset, **self.kwargs)
+                window_bitmap = 0xFF*np.ones((self.windows[pgo.wid].dy, self.windows[pgo.wid].dx), np.uint8)
                 window_bitmap[pgo.box.slice] = wd_bitmap
-                wd_bitmap = window_bitmap[oyl:oyl+node.slots[wid][0], oxl:oxl+node.slots[wid][1]]
+                wd_bitmap = window_bitmap[oyl:oyl+node.slots[oix][0], oxl:oxl+node.slots[oix][1]]
                 pals.append(wd_pal)
                 ods_data = PGraphics.encode_rle(wd_bitmap)
 
@@ -826,12 +906,14 @@ class EpochEncoder:
 
         ## Internal helper function
         def get_obj(frame, pgobjs: dict[int, list[ProspectiveObject]]) -> dict[int, Optional[ProspectiveObject]]:
-            objs = {k: None for k, objs in enumerate(pgobjs)}
-
-            for wid, pgobj in enumerate(pgobjs):
-                for obj in pgobj:
+            objs = {}
+            for ix, pgobjl in enumerate(pgobjs):
+                objs[ix] = None
+                #objs[ix] = next(filter(lambda obj: obj.is_active(frame), pgobjl), None)
+                for obj in pgobjl:
                     if obj.is_active(frame):
-                        objs[wid] = obj
+                        assert objs[ix] is None
+                        objs[ix] = obj
             return objs
 
         def get_palette_data(pal_manager: PaletteManager, node: DSNode) -> tuple[int, int]:
@@ -893,10 +975,9 @@ class EpochEncoder:
             c_pts = nodes[i].tc_pts.to_pts()
             pgobs_items = get_obj(i, pgobjs).items()
             has_two_objs = 0
-            for wid, pgo in pgobs_items:
-                if not __class__._object_is_relevant(pgo, flags, slice(i, k)):
-                    continue
-                has_two_objs += 1
+            for _, pgo in pgobs_items:
+                if __class__._object_is_relevant(pgo, flags, slice(i, k)):
+                    has_two_objs += 1
 
             #Normal case refresh implies we are refreshing one object out of two displayed.
             has_two_objs = has_two_objs > 1 or normal_case_refresh
@@ -1015,10 +1096,9 @@ class EpochEncoder:
                     if nodes[k-1].dts() - dts_end < 0.25 and frame_added <= (durs[k-1][0]-1) >> 1:
                         pgobs_items = get_obj(k-1, pgobjs).items()
                         has_two_objs = 0
-                        for wid, pgo in pgobs_items:
-                            if not __class__._object_is_relevant(pgo, flags, slice(k-1, k)):
-                                continue
-                            has_two_objs += 1
+                        for _, pgo in pgobs_items:
+                            if __class__._object_is_relevant(pgo, flags, slice(k-1, k)):
+                                has_two_objs += 1
 
                         c_pts = nodes[k-1].pts()
                         logger.debug(f"INS Acquisition: PTS={nodes[k-1].tc_pts}={c_pts:.03f} from event at {self.events[k-1].tc_in}.")
@@ -1070,7 +1150,28 @@ class EpochEncoder:
         return Epoch(displaysets), pcs_id
     ####
 
-    def find_acqs(self, durs: list[int], nodes: list['DSNode'], pgobjs_proc: dict[int, list[ProspectiveObject]]):
+    def set_objects_to_nodes(self, nodes: list['DSNode'], pgobjs_proc: dict[int, list[ProspectiveObject]]) -> None:
+        objs = [None for objs in pgobjs_proc]
+
+        for k, node in filter(lambda n: n[1].nc_refresh is False, enumerate(nodes)):
+            is_new = [False]*len(self.windows)
+            assert node.idx != -1
+            for wid, _ in enumerate(self.windows):
+                is_new[wid] = False
+                if objs[wid] is not None and not objs[wid].is_active(node.idx):
+                    objs[wid] = None
+                if len(pgobjs_proc[wid]):
+                    if not objs[wid] and pgobjs_proc[wid][0].is_active(node.idx):
+                        objs[wid] = pgobjs_proc[wid].pop(0)
+                        objs[wid].wid = wid
+                        is_new[wid] = True
+                    else:
+                        assert not pgobjs_proc[wid][0].is_active(node.idx)
+            node.objects = objs.copy()
+            node.new_mask = is_new
+
+
+    def find_acqs(self, durs: list[int], nodes: list['DSNode']):
         dtl = np.zeros((len(durs)), dtype=float)
         valid = np.zeros((len(durs),), dtype=np.bool_)
         absolutes = np.zeros_like(valid)
@@ -1078,64 +1179,46 @@ class EpochEncoder:
         chain_boxes = []
         min_boxes = 8*np.ones((len(self.windows), 2), np.int32)
 
-        objs = [None for objs in pgobjs_proc]
-        write_duration = nodes[0].write_duration()/PGDecoder.FREQ
-
         running_bbox = [None, None]
         for k, node in enumerate(nodes):
-            is_new = [False]*len(self.windows)
             boxes = [None] * len(self.windows)
             force_acq = False
-            #NC palette updates don't need to know about the objects
-            if not node.nc_refresh:
-                assert node.idx != -1
-                for wid, _ in enumerate(self.windows):
-                    is_new[wid] = False
-                    if objs[wid] is not None and not objs[wid].is_active(node.idx):
-                        objs[wid] = None
-                    if len(pgobjs_proc[wid]):
-                        if not objs[wid] and pgobjs_proc[wid][0].is_active(node.idx):
-                            objs[wid] = pgobjs_proc[wid].pop(0)
-                            force_acq = True
-                            is_new[wid] = True
-                        else:
-                            assert not pgobjs_proc[wid][0].is_active(node.idx)
-                    if objs[wid] is not None:
-                        if objs[wid].is_visible(node.idx):
-                            ob = objs[wid].get_bbox_at(node.idx)
-                            min_boxes[wid] = np.max((min_boxes[wid], (ob.dy, ob.dx)), axis=0)
-                            running_bbox[wid] = ob
-                        elif objs[wid].is_active(node.idx):
-                            assert k > 0
-                            assert None != running_bbox[wid]
-                            ob = running_bbox[wid]
-                        else:
-                            raise RuntimeError("Rendering error, getting bbox of object that is neither visible or active.")
-                        boxes[wid] = ob
-                node.objects = objs.copy()
+            #NC (screen wipes at this stage of the encoding process) don't need to know
+            if node.nc_refresh is False:
+                for wid in filter(lambda oix: node.objects[oix] is not None, range(len(self.windows))):
+                    if node.objects[wid].is_visible(node.idx):
+                        ob = node.objects[wid].get_bbox_at(node.idx)
+                        min_boxes[wid] = np.max((min_boxes[wid], (ob.dy, ob.dx)), axis=0)
+                        running_bbox[wid] = ob
+                    elif node.objects[wid].is_active(node.idx): # we never fall here on the first frame an object is active (is_visible is true)
+                        assert (k > 0) and (None != running_bbox[wid])
+                        ob = running_bbox[wid]
+                    else:
+                        raise RuntimeError("Critical encoding error, getting bbox of object that is neither visible or active.")
+                    boxes[wid] = ob
             ####!nc_refresh
-            node.new_mask = is_new
             chain_boxes.append(boxes)
-            absolutes[k] = force_acq
+            absolutes[k] = any(node.new_mask)
 
+        write_duration = nodes[0].write_duration()/PGDecoder.FREQ
         min_boxes = list(map(tuple, min_boxes))
-        prev_dt = 6
+
         for k, (dt, node) in enumerate(zip(durs, nodes)):
             if not node.nc_refresh:
-                margin = prev_dt/self.bdn.fps
                 node.slots = min_boxes
             if k == 0:
                 prev_pts = prev_dts = -np.inf
             else:
+                margin = prev_dt/self.bdn.fps
                 prev_dts = nodes[k-1].dts_end()
                 prev_pts = nodes[k-1].pts()
-            valid[k] = (node.dts() > prev_dts and node.pts() - prev_pts > write_duration)
-            dtl[k] = (node.dts() - prev_dts)/margin if valid[k] and k > 0 else (-1 + 2*(k==0))
+            valid[k] = (node.dts() > prev_dts) and (node.pts() - prev_pts > write_duration)
+            dtl[k] = (node.dts() - prev_dts)/margin if (valid[k] and k > 0) else (-1 + 2*int(k==0))
             prev_dt = dt
         return valid, absolutes, dtl, min_boxes, chain_boxes
     ####
 
-    def get_durations(self) -> npt.NDArray[np.uint32]:
+    def get_events_nodes(self) -> npt.NDArray[np.uint32]:
         """
         Returns the duration of each event in frames.
         Additionally, the offset from the previous event is also returned. This value
@@ -1305,7 +1388,8 @@ class WindowAnalyzer:
     def __init__(self,
         window: Box, ssim_threshold: float = 0.986,
         ssim_offset: float = 0.0,
-        overlap_threshold: float = 0.995
+        overlap_threshold: float = 0.995,
+        start_offset: int = 0,
     ) -> None:
         self.window = window
         assert ssim_threshold < 1.0, "Not a valid SSIM threshold"
@@ -1314,11 +1398,14 @@ class WindowAnalyzer:
         self.overlap_threshold = overlap_threshold
         assert abs(ssim_offset) <= 1.0
         self.ssim_offset = ssim_offset
+        assert start_offset >= 0
+        self._start_offset = start_offset
 
     def analyze(self):
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
-        f_start = unseen = event_cnt = 0
+        event_cnt = self._start_offset
+        unseen = f_start = 0
         pgo_yield = None
         containers, mask = [], []
 
@@ -1372,7 +1459,6 @@ class WindowAnalyzer:
                 else:
                     assert has_content, "New PGObject must have visible content!!"
                     pgo_yield = generate_object(alpha_compo, mask, unseen, containers, f_start)
-
                     #prepare for the next bitmap
                     mask = [has_content]
                     containers = [event_container]
@@ -1442,13 +1528,17 @@ class DSNode:
         t_decoding = []
 
         if not self.nc_refresh:
-            assigned_wd = list(map(lambda x: x is not None, self.objects))
-            decode_duration = sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*PGDecoder.FREQ/PGDecoder.RC) for wid, flag in enumerate(assigned_wd) if not flag])
+            assert any(self.objects)
+            target_windows = list(map(lambda o: o.wid, filter(lambda o: o is not None, self.objects)))
+            assigned_wids = set(target_windows)
+            decode_duration = sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*PGDecoder.FREQ/PGDecoder.RC) for wid in range(len(self.windows)) if wid not in assigned_wids])
+
+            #writing twice to the same window?
+            delay_write = 2 == len(target_windows) and 1 == len(assigned_wids)
 
             t_other_copy = 0
-            for wid, obj in enumerate(self.objects):
-                if obj is None:
-                    continue
+            for obj in filter(lambda o: o is not None, self.objects):
+                wid = obj.wid
 
                 box = self.windows[wid]
                 write = box.dy*box.dx*PGDecoder.FREQ
@@ -1462,13 +1552,18 @@ class DSNode:
                 elif self.partial and not self.new_mask[wid]:
                     #the other object is copied at the end.
                     assert sum(self.new_mask) == 1 and t_other_copy == 0
-                    t_other_copy += np.ceil(write/PGDecoder.RC)
+                    t_other_copy = np.ceil(write/PGDecoder.RC)
                     continue
 
-                decode_duration = max(decode_duration, sum(t_decoding)) + np.ceil(write/PGDecoder.RC)
+                decode_duration = max(decode_duration, sum(t_decoding)) + np.ceil(write/PGDecoder.RC)*int(not delay_write)
             ####
-            assert t_other_copy == 0 or self.partial
-            decode_duration += t_other_copy
+            if delay_write:
+                write_duration = np.ceil(write/PGDecoder.RC)
+                assert t_other_copy == 0 or write_duration == t_other_copy
+                decode_duration += write_duration
+            else:
+                assert t_other_copy == 0 or self.partial
+                decode_duration += t_other_copy
         else:
             decode_duration = self.write_duration() + 1
         return (decode_duration, t_decoding)
