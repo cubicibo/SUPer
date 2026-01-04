@@ -487,11 +487,14 @@ class BDNRender:
     def fix_composition_id(self, replace: bool = False) -> None:
         cnt = 0
         for epoch in self._epochs:
+            id_in_epoch = 0
             for ds in epoch:
                 if replace:
+                    assert id_in_epoch == ds.pcs.composition_n
                     ds.pcs.composition_n = cnt & 0xFFFF
                 else:
                     assert ds.pcs.composition_n == cnt & 0xFFFF
+                id_in_epoch += 1
                 cnt += 1
     ####
 

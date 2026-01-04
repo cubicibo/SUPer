@@ -202,6 +202,9 @@ class ProspectiveObject:
     def is_visible_extended(self, frame: int) -> bool:
         assert frame > self.f and not self.is_active(frame), f"{frame} < {self.f} ? act={self.is_active(frame)}"
         return frame < self.ext_range
+
+    def copy(self) -> 'ProspectiveObject':
+        return self.__class__(self.f, self.mask.copy(), self.boxes.copy(), self.box, self.wid)
 ####
 
 #%%

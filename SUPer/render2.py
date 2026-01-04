@@ -277,9 +277,11 @@ class EpochEncoder:
         ssim_score = min(0.9999, 0.9608 + self.bdn.format.value[1]*(0.986-0.972)/(1080-480))
 
         pgobjs = self.identify_primary_objects(ssim_offset, ssim_score)
-        durs, nodes = self.get_events_nodes()
-        self.set_objects_to_nodes(nodes, [objs.copy() for objs in pgobjs])
 
+        # Create all potential display sets in the epoch
+        durs, nodes = self.create_displaysets_nodes([objs.copy() for objs in pgobjs])
+
+        #nodes_baseline = [node.copy() for node in nodes]
         #self.perform_nested_analysis(nodes, ssim_offset, ssim_score)
         #self.plan_buffer_slots(nodes)
 
@@ -315,7 +317,7 @@ class EpochEncoder:
         positions = cboxes[0].copy()
         k = last_acq = 0
         for k, (acq, forced, margin, node) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:], nodes[1:]), 1):
-            if not node.nc_refresh:
+            if not node.is_palette_update:
                 for wid in range(len(self.windows)):
                     box_assets = list(filter(lambda x: x is not None, [positions[wid], cboxes[k][wid]]))
                     if len(box_assets) > 0:
@@ -331,18 +333,18 @@ class EpochEncoder:
                             positions[wid] = cont
                 #### for wid
             #### if not nc
-            if thresh == 0 and not node.nc_refresh:
+            if thresh == 0 and not node.is_palette_update:
                 states[k] = PCS.CompositionState.ACQUISITION
                 absolutes[k] = True
             if states[k] != PCS.CompositionState.ACQUISITION:
-                if (forced or (acq and margin > max(thresh-dthresh*drought, 0))) and not node.nc_refresh:
+                if (forced or (acq and margin > max(thresh-dthresh*drought, 0))) and not node.is_palette_update:
                     states[k] = PCS.CompositionState.ACQUISITION
                     drought = 0
                 else:
                     #prevent excessive acquisitions, as we want to compress the stream.
                     drought += 1*refresh_rate
                 if states[k] == PCS.CompositionState.NORMAL:
-                    nodes[k].nc_refresh = True
+                    nodes[k].is_palette_update = True
             if states[k] > 0:
                 for zk in range(last_acq, k):
                     nodes[zk].pos = positions
@@ -373,7 +375,7 @@ class EpochEncoder:
         for ck, node in enumerate(nodes[1:], 1):
             if flags[ck] < 0:
                 continue
-            if states[ck] == 0 and node.nc_refresh:
+            if states[ck] == 0 and node.is_palette_update:
                 last_possible_dts = np.inf
                 current_dts = node.dts()
                 if f_ticks(current_dts) < first_possible_dts and first_possible_dts < f_ticks(node.pts()):
@@ -413,7 +415,7 @@ class EpochEncoder:
             j = k
             while (j := j-1) and (nodes[j].dts_end() >= node.dts() or nodes[j].pts() + pts_delta >= node.pts()):
                 drop_abs_acq_def |= absolutes[j]
-                drop_pal_ups_def += int(not allow_overlaps and nodes[j].nc_refresh)
+                drop_pal_ups_def += int(not allow_overlaps and nodes[j].is_palette_update)
 
             other_new_mask = 0
             for pk, pnode in enumerate(reversed(nodes[:k]), 1):
@@ -430,14 +432,14 @@ class EpochEncoder:
                 new_node.new_mask[future_obj_idx] = True
                 new_node.objects[future_obj_idx] = node.objects[future_obj_idx]
                 new_node.pos[future_obj_idx] = node.pos[future_obj_idx]
-                new_node.nc_refresh = False
+                new_node.is_palette_update = False
 
                 drop_abs_acq = False
                 drop_pal_ups = 0
                 j = k - pk
                 while (j := j-1) >= 0 and (nodes[j].dts_end() >= new_node.dts() or nodes[j].pts() + pts_delta >= new_node.pts()):
                     drop_abs_acq |= absolutes[j]
-                    drop_pal_ups += int(not allow_overlaps and nodes[j].nc_refresh)
+                    drop_pal_ups += int(not allow_overlaps and nodes[j].is_palette_update)
 
                 if not drop_abs_acq:
                     #Shifting up to epoch start and acquisition at j=1 is not possible?
@@ -471,13 +473,13 @@ class EpochEncoder:
                     for j in range(jk, best_pk):
                         assert not absolutes[j]
                         states[j] = PCS.CompositionState.NORMAL
-                        nodes[j].nc_refresh = True
+                        nodes[j].is_palette_update = True
                     for j in range(best_pk+1, k+1):
                         nodes[j].objects[future_obj_idx] = new_node.objects[future_obj_idx]
                         nodes[j].pos[future_obj_idx] = new_node.pos[future_obj_idx]
                         assert not absolutes[j] or j == k
                         states[j] = PCS.CompositionState.NORMAL
-                        nodes[j].nc_refresh = True
+                        nodes[j].is_palette_update = True
                         absolutes[j] = False
                     #Apply new node to output
                     nodes[best_pk] = new_node
@@ -639,7 +641,7 @@ class EpochEncoder:
                 elif flags[l] == 0:
                     absolutes[l] = False
                     num_pcs_buffered += 1
-                    nodes[l].nc_refresh = True
+                    nodes[l].is_palette_update = True
 
                     if nodes[l].dts() >= dts_iter:
                         logger.debug(f"Shift DTS {dts_iter:.04f}, {nodes[l].dts():.04f}, {nodes[l].pts():.04f}={nodes[l].tc_pts} {dts_end_iter}")
@@ -687,7 +689,7 @@ class EpochEncoder:
                 prev_idx = node.idx
             if flag == 0 and state == PCS.CompositionState.NORMAL:
                 #Palette update
-                assert nodes[k].nc_refresh, f"{node.tc_pts} palette update k-node {k} not configured, NM={node.new_mask} P={node.partial}."
+                assert nodes[k].is_palette_update, f"{node.tc_pts} palette update k-node {k} not configured, NM={node.new_mask} P={node.partial}."
                 assert allow_overlaps or not node.is_custom_dts()
             elif flag == 1:
                 #Normal Case redefinition
@@ -933,7 +935,7 @@ class EpochEncoder:
         pcs_fn = lambda pcs_cnt, state, pal_flag, palette_id, cl, pts:\
                     PCS.from_scratch(*self.bdn.format.value, self.bdn.fps.to_pcsfps(), pcs_cnt & 0xFFFF, state, pal_flag, palette_id, cl, pts=pts)
 
-        final_node = DSNode([], self.windows, self.events[-1].tc_out, nc_refresh=True)
+        final_node = DSNode([], self.windows, self.events[-1].tc_out, is_palette_update=True)
         #Do we have time to redraw the window (with some margin)?
         perform_wds_end = durs[-1][0] >= np.ceil(((final_node.write_duration() + 10)/PGDecoder.FREQ)*self.bdn.fps)
 
@@ -1087,7 +1089,7 @@ class EpochEncoder:
                 if t_diff > 4.5*nodes[k-1].write_duration()/PGDecoder.FREQ:
                     dts_end = nodes[k-1].dts_end() + 2/PGDecoder.FREQ
                     npts = nodes[k-1].pts() + 2/PGDecoder.FREQ
-                    nodes[k-1].nc_refresh = nodes[k-1].partial = False
+                    nodes[k-1].is_palette_update = nodes[k-1].partial = False
                     frame_added = 0
                     while nodes[k-1].dts() < dts_end or nodes[k-1].pts() < npts + nodes[k-1].write_duration()/PGDecoder.FREQ:
                         nodes[k-1].tc_pts = nodes[k-1].tc_pts + 1
@@ -1134,7 +1136,7 @@ class EpochEncoder:
             uds, pcs_id = self._get_undisplay_pds(self.events[-1].tc_out.to_pts(), pcs_id, final_node, last_cobjs, pcs_fn, 255, wds_base)
             displaysets.append(uds)
 
-            #Prepare an additional display set to undraw the screen. Will be added by parent if there's enough time before the next epoch.
+            #Prepare an additional display set to undraw the screen if it can fit (< max_pts)
             nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self.bdn.fps)/PGDecoder.FREQ)))
             tc_final_pts = self.events[-1].tc_out + nf_shift
             final_pts = tc_final_pts.to_pts()
@@ -1150,27 +1152,6 @@ class EpochEncoder:
         return Epoch(displaysets), pcs_id
     ####
 
-    def set_objects_to_nodes(self, nodes: list['DSNode'], pgobjs_proc: dict[int, list[ProspectiveObject]]) -> None:
-        objs = [None for objs in pgobjs_proc]
-
-        for k, node in filter(lambda n: n[1].nc_refresh is False, enumerate(nodes)):
-            is_new = [False]*len(self.windows)
-            assert node.idx != -1
-            for wid, _ in enumerate(self.windows):
-                is_new[wid] = False
-                if objs[wid] is not None and not objs[wid].is_active(node.idx):
-                    objs[wid] = None
-                if len(pgobjs_proc[wid]):
-                    if not objs[wid] and pgobjs_proc[wid][0].is_active(node.idx):
-                        objs[wid] = pgobjs_proc[wid].pop(0)
-                        objs[wid].wid = wid
-                        is_new[wid] = True
-                    else:
-                        assert not pgobjs_proc[wid][0].is_active(node.idx)
-            node.objects = objs.copy()
-            node.new_mask = is_new
-
-
     def find_acqs(self, durs: list[int], nodes: list['DSNode']):
         dtl = np.zeros((len(durs)), dtype=float)
         valid = np.zeros((len(durs),), dtype=np.bool_)
@@ -1184,7 +1165,7 @@ class EpochEncoder:
             boxes = [None] * len(self.windows)
             force_acq = False
             #NC (screen wipes at this stage of the encoding process) don't need to know
-            if node.nc_refresh is False:
+            if node.is_palette_update is False:
                 for wid in filter(lambda oix: node.objects[oix] is not None, range(len(self.windows))):
                     if node.objects[wid].is_visible(node.idx):
                         ob = node.objects[wid].get_bbox_at(node.idx)
@@ -1196,7 +1177,7 @@ class EpochEncoder:
                     else:
                         raise RuntimeError("Critical encoding error, getting bbox of object that is neither visible or active.")
                     boxes[wid] = ob
-            ####!nc_refresh
+            ####!is_palette_update
             chain_boxes.append(boxes)
             absolutes[k] = any(node.new_mask)
 
@@ -1204,7 +1185,7 @@ class EpochEncoder:
         min_boxes = list(map(tuple, min_boxes))
 
         for k, (dt, node) in enumerate(zip(durs, nodes)):
-            if not node.nc_refresh:
+            if not node.is_palette_update:
                 node.slots = min_boxes
             if k == 0:
                 prev_pts = prev_dts = -np.inf
@@ -1217,6 +1198,40 @@ class EpochEncoder:
             prev_dt = dt
         return valid, absolutes, dtl, min_boxes, chain_boxes
     ####
+
+    def create_displaysets_nodes(self, pgobjs_proc: dict[int, list[ProspectiveObject]]) -> tuple[list['DSNode'], list[int]]:
+        objs = [None for objs in pgobjs_proc]
+        top = self.events[0].tc_in.frames
+        delays, nodes = [], []
+
+        for ne, event in enumerate(self.events):
+            tic = event.tc_in.frames
+            toc = event.tc_out.frames
+            # gap between two events in an epoch: add a screen wipe
+            if (clear_duration := tic-top) > 0:
+                delays += [clear_duration]
+                nodes.append(DSNode([], self.windows, self.events[ne-1].tc_out, is_palette_update=True))
+                nodes[-1].idx = -1 # screen wipes do not refer to valid events in the array
+            ####
+            delays += [toc-tic]
+
+            is_new = [False] * len(self.windows)
+            for wid, _ in enumerate(self.windows):
+                is_new[wid] = False
+                if objs[wid] is not None and not objs[wid].is_active(ne):
+                    objs[wid] = None
+                if len(pgobjs_proc[wid]):
+                    if not objs[wid] and pgobjs_proc[wid][0].is_active(ne):
+                        objs[wid] = pgobjs_proc[wid].pop(0)
+                        objs[wid].wid = wid
+                        is_new[wid] = True
+                    else:
+                        assert not pgobjs_proc[wid][0].is_active(ne)
+
+            nodes.append(DSNode(objs.copy(), self.windows, event.tc_in, new_mask=is_new))
+            nodes[-1].idx = ne
+            top = toc
+        return delays, nodes
 
     def get_events_nodes(self) -> npt.NDArray[np.uint32]:
         """
@@ -1233,7 +1248,7 @@ class EpochEncoder:
             clear_duration = tic-top
             if clear_duration > 0:
                 delays += [clear_duration]
-                nodes.append(DSNode([], self.windows, self.events[ne-1].tc_out, nc_refresh=True))
+                nodes.append(DSNode([], self.windows, self.events[ne-1].tc_out, is_palette_update=True))
                 nodes[-1].idx = -1
             delays += [toc-tic]
             nodes.append(DSNode([], self.windows, event.tc_in))
@@ -1476,23 +1491,35 @@ class DSNode:
             objects: list[Optional[ProspectiveObject]],
             windows: list[Box],
             tc_pts: TC,
-            nc_refresh: bool = False,
+            is_palette_update: bool = False,
+            new_mask: list[bool] = []
         ) -> None:
+        assert len(objects) == len(new_mask)
         self.objects = objects
         self.windows = windows
-        self.slots = [None] * len(self.windows)
-        self.pos = [None] * len(self.windows)
         self.tc_pts = tc_pts
-        self.nc_refresh = nc_refresh
+        self.is_palette_update = is_palette_update
+        self.new_mask = new_mask
 
-        self.new_mask = []
+        self.slots = [None] * len(self.objects)
+        self.pos = [None] * len(self.objects)
         self.partial = False
         self.idx = 0
 
+        # These fields are not copied over
         self.parent = None
         self.palette_id = None
         self.pal_vn = 0
         self._dts = None
+
+    def copy(self) -> 'DSNode':
+        new_node = self.__class__(self.objects.copy(), self.windows, self.tc_pts,
+                                  is_palette_update=self.is_palette_update, new_mask=self.new_mask.copy())
+        new_node.slots = self.slots.copy()
+        new_node.pos = self.pos.copy()
+        new_node.partial = self.partial
+        new_node.idx = self.idx
+        return new_node
 
     def wipe_duration(self) -> int:
         return np.ceil(sum(map(lambda w: PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC, self.windows)))
@@ -1501,7 +1528,7 @@ class DSNode:
         return sum(map(lambda w: np.ceil(PGDecoder.FREQ*w.dy*w.dx/PGDecoder.RC), self.windows))
 
     def set_dts(self, dts: Optional[float]) -> None:
-        assert dts is None or dts <= self.dts() or (self.nc_refresh and dts < self.pts())
+        assert dts is None or dts <= self.dts() or (self.is_palette_update and dts < self.pts())
         self._dts = round(dts*PGDecoder.FREQ) if dts is not None else None
 
     def dts_end(self) -> float:
@@ -1527,7 +1554,7 @@ class DSNode:
     def get_decode_duration(self) -> tuple[int, int]:
         t_decoding = []
 
-        if not self.nc_refresh:
+        if not self.is_palette_update:
             assert any(self.objects)
             target_windows = list(map(lambda o: o.wid, filter(lambda o: o is not None, self.objects)))
             assigned_wids = set(target_windows)
@@ -1567,15 +1594,6 @@ class DSNode:
         else:
             decode_duration = self.write_duration() + 1
         return (decode_duration, t_decoding)
-
-    def copy(self) -> 'DSNode':
-        new_node = self.__class__(self.objects.copy(), self.windows, self.tc_pts, self.nc_refresh)
-        new_node.slots = self.slots.copy()
-        new_node.pos = self.pos.copy()
-        new_node.new_mask = self.new_mask.copy()
-        new_node.partial = self.partial
-        new_node.idx = self.idx
-        return new_node
 
     def get_dts_markers(self) -> tuple[int, int]:
         decode_duration, t_decoding = self.get_decode_duration()
