@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Copyright (C) 2023-2025 cibo
+Copyright (C) 2023-2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 
 SUPer is free software: you can redistribute it and/or modify
@@ -22,7 +22,9 @@ import multiprocessing as mp
 if __name__ == '__main__':
     mp.freeze_support()
 
-from SUPer import BDNRender, LogFacility
+from SUPer import BDNEncoder
+from SUPer.internals import LogFacility
+from SUPer.imgproc import BuiltinQuantizer
 from SUPer.__metadata__ import __author__, __version__ as LIB_VERSION
 
 import os
@@ -102,7 +104,7 @@ if __name__ == '__main__':
     parser.add_argument("output", type=str)
     args = parser.parse_args()
 
-    print(f"SUPer version {LIB_VERSION} - (c) 2025 cubicibo")
+    print(f"SUPer version {LIB_VERSION} - (c) 2026 cubicibo")
     print("HDMV PGS encoder, with support from Masstock, Alllen and Emulgator.")
 
     #### Sanity checks and conversion
@@ -119,9 +121,9 @@ if __name__ == '__main__':
         logger.warning("Unknown transfer matrix, using bt709.")
         args.bt = 709
 
-    if not (2 >= args.layout >= -1):
-        logger.warning("Invalid layout mode specified, falling back to ini config (or default, 2).")
-        args.layout = -1
+    if not (2 >= args.layout >= 0):
+        logger.warning("Invalid layout mode specified, falling back to default: greedy.")
+        args.layout = 2
 
     if args.extra_acq < 0:
         logger.warning("Got invalid extra-acq, disabling option.")
@@ -187,15 +189,12 @@ if __name__ == '__main__':
                     exepath = str(application_path.joinpath(exepath))
                 piq_values |= {k: int(v) for k, v in piq_sect.items()}
             ini_opts['quant'] = {'qpath': exepath} | piq_values
+            BuiltinQuantizer.LIQ.value.configure(ini_opts['quant'])
         if len(ini_opts):
             parameters['ini_opts'] |= ini_opts
     else:
         logger.error("config.ini not found!")
 
-    if args.layout >= 0:
-        parameters['ini_opts']['super_cfg']['layout_mode'] = args.layout
-    if parameters['ini_opts']['super_cfg'].get('layout_mode', None) is None:
-        parameters['ini_opts']['super_cfg']['layout_mode'] = 2
     ###
     parameters |= {
         'quality_factor': int(args.compression)/100,
@@ -213,10 +212,12 @@ if __name__ == '__main__':
         'ssim_tol': args.ssim_tol/100,
         'redraw_period': args.redraw_period,
         'threads': 'auto' if args.threads == 0 else args.threads,
+        'layout_mode': args.layout,
+        'log_filename': args.output,
     }
     ts_start = time.monotonic()
-    bdnr = BDNRender(args.input, parameters, args.output)
-    bdnr.encode_input()
-    bdnr.write_output()
+    bdnr = BDNEncoder(args.input, parameters)
+    _, epochs = bdnr.encode()
+    bdnr.write_output(args.output, epochs)
     exit_msg(f"Success. Duration: {timedelta(seconds=round(time.monotonic() - ts_start, 3))}", False)
 ####
