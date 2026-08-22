@@ -1,0 +1,116 @@
+[build-system]
+requires = ["hatchling>=1.29.0", "versioningit", "hatch-sbom[uv]>=0.3.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "SUPer"
+dynamic = ["version"]
+description = "HDMV PGS Encoder"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = [
+    "LICENSE",
+]
+requires-python = ">=3.12"
+authors = [{ name = "cubicibo", email = "cubicibo@outlook.com" }]
+maintainers = [
+    { name = "cubicibo", email = "cubicibo@outlook.com" },
+]
+keywords = [
+    "subtitles",
+    "encoding",
+    "parser",
+    "encoder",
+    "hdmv",
+    "blu-ray",
+]
+classifiers = [
+    "Topic :: Multimedia :: Graphics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "Pillow",
+    "numpy>=2.0.1",
+    "opencv-python",
+    "pyopencl",
+    "SSIM-PIL",
+    "timecode==1.5.1",
+    "siphash24",
+    'psutil ; platform_system == "Windows"',
+    "piliq@git+https://github.com/cubicibo/piliq",
+    "brule@git+https://github.com/cubicibo/brule",
+    "guizero",
+    "tqdm",
+]
+
+#[project.scripts]
+#SUPer_cli = "_supercli:main"
+#SUPer_gui = "_supergui:main"
+
+[dependency-groups]
+dev = [
+    "hatchling>=1.29.0",
+    "mypy>=2.3.0, <2.4.0",
+    "ruff>=0.16.0, <0.17.0",
+    "objgraph>=3.6.2",
+    "graphviz>=0.21",
+    { include-group = "test" },
+]
+test = [
+    "pytest>=9.0.0",
+]
+
+[project.urls]
+"Source Code" = "https://github.com/cubicibo/SUPer"
+"Bug Tracker" = "https://github.com/cubicibo/SUPer/issues"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "scripts",
+    "SUPer",
+    "tests",
+    "uv.lock",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["SUPer"]
+exclude = ["README.md"]
+
+[tool.hatch.build.targets.wheel.hooks.sbom]
+source = "uv"
+
+[tool.hatch.build.targets.wheel.hooks.sbom.uv]
+no-dev = true
+
+[tool.hatch.version]
+source = "versioningit"
+
+[tool.versioningit.vcs]
+match = ["SUPer/v*"]
+default-tag = "SUPer/v0.0.0"
+
+[tool.versioningit.tag2version]
+rmprefix = "SUPer/v"
+
+[tool.versioningit.format]
+distance = "{next_version}.dev{distance}+{vcs}{rev}"
+dirty = "{next_version}+dirty"
+distance-dirty = "{next_version}.dev{distance}+{vcs}{rev}.dirty"
+
+[tool.pytest]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+extend-exclude = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.*" = ["F401", "F403"]
