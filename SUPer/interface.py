@@ -292,12 +292,14 @@ class BDNEncoder:
         for epoch in epochs:
             last_composition_num = epoch[0].pcs.composition_number-1
             composition_num_in_epoch = 0
-            for ds in epoch:
-                diff = (ds.pcs.composition_number - last_composition_num) & 0xFFFF
-                assert 0 <= diff <= 1
+            for kd, ds in enumerate(epoch):
+                if not replace or kd > 0:
+                    diff = (ds.pcs.composition_number - last_composition_num) & 0xFFFF
+                    assert 0 <= diff <= 1
+                else:
+                    diff = 1 # always true for epoch start
                 last_composition_num = ds.pcs.composition_number
                 if replace:
-                    assert composition_num_in_epoch & 0xFFFF == ds.pcs.composition_number
                     ds.pcs.composition_number = (composition_num + composition_num_in_epoch) & 0xFFFF
                 else:
                     assert ds.pcs.composition_number == (composition_num + composition_num_in_epoch) & 0xFFFF

@@ -196,7 +196,7 @@ class PGEpochContext:
             data = data[chunk_size:]
             if len(data) == 0:
                 flag |= ODS.DataFlag.LAST
-            ods_list.append(ODS(pts, dts, object_id=slot_id, object_version=slot.version,
+            ods_list.append(ODS(pts, dts, object_id=slot_id, object_version=slot.get_cast_version(),
                                 flag=flag, width=shp.width, height=shp.height,
                                 data=rle_data, data_len=len_rle_data_total))
             flag = 0

@@ -269,14 +269,14 @@ def init_extra_libs(CWD: Path, verbose: bool = True):
     return params
 
 if __name__ == '__main__':
+    logger = LogFacility.get_logger('SUPui')
+    logger.info(f"SUPer v{SUPVERS}, (c) {__author__}")
+
     is_win32 = sys.platform == 'win32'
     try:
         application_path = Path(sys.argv[0]).resolve().parent
     except:
         application_path = Path(sys.argv[0]).absolute().parent
-
-    logger = LogFacility.get_logger('SUPui')
-    logger.info(f"SUPer v{SUPVERS}, (c) {__author__}")
 
     #Do not keep returned params, we just want to initialize PILIQ
     init_extra_libs(application_path)

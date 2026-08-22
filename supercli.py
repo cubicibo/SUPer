@@ -35,49 +35,44 @@ from typing import NoReturn, Union
 import time
 from datetime import timedelta
 
+def exit_msg(msg: str, is_error: bool = True) -> NoReturn:
+    if msg != '':
+        if is_error:
+            logger.critical(msg)
+        else:
+            logger.info(msg)
+    sys.exit(is_error)
+####
+
+def check_output(fp: Union[Path, str], overwrite: bool) -> None:
+    ext = ''
+    fp =  Path(fp)
+    if fp.exists() and not overwrite:
+        exit_msg("Output file already exist, not overwriting.")
+    if fp.name.find('.') == -1:
+        logger.warning("No extension provided, assuming .SUP.")
+        fp = str(fp) + '.sup'
+        ext = 'sup'
+    elif (ext := fp.name.split('.')[-1].lower()) not in ['pes', 'sup']:
+        exit_msg("Not a known PG stream extension, aborting.")
+    return str(os.path.expandvars(os.path.expanduser(fp))), ext
+
+class BruleCapAction(BooleanOptionalAction):
+    def __init__(self, option_strings, dest, nargs=None, **kwargs):
+        super().__init__(option_strings, dest, **kwargs)
+
+    def __call__(self, parser, namespace, values = None, option_string=None):
+        from brule import LayoutEngine, Brule, HexTree, QtzrUTC
+        f_strcap = lambda caps: ', '.join(caps)
+
+        print(f"LayoutEngine: {f_strcap(LayoutEngine.get_capabilities())}")
+        print(f"   RLE codec: {f_strcap(Brule.get_capabilities())}")
+        print(f"     HexTree: {f_strcap(HexTree.get_capabilities())}")
+        print(f"     QtzrUTC: {f_strcap(QtzrUTC.get_capabilities())}")
+        exit_msg('', is_error=False)
+
 #%% Main code
-if __name__ == '__main__':
-    logger = LogFacility.get_logger('SUPer')
-
-    def exit_msg(msg: str, is_error: bool = True) -> NoReturn:
-        if msg != '':
-            if is_error:
-                logger.critical(msg)
-            else:
-                logger.info(msg)
-        sys.exit(is_error)
-    ####exit_msg
-
-    def check_output(fp: Union[Path, str], overwrite: bool) -> None:
-        ext = ''
-        fp =  Path(fp)
-        if fp.exists() and not overwrite:
-            exit_msg("Output file already exist, not overwriting.")
-        if fp.name.find('.') == -1:
-            logger.warning("No extension provided, assuming .SUP.")
-            fp = str(fp) + '.sup'
-            ext = 'sup'
-        elif (ext := fp.name.split('.')[-1].lower()) not in ['pes', 'sup']:
-            exit_msg("Not a known PG stream extension, aborting.")
-        return str(os.path.expandvars(os.path.expanduser(fp))), ext
-
-    def check_ext(fp: Union[Path, str]) -> None:
-        fp = Path(fp)
-
-    class BruleCapAction(BooleanOptionalAction):
-        def __init__(self, option_strings, dest, nargs=None, **kwargs):
-            super().__init__(option_strings, dest, **kwargs)
-
-        def __call__(self, parser, namespace, values = None, option_string=None):
-            from brule import LayoutEngine, Brule, HexTree, QtzrUTC
-            f_strcap = lambda caps: ', '.join(caps)
-
-            print(f"LayoutEngine: {f_strcap(LayoutEngine.get_capabilities())}")
-            print(f"   RLE codec: {f_strcap(Brule.get_capabilities())}")
-            print(f"     HexTree: {f_strcap(HexTree.get_capabilities())}")
-            print(f"     QtzrUTC: {f_strcap(QtzrUTC.get_capabilities())}")
-            exit_msg('', is_error=False)
-
+def main():
     parser = ArgumentParser()
     parser.add_argument("-i", "--input", type=str, help="Set input BDNXML file.", default='', required=True)
     parser.add_argument('-c', '--compression', help="Set compression rate [int, 0-100] (def:  %(default)s)", type=int, default=80, required=False)
@@ -221,3 +216,7 @@ if __name__ == '__main__':
     bdnr.write_output(args.output, epochs)
     exit_msg(f"Success. Duration: {timedelta(seconds=round(time.monotonic() - ts_start, 3))}", False)
 ####
+
+if __name__ == '__main__':
+    logger = LogFacility.get_logger('SUPer')
+    main()
