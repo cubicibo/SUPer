@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Copyright (C) 2024 cibo
+Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 
 SUPer is free software: you can redistribute it and/or modify
@@ -20,269 +20,110 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
 import signal
-import numpy as np
 import multiprocessing as mp
 
-from typing import Any, Optional, NoReturn, Union
 from itertools import chain
-from functools import partial
-from enum import IntEnum
+from pathlib import Path
+from typing import Any, NoReturn, Self
 
-from scenaristream import EsMuiStream
-from brule import LayoutEngine, Brule
+from .bdnxml import BDNXML
+from .bdvideo import BDVideo
+from .engine import EpochEncoderEngine
+from .imgproc import BuiltinQuantizer, SSIMPW
+from .internals import TC, LogFacility
+from .pgstreams import Epoch, PesMuiWriter, SUPWriter
+from .verifier import is_compliant, check_pts_dts_sanity, test_rx_bitrate
+from .epochctx import EpochFinder, EventsPreprocessor, EpochData, LayoutMode
+from .codecctx import PGStreamCtx
 
-from .utils import LogFacility, Box, SSIMPW
-from .pgraphics import PGDecoder
-from .filestreams import BDNXML, BDNXMLEvent, remove_dupes, add_periodic_refreshes
-from .segments import Epoch, DisplaySet
-from .optim import Quantizer
-from .pgstream import is_compliant, check_pts_dts_sanity, test_rx_bitrate, EpochContext, debug_stats
-from .render2 import PaddingEngine, EpochEncoder
-
-class LayoutPreset(IntEnum):
-    SAFE   = 0
-    NORMAL = 1
-    GREEDY = 2
-#%%
 logger = LogFacility.get_logger('SUPer')
 
-_parent_id = os.getpid()
-def _pool_worker_init():
-    if os.name == 'nt':
-        import psutil
-
-        def sig_int(signal_num, frame):
-            parent = psutil.Process(_parent_id)
-            _cpid = os.getpid()
-            for child in parent.children():
-                if child.pid != _cpid:
-                    child.kill()
-            parent.kill()
-            psutil.Process(_cpid).kill()
-        signal.signal(signal.SIGINT, sig_int)
-    #else, do nothing
-
-def _decode_duration_base(cwdo, container_area) -> float:
-    dd = PGDecoder.copy_gp_duration(container_area)
-    t_dec = 0
-    for wd in cwdo:
-        t_dec += PGDecoder.decode_obj_duration(wd.area)
-        dd = max(t_dec, dd) + PGDecoder.copy_gp_duration(wd.area)
-    return dd
-
-def _find_modify_layout(leng: LayoutEngine, container: Box, preset: LayoutPreset):
-    cbox, w1, w2, is_vertical = leng.get_layout()
-    cbox, w1, w2 = tuple(map(lambda b: Box.from_coords(*b), (cbox, w1, w2)))
-    cwd = (w1, w2) if w1 != w2 else (w1,)
-    cwd = PaddingEngine(cbox, container=container).directional_pad(cwd, is_vertical)
-
-    scores = []
-    for cwdo in (cwd, reversed(cwd)):
-        scores.append(_decode_duration_base(cwdo, container.area))
-
-    if len(scores) > 1:
-        flip_results = (preset == LayoutPreset.SAFE and scores[0] < scores[1])
-        flip_results = flip_results or (preset != LayoutPreset.SAFE and scores[0] > scores[1])
-
-        if flip_results:
-            cwd = tuple(reversed(cwd))
-            scores[0] = scores[1]
-
-    base_box = Box.from_coords(*leng.get_raw_container())
-    base_box_wd = Box(0, base_box.dy, 0, base_box.dx)
-    score_container = _decode_duration_base((base_box,), container.area)
-    is_bad_split = scores[0] >= max(1/PGDecoder.FREQ, score_container-10/PGDecoder.FREQ)
-    #coded object buffer can fit at most 16 ODS: we need roughly +150 bytes in the buffer
-    #note: technically we need to also consider the 2*height line-endings bytes, but let's assume there's *some* compression
-    may_not_fit_buffer = any(map(lambda b: b.area >= (1 << 20)-150, cwd))
-    is_greedysplit_worthwile = (score_container*0.85 < scores[0] and base_box_wd.area > 125000) or may_not_fit_buffer
-    old_score = scores[0]
-
-    #With greedy mode, anytime we're dealing with very big objects we abuse the 1/2 1/2. This also prevents coded buffer overflow.
-    layout_modifier = 'N'
-    if (preset == LayoutPreset.GREEDY or is_bad_split) and is_greedysplit_worthwile:
-        cx, cy = (1, 0.5)
-        box1 = Box(0, int(round(cy*base_box.dy)), 0, int(round(base_box.dx*cx)))
-        box2 = Box.from_coords(0, box1.y2, base_box.dx, base_box.dy)
-        assert base_box.area == Box.union(box1, box2).area
-        assert abs(1-box1.area/box2.area) < 1e-1
-
-        greedy_wds = (box1, box2)
-        new_score = _decode_duration_base(greedy_wds, container.area)
-        if scores[0] > new_score:
-            cwd = greedy_wds
-            scores[0] = new_score
-            layout_modifier = 'G'
-            cbox = base_box
-        # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
-    if layout_modifier == 'N' and is_bad_split and not may_not_fit_buffer:
-        cwd = (base_box_wd,)
-        cbox = base_box
-        scores[0] = score_container
-        layout_modifier = 'S'
-    return (cbox, cwd, layout_modifier, is_bad_split, is_greedysplit_worthwile, scores, old_score)
-
-def _find_epochs_layouts(events: list[BDNXMLEvent], bdn: BDNXML, preset: Union[LayoutPreset, int] = LayoutPreset.GREEDY) -> list[EpochContext]:
-    preset = LayoutPreset(preset)
-    width, height = bdn.format.value
-    container = Box.from_coords(0, 0, width, height)
-
-    leng = LayoutEngine((width, height))
-    ectx = []
-
-    running_ev = []
-    for k, ev in enumerate(reversed(events), 1):
-        channel = np.ascontiguousarray(ev.image.getchannel('A'), dtype=np.uint8)
-        if np.any(channel):
-            leng.add_to_layout(ev.x, ev.y, channel)
-            running_ev = [ev]
-            break
-
-    # All events in list are fully transparent, return empty context list.
-    if 0 == len(running_ev):
-        leng.destroy()
-        return ectx
-
-    for ev in reversed(events[:-k]):
-        # Remove empty bitmaps
-        channel = np.ascontiguousarray(ev.image.getchannel('A'), dtype=np.uint8)
-        ev.unload()
-        if not np.any(channel):
-            continue
-
-        if ev.tc_out != running_ev[0].tc_in:
-            cbox, cwd, layout_modifier, is_bad_split, is_greedysplit_worthwile, scores, old_score = _find_modify_layout(leng, container, preset)
-            pts_out = ev.tc_out.to_pts()
-            if pts_out + scores[0] + 1e-8 < running_ev[0].tc_in.to_pts():
-                logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with b={is_bad_split}:g={is_greedysplit_worthwile}, {old_score:.03f}->{scores[0]:.03f}.")
-                ectx.append(EpochContext(cbox, cwd, running_ev, pts_out))
-                running_ev = []
-                leng.reset()
-        ####
-        leng.add_to_layout(ev.x, ev.y, channel)
-        running_ev.insert(0, ev)
-    ####for ev
-    assert len(running_ev)
-    cbox, cwd, layout_modifier, is_bad_split, is_greedysplit_worthwile, scores, old_score = _find_modify_layout(leng, container, preset)
-
-    leng.destroy() #Done with the layout engine
-    logger.debug(f"Epoch: {running_ev[0].tc_in}, modifier {layout_modifier}: {cwd} with b={is_bad_split}:g={is_greedysplit_worthwile}, {old_score:.03f}->{scores[0]:.03f}.")
-
-    ectx.append(EpochContext(cbox, cwd, running_ev, -np.inf))
-    return ectx[::-1]
-####
-
-class BDNRender:
-    def __init__(self, bdnf: str, kwargs: dict[str, Any], outfile: str) -> None:
-        self.bdn_file = bdnf
-        self.outfile = outfile
+#%%
+class BDNEncoder:
+    def __init__(self, bdn: BDNXML, kwargs: dict[str, Any]) -> None:
+        self.bdn = bdn if isinstance(bdn, BDNXML) else BDNXML(bdn)
         self.kwargs = kwargs
+        self._threads = kwargs.get('threads', 1)
+        self._allow_pes_output = True
 
-        self._epochs = []
-        self._first_pts = 0
-        self.valid_stream = True
-
-    def prepare(self) -> BDNXML:
-        stkw = '' + ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
+    def _prepare(self) -> BDVideo:
+        log_filename = self.kwargs.get('log_filename', None)
+        file_logging_level = self.kwargs.get('log_to_file', False)
+        if file_logging_level > 0 and log_filename:
+            logfile = str(log_filename) + ".txt"
+            LogFacility.set_file_log(logger, logfile, file_logging_level)
+            LogFacility.set_logger_level(logger.name, file_logging_level)
+        
+        str_kwa = ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
 
         if self.kwargs.get('quantize_lib', None) is None:
-            self.kwargs['quantize_lib'] = Quantizer.Libs.QTZR
+            self.kwargs['quantize_lib'] = BuiltinQuantizer.Qtzr
+        else:
+            for v, n, qtz in BuiltinQuantizer.get_all():
+                if self.kwargs['quantize_lib'] == qtz or v == self.kwargs['quantize_lib']:
+                    self.kwargs['quantize_lib'] = qtz
+            assert not isinstance(self.kwargs['quantize_lib'], int)
 
-        self._report_log_hdl = None
         if self.kwargs.get('log_to_file', False) < 0:
-            self._report_log_hdl = LogFacility.get_logger('event_report', with_handler=False)
-            LogFacility.set_file_log(self._report_log_hdl, str(self.outfile) + ".txt", simple_format=True)
-            LogFacility.set_logger_level('event_report', self._report_log_hdl.level)
-            logger.addHandler(self._report_log_hdl.handlers[0])
+            LogFacility.add_file_report(logger, str(self.outfile) + ".txt")
 
-        logger.iinfo(f"Parameters: {stkw}")
+        logger.iinfo(f"Parameters: {str_kwa}")
+        
+        bdvideo = BDVideo(self.bdn.description.fmt,
+                          self.bdn.description.fps,
+                          self.kwargs.get('uhd_bd', False))
 
-        bdn = BDNXML(os.path.expanduser(self.bdn_file))
-        fps_str = int(bdn.fps) if float(bdn.fps).is_integer() else round(float(bdn.fps), 3)
-        logger.iinfo(f"BDN metadata: {'x'.join(map(str, bdn.format.value))}, FPS={fps_str}, DF={bdn.dropframe}, {len(bdn.events)} valid events.")
+        if len(self.bdn.events) == 0:
+            raise RuntimeError("No BDN event found, exiting.")
 
-        # Pop succint handler
-        if self._report_log_hdl:
-            for ih, hdl in enumerate(logger.handlers):
-                if hdl == self._report_log_hdl.handlers[0]:
-                    logger.handlers.pop(ih)
-                    break
+        fps_fmt = int(bdvideo.fps) if float(bdvideo.fps).is_integer() else round(float(bdvideo.fps), 3)
+        logger.iinfo(f"BDN metadata: {'x'.join(map(str, bdvideo.fmt.value))}, FPS={fps_fmt}, DF={self.bdn.description.drop_frame}, {len(self.bdn.events)} valid events.")
 
-        if len(bdn.events) == 0:
-            logger.error("No BDN event found, exiting.")
-            import sys
-            sys.exit(1)
+        LogFacility.dissociate_log_and_report(logger)
 
-        self.kwargs['adjust_ntsc'] = isinstance(fps_str, float)
+        self.kwargs['adjust_ntsc'] = isinstance(fps_fmt, float)
         if self.kwargs['adjust_ntsc']:
-            if bdn.dropframe:
-                logger.warning("DF BDN detected: converting Timecodes to NDF and scaling all timestamps by 1.001.")
+            if self.bdn.description.drop_frame:
+                logger.info("DF BDN detected: converting Timecodes to NDF and scaling all timestamps by 1.001.")
                 #conversion was done internally in BDNXML already.
             else:
                 logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
-        self._first_pts = bdn.events[0].tc_in.to_pts()
+        
+        self._adjust_thread_count()
+        return bdvideo
+    ####
+    
+    def _adjust_thread_count(self) -> None:
+        n_threads = self._threads
+        if (n_threads_auto := isinstance(n_threads, str)): # auto
+            try:
+                import psutil
+            except (ModuleNotFoundError, NameError):
+                #commonplace: logical = 2*physical cores
+                n_threads = max(1, mp.cpu_count() >> 1)
+            else:
+                n_threads = psutil.cpu_count(logical=False)
 
-        if bdn.split_seen:
-            logger.warning("BDN contains split graphics! Merging them back to find better ones, output quality may be affected.")
-            logger.warning("Risk of excessive RAM usage: storing the merged images in RAM.")
-        return bdn
+        if n_threads_auto:
+            logger.info(f"Using {n_threads} thread(s).")
+        self._threads = n_threads
+    ####
 
-    def find_all_layouts(self, bdn: BDNXML) -> list[EpochContext]:
-        layout_mode = self.kwargs.get('ini_opts', {}).get('super_cfg', {}).get('layout_mode', LayoutPreset.NORMAL)
-        layout_mode = int(layout_mode) if isinstance(layout_mode, (int, LayoutPreset)) or str.isnumeric(layout_mode) else LayoutPreset.NORMAL
-        logger.debug(f"Layout engine preset: {layout_mode}, with capabilities: {', '.join(LayoutEngine.get_capabilities())}.")
-
-        screen_area = np.multiply(*bdn.format.value)
-        epochstart_dd_fn = lambda o_area: max(PGDecoder.copy_gp_duration(screen_area), PGDecoder.decode_obj_duration(o_area)) + PGDecoder.copy_gp_duration(o_area)
-
-        pbar = LogFacility.get_progress_bar(logger, bdn.events)
-        pbar.set_description("Finding epochs and layouts", True)
-
-        p_find_epochs_layouts = partial(_find_epochs_layouts, bdn=bdn, preset=layout_mode)
-        lectx = []
-        if self.kwargs['threads'] > 1:
-            with mp.Pool(self.kwargs['threads'], _pool_worker_init) as mpp:
-                for r in mpp.imap_unordered(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
-                    pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
-                    lectx += r
-            lectx = sorted(lectx, key=lambda ctx: ctx.events[0].tc_in)
-        else:
-            for r in map(p_find_epochs_layouts, bdn.groups(epochstart_dd_fn(screen_area))):
-                pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
-                lectx += r
-        pbar.update(len(bdn.events)-pbar.n+1)
-        LogFacility.close_progress_bar(logger)
-
-        wipe_margin = float(np.ceil(PGDecoder.copy_gp_duration(bdn.format.area)*bdn.fps + 1/bdn.fps/2)/bdn.fps)
-        for ctx, ctx_next in zip(lectx, lectx[1:]):
-            event_max_pts = ctx.events[-1].tc_out.to_pts()
-            if np.isinf(ctx_next.min_dts):
-                ctx_next.min_dts = max(event_max_pts, (ctx_next.events[0].tc_in.to_pts() - _decode_duration_base(ctx_next.windows, bdn.format.area)) - wipe_margin)
-            ctx.max_pts = min(event_max_pts + wipe_margin, ctx_next.min_dts)
-            ctx_next.min_dts += 1/PGDecoder.FREQ #safe: add one tick to min dts
-
-        if logger.level <= 10:
-            for ect in lectx:
-                logger.debug(f"Epoch Context: {ect.events[0].tc_in}->{ect.events[-1].tc_out} {len(ect.events)}, RC={ect.box}, WDS={ect.windows}, [{ect.min_dts:.04f};{ect.max_pts:.04f}]")
-        return lectx
-    #####find_all
-
-    def _convert_single(self, bdn: BDNXML) -> None:
-        EpochWorker.set_mt(False)
-        worker = EpochWorker(bdn, self.kwargs, self.outfile)
-        worker.setup_env()
-
-        pcs_id = 0
-        logger.debug("Finding all epochs and their screen layout (this can take a while)...")
-        epochs_ctx = self.find_all_layouts(bdn)
+    def _convert_single(self, bdvideo: BDVideo) -> list[Epoch]:
+        bdvideo.set_matrix(self.kwargs.get('matrix', None))
+        
+        logger.info("Finding all epochs and their screen layout:")
+        epochs_ctx = EpochFinder(bdn=self.bdn, threads=1,
+                                 mode=self.kwargs.get('layout_mode', LayoutMode.GREEDY)).get_epochs()
         logger.info(f"Identified {len(epochs_ctx)} epochs to encode.")
 
-        for ectx in epochs_ctx:
-            epoch, pcs_id = worker.convert2(ectx, pcs_id)
-            self._epochs.append(epoch)
+        pg_stream_ctx = PGStreamCtx(bdvideo)
+
+        return [EpochEncode(pg_stream_ctx, e_ctx, self.kwargs).preprocess().encode() for e_ctx in epochs_ctx]
     ####
 
     def _setup_mt_env(self) -> None:
+        LogFacility.disable_tqdm()
         def sighandler(workers, snum, frame) -> NoReturn:
             for worker in workers:
                 try:
@@ -297,7 +138,6 @@ class BDNRender:
                     worker.join()
                 except (ValueError, RuntimeError, AssertionError):
                     pass
-            logger.critical("Terminated.")
             sys.exit(1)
 
         f_term = lambda signal_num, frame: sighandler(self._workers, signal_num, frame)
@@ -305,52 +145,33 @@ class BDNRender:
         signal.signal(signal.SIGTERM, f_term)
         if os.name == 'nt':
             signal.signal(signal.SIGBREAK, f_term)
-        logger.debug("Registered signal handlers.")
     ####
 
-    def _setup_mt_main_logging(self) -> None:
-        file_logging_level = self.kwargs.get('log_to_file', False)
-        if file_logging_level > 0:
-            LogFacility.set_file_log(logger, str(self.outfile) + ".txt", file_logging_level)
-            LogFacility.set_logger_level(logger.name, file_logging_level)
-
-    def _convert_mt(self, bdn: BDNXML) -> None:
+    def _convert_mt(self, bd_video: BDVideo) -> list[Epoch]:
         import time
-        EpochWorker.set_mt(True)
-        EpochWorker.reset_module()
-        self._setup_mt_main_logging()
+        BDNEpochWorker.reset_module()
 
-        logger.debug("Finding all epochs and their screen layout (this can take a while)...")
-        epochs_ctx = self.find_all_layouts(bdn)
-        logger.info(f"Identified {len(epochs_ctx)} epochs.")
+        epochs_ctx = EpochFinder(bdn=self.bdn, threads=self._threads, mode=self.kwargs.get('layout_mode', LayoutMode.GREEDY)).get_epochs()
 
         as_deamon = self.kwargs.get('daemonize', True)
-        n_threads = min(self.kwargs.get('threads', 2), len(epochs_ctx))
-        workers = [EpochWorker(bdn, self.kwargs, self.outfile, as_deamon) for _ in range(n_threads)]
+        # No point in having more workers than epochs
+        n_threads = min(self._threads, len(epochs_ctx))
+        workers = [BDNEpochWorker(bd_video, self.kwargs, as_deamon) for _ in range(n_threads)]
 
-        self._workers = workers
         self._setup_mt_env()
 
-        logger.info("Starting workers...")
+        logger.debug("Starting workers...")
         for worker in workers:
             worker.start()
 
         while not all(map(lambda worker: worker.is_available(), workers)):
             time.sleep(0.2)
-
-        def add_data(ep_timeline: list[bytes], epoch_data: tuple[bytes, int], hdl = None) -> None:
-            if hdl is None:
-                new_epoch, epoch_id = epoch_data
-            else:
-                new_epoch, epoch_id, fmsgs = epoch_data
-                for msg in filter(lambda x: x[0] > 20, reversed(fmsgs)): hdl.info(msg[1])
-            ep_timeline[epoch_id] = new_epoch
         ###
 
         #Orchestrator starts here
         busy_flags = {worker.iid: False for worker in workers}
         g_epochs = enumerate(chain(epochs_ctx, (None,)))
-        tc_inout, ep_timeline = [], []
+        ep_timeline = []
 
         group_data = True
         healthy = True
@@ -358,13 +179,12 @@ class BDNRender:
             time.sleep(0.05)
             for free_worker in filter(lambda worker: worker.is_available(), workers):
                 if (epoch_data := free_worker.get()) is not None:
-                    add_data(ep_timeline, epoch_data, self._report_log_hdl)
+                    ep_timeline[epoch_data[1]] = epoch_data[0]
                     busy_flags[free_worker.iid] = False
                 if busy_flags[free_worker.iid] is False:
                     group_id, group_data = next(g_epochs)
                     if group_data is not None:
                         ep_timeline.append(None)
-                        tc_inout.append((group_data.events[0].tc_in, group_data.events[-1].tc_out))
                         busy_flags[free_worker.iid] = True
                         free_worker.send((group_data, group_id))
                     else:
@@ -381,7 +201,7 @@ class BDNRender:
         while any(busy_flags.values()) and healthy:
             for free_worker in filter(lambda worker: busy_flags[worker.iid] or worker.is_available(), workers):
                 if free_worker.is_available() and (epoch_data := free_worker.get()) is not None:
-                    add_data(ep_timeline, epoch_data, self._report_log_hdl)
+                    ep_timeline[epoch_data[1]] = epoch_data[0]
                     busy_flags[free_worker.iid] = False
                 if not busy_flags[free_worker.iid] or not free_worker.is_alive():
                     if free_worker.is_alive():
@@ -396,7 +216,7 @@ class BDNRender:
             time.sleep(0.2)
 
         if healthy:
-            logger.info("All jobs finished, cleaning-up.")
+            logger.debug("All jobs finished, cleaning-up.")
         time.sleep(0.01)
         for worker in workers:
             try: worker.terminate()
@@ -409,95 +229,86 @@ class BDNRender:
         for worker in workers:
             try: worker.join()
             except: ...
-        self._workers.clear()
+        workers.clear()
         if not healthy:
-            logger.critical("One encoder process had an unrecoverable error, giving up.")
+            logger.warning("One encoder process had an unrecoverable error, giving up.")
             import sys
             sys.exit(1)
-        logger.debug("Unserializing workers data.")
-        for eid, epoch in enumerate(ep_timeline):
-            ep_timeline[eid] = Epoch.from_bytes(epoch)
-        self._epochs = ep_timeline
+        return ep_timeline
     ####
 
-    def encode_input(self) -> None:
-        bdn = self.prepare()
-        n_threads = self.kwargs.get('threads', 1)
-        if (n_threads_auto := isinstance(n_threads, str)):
-            try:
-                import psutil
-            except (ModuleNotFoundError, NameError):
-                n_threads = max(1, mp.cpu_count() >> 1) #commonplace: logical = 2*physical cores
-            else:
-                n_threads = psutil.cpu_count(logical=False)
+    def encode(self) -> tuple[bool, list[Epoch]]:
+        bd_video = self._prepare()
 
-        if n_threads_auto:
-            logger.info(f"Using {n_threads} thread(s).")
-        self.kwargs['threads'] = n_threads
-
-        if n_threads == 1:
-            self._convert_single(bdn)
-            self.fix_composition_id(False)
+        if (threaded := self._threads > 1):
+            epochs = self._convert_mt(bd_video)
         else:
-            self._convert_mt(bdn)
-            logger.debug("Fixing PCS composition number.")
-            self.fix_composition_id(True)
+            epochs = self._convert_single(bd_video)
+        
+        # with multithreading we have non deterministic generation order of DisplaySets
+        # so fix the composition number here
+        self.fix_composition_id(epochs, replace=threaded)
 
-        self.test_output(bdn)
+        is_valid = self.test_output(bd_video, epochs)
+        
+        return is_valid, epochs
     ####
 
-    def test_output(self, bdn: BDNXML) -> None:
-        if logger.level <= 10:
-            logger.debug(debug_stats(self._epochs))
+    def test_output(self, bd_video: BDVideo, epochs: list[Epoch]) -> bool:
+        #if logger.level <= 10:
+        #    logger.debug(debug_stats(self._epochs))
 
         # Final checks
         logger.info("Checking stream consistency and compliancy...")
+        LogFacility.associate_log_and_report(logger)
 
-        #inject succint log handler to append the stats.
-        if self._report_log_hdl:
-            logger.addHandler(self._report_log_hdl.handlers[0])
-
-        final_fps = round(bdn.fps, 3)
-        compliant, warnings = is_compliant(self._epochs, final_fps)
+        final_fps = bd_video.fps
+        compliant, warnings = is_compliant(epochs, final_fps)
 
         if compliant:
             logger.info("Checking PTS and DTS rules...")
-            compliant &= check_pts_dts_sanity(self._epochs, final_fps)
+            compliant &= check_pts_dts_sanity(epochs, final_fps)
             if not compliant:
                 logger.error("=> Stream has a PTS/DTS issue!!")
-                self.valid_stream = False
+                self._allow_pes_output = False
             elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
                 logger.info(f"Checking PGS bitrate and buffer usage w.r.t user max bitrate: {max_bitrate} Kbps...")
-                if not test_rx_bitrate(self._epochs, int(max_bitrate*1000/8), final_fps):
+                if not test_rx_bitrate(epochs, int(max_bitrate*1000/8), final_fps):
                     logger.warning("Detected buffer underflow(s) given the provided test bitrate.")
         if compliant:
             if warnings == 0:
                 logger.info("=> Output PGS is compliant.")
-            if warnings > 0:
-                logger.warning("=> Output PGS seems compliant but has minor issues (see warnings).")
+            else:
+                logger.info("=> Output PGS seems compliant but has minor issues (see warnings).")            
         else:
             logger.error("=> Output PGS is not compliant. Expect display issues or decoder crash.")
-
-        if self._report_log_hdl:
-            for ih, hdl in enumerate(logger.handlers):
-                if hdl == self._report_log_hdl.handlers[0]:
-                    logger.handlers.pop(ih)
+        
+        LogFacility.dissociate_log_and_report(logger)
+        return compliant
     ####
 
-    def fix_composition_id(self, replace: bool = False) -> None:
-        cnt = 0
-        for epoch in self._epochs:
+    def fix_composition_id(self, epochs: list[Epoch], replace: bool = False) -> None:
+        composition_num = 0
+        for epoch in epochs:
+            last_composition_num = epoch[0].pcs.composition_number-1
+            composition_num_in_epoch = 0
             for ds in epoch:
+                diff = (ds.pcs.composition_number - last_composition_num) & 0xFFFF
+                assert 0 <= diff <= 1
+                last_composition_num = ds.pcs.composition_number
                 if replace:
-                    ds.pcs.composition_n = cnt & 0xFFFF
+                    assert composition_num_in_epoch & 0xFFFF == ds.pcs.composition_number
+                    ds.pcs.composition_number = (composition_num + composition_num_in_epoch) & 0xFFFF
                 else:
-                    assert ds.pcs.composition_n == cnt & 0xFFFF
-                cnt += 1
+                    assert ds.pcs.composition_number == (composition_num + composition_num_in_epoch) & 0xFFFF
+
+                composition_num_in_epoch += diff
+            composition_num += composition_num_in_epoch
     ####
 
-    def write_output(self) -> None:
-        fp = self.outfile
-        if not self._epochs:
+    def write_output(self, output_file: Path | str, epochs: list[Epoch]) -> None:
+        fp = output_file
+        if not epochs:
             raise RuntimeError("No data to write.")
 
         is_pes = fp.lower().endswith('pes')
@@ -515,139 +326,127 @@ class BDNRender:
             fp_sup = filepath[0] + '.sup'
 
         if is_pes:
-            if self.valid_stream:
+            if self._allow_pes_output:
                 logger.info(f"Writing output file {fp_pes}")
-
-                decode_duration = (self._epochs[0][0].pcs.tpts - self._epochs[0][0].pcs.tdts) & ((1<<32) - 1)
-                decode_duration /= PGDecoder.FREQ
-
-                writer = EsMuiStream.segment_writer(fp_pes, first_dts=self._first_pts - decode_duration)
-                next(writer) #init writer
-                for epoch in self._epochs:
-                    for ds in epoch:
-                        for seg in ds:
-                            writer.send(seg)
-                # Close ESMUI writer
-                writer.send(None)
-                writer.close()
+                PesMuiWriter(fp_pes).write_epochs(epochs)
             else:
-                logger.error("PES+MUI not generated as the stream is not compliant.")
+                logger.warning("PES+MUI not generated as the stream is not compliant.")
         ##if is_pes
         if is_sup:
             logger.info(f"Writing output file {fp_sup}")
-
-            with open(fp_sup, 'wb') as f:
-                f.write(b''.join(map(bytes, self._epochs)))
+            SUPWriter(fp_sup).write_epochs(epochs)
     ####def            
 ####
 
-class EpochWorker(mp.Process):
-    __threaded = True
-    _instance_cnt = 0
-    def __init__(self, bdn: BDNXML, kwargs: dict[str, Any], outfile: str, daemonize: bool = True) -> None:
-        self.bdn = bdn
-        self.outfile = outfile
+class EpochEncode:
+    def __init__(self, pg_stream_ctx: PGStreamCtx, epoch_data: EpochData, kwargs: dict[str, Any]) -> None:
+        super().__init__()
+        self.pg_stream_ctx = pg_stream_ctx
         self.kwargs = kwargs
+        self.epoch_data = epoch_data
+        
+    def preprocess(self, remove_dupes: bool = True, add_refreshes: float = 0) -> Self:
+        if remove_dupes:
+            self.epoch_data.events = EventsPreprocessor.remove_duplicates(self.epoch_data.events)
+        
+        if add_refreshes >= 1.0:
+            for event in self.epoch_data.events:
+                if (count := EventsPreprocessor.get_refresh_count(event)) > 0:
+                    durTC = TC(event.fractional_fps, (event.outTC - event.inTC).frames)
+                    step = int(durTC.frames / (count + 1))
+                    for offset in range(step, durTC.frames, step):
+                        event.repeated_inTC.append(TC(self.video_fmt.fps, frames=event.inTC.frames + offset))
+        return self
+
+    def encode(self) -> Epoch:
+        engine = EpochEncoderEngine(self.epoch_data, self.pg_stream_ctx, self.kwargs)
+        ctx = engine.analyze()
+        ctx = engine.plan(ctx)
+        return engine.encode(ctx)
+
+class BDNEpochWorker(mp.Process):
+    _instance_cnt = 0
+    def __init__(self, video_fmt: BDVideo, kwargs: dict[str, Any], daemonize: bool = True) -> None:
         self._iid = __class__._instance_cnt
         __class__._instance_cnt += 1
 
-        if __class__.__threaded:
-            self._q_rx = mp.Queue()
-            self._q_tx = mp.Queue()
-            self._available = mp.Value('d', 0, lock=False)
-            super().__init__(daemon=daemonize)
+        self.video_fmt = video_fmt
+        self.kwargs = kwargs
+
+        self._q_rx = mp.Queue()
+        self._q_tx = mp.Queue()
+        self._available = mp.Value('d', 0, lock=False)
+        super().__init__(daemon=daemonize)
 
     @property
-    def iid(self) -> Optional[int]:
+    def iid(self) -> int:
         return self._iid
-
-    @classmethod
-    def set_mt(cls, enable: bool = False) -> None:
-        cls.__threaded = enable
 
     @classmethod
     def reset_module(cls) -> None:
         cls._instance_cnt = 0
 
     def setup_env(self) -> None:
+        self.video_fmt.set_matrix(self.kwargs.get('matrix', None))
+        
+        LogFacility.disable_tqdm()
+        
+        log_filename = self.kwargs.get('log_filename', None)
         file_logging_level = self.kwargs.get('log_to_file', False)
-        self._buffering_logs = False
-
-        if __class__.__threaded:
-            LogFacility.disable_tqdm()
-        if file_logging_level < 0 and __class__.__threaded:
-            LogFacility.set_logger_buffer(logger)
-            self._buffering_logs = True
-        elif file_logging_level > 0:
-            logfile = str(self.outfile) + (f"_{self.iid}" if __class__.__threaded else '') + ".txt"
+        if file_logging_level > 0 and log_filename:
+            logfile = str(log_filename) + f"_{self._prefix}"  + ".txt"
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
-
+        
         libs_params = self.kwargs.get('ini_opts', {})
         logger.debug(f"INI parameters: {libs_params}")
-        requested_qtz = Quantizer.Libs(self.kwargs['quantize_lib'])
-        if requested_qtz >= Quantizer.Libs.PILIQ:
-            if not Quantizer.init_piliq(**libs_params.get('quant', {})):
-                fallback = Quantizer.get_brule_fallback()
-                logger.warning(f"Failed to initialise imagequant/pngquant. Using lower quality {fallback.name}.")
-                self.kwargs['quantize_lib'] = fallback.value
-            else:
-                self.kwargs['quantize_lib'] = Quantizer.select_quantizer(self.kwargs['quantize_lib'])
-        else:
-            self.kwargs['quantize_lib'] = requested_qtz.value
-
-        Quantizer.log_selection(self.kwargs['quantize_lib'])
-        logger.debug(f"Bitmap encoder capabilities: {', '.join(Brule.get_capabilities())}.")
-
+        requested_qtz = self.kwargs['quantize_lib']
+        if requested_qtz == BuiltinQuantizer.LIQ:
+            if not BuiltinQuantizer.LIQ.value.configure(libs_params.get('quant', {})):
+                self.kwargs['quantize_lib'] = BuiltinQuantizer.Qtzr
+                logger.warning("Failed to configure PNG/ImageQuant, using Qtzr as a fallback.")
+        
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
         logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
-
-        BDNXMLEvent.can_warn_palettized = True
     ####
 
-    def convert2(self, ectx: EpochContext, pcs_id: int = 0) -> tuple[Epoch, DisplaySet, int]:
-        ectx.events = remove_dupes(ectx.events)
-        if (redraw_period := self.kwargs.get('redraw_period', 0)) >= 1:
-            ectx.events, ectx.redraw_flags = add_periodic_refreshes(ectx.events, self.bdn.fps, redraw_period)
-        else:
-            ectx.redraw_flags = [False] * len(ectx.events)
-        prefix = f"W{self.iid}: " if __class__.__threaded else ""
-        logger.info(prefix + f"Encoding epoch {ectx.events[0].tc_in}->{ectx.events[-1].tc_out} with {len(ectx.events)} event(s), {len(ectx.windows)} window(s).")
-
-        if logger.level <= 10:
-            for w_id, wd in enumerate(ectx.windows):
-                logger.debug(f"Window {w_id}: X={wd.x+ectx.box.x}, Y={wd.y+ectx.box.y}, W={wd.dx}, H={wd.dy}")
-
-        epoch_data = EpochEncoder(ectx, self.bdn, pcs_id=pcs_id, **self.kwargs)
-        new_epoch, pcs_id = epoch_data.encode()
-        logger.debug(prefix + f" => encoded as {len(new_epoch)} display sets.")
-        return new_epoch, pcs_id
-
     def is_available(self) -> bool:
-        assert __class__.__threaded
         return self._available.value > 0
 
     def is_healthy(self) -> bool:
-        assert __class__.__threaded
         return self._available.value >= 0
 
-    def send(self, data: Any):
-        assert __class__.__threaded
+    def send(self, data: Any) -> None:
+        """
+        Send data to the worker.
+        """
         self._q_rx.put(data)
 
-    def get(self, default: Optional[Any] = None) -> Any:
-        assert __class__.__threaded
+    def get(self, default: Any | None = None) -> Any:
+        """
+        Receive data from the worker.
+        """
         try:
             return self._q_tx.get_nowait()
         except:
             return None
 
-    def run(self):
-        assert not (self._q_rx is None or self._q_tx is None)
-        self.setup_env()
-        logger.info(f"Worker {self.iid} ready.")
+    @property
+    def _prefix(self) -> str:
+        return f"W{self.iid}"
 
+    def _print_tb_except(self, e: Exception) -> None:
+        tb = e.__traceback__
+        while (next_tb := tb.tb_next) is not None:
+            tb = next_tb
+        logger.error(f"Encoder {self._prefix} died: {type(e).__name__}@{tb.tb_frame.f_code.co_name}::L{tb.tb_lineno}" + (f" - {e}." if len(e.args) else "."))
+        self._available.value = -1
+
+    def run(self) -> None:
+        self.setup_env()
+        logger.debug(f"{self._prefix} ready.")
+        pg_stream_ctx = PGStreamCtx(self.video_fmt)
         self._available.value = 1
         while True:
             try:
@@ -659,21 +458,18 @@ class EpochWorker(mp.Process):
             if in_data is None:
                 break
             ectx, epoch_id = in_data
-            logger.debug(f"WORKER {self.iid} on EPOCH {epoch_id}")
+            logger.debug(f"{self._prefix} on EPOCH {epoch_id}")
+            logger.info(f"{self._prefix} encoding epoch {ectx.events[0].inTC}->{ectx.events[-1].outTC} with {len(ectx.events)} event(s), {len(ectx.windows)} window(s).")
+            ee = EpochEncode(pg_stream_ctx, ectx, self.kwargs)
             try:
-                new_epoch, _ = self.convert2(ectx) #discard pcs_id
+                new_epoch = ee.preprocess().encode()
             except Exception as e:
-                tb = e.__traceback__
-                while (next_tb := tb.tb_next) is not None:
-                    tb = next_tb
-                prefix = f"W{self.iid} " if __class__.__threaded else ""
-                logger.critical(f"Encoder {prefix}died: {type(e).__name__}@{tb.tb_frame.f_code.co_name}::L{tb.tb_lineno}" + (f" - {e}." if len(e.args) else "."))
-                self._available.value = -1
+                self._print_tb_except(e)
                 break
-            if self._buffering_logs:
-                self._q_tx.put((bytes(new_epoch), epoch_id, LogFacility.get_buffered_msgs(logger)))
             else:
-                self._q_tx.put((bytes(new_epoch), epoch_id))
+                logger.info(f"{self._prefix} => encoded as {len(new_epoch)} display sets.")
+
+            self._q_tx.put((new_epoch, epoch_id))
             self._available.value = 1
         ####
     ####

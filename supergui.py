@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Copyright (C) 2024 cibo
+Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
 
 SUPer is free software: you can redistribute it and/or modify
@@ -25,10 +25,11 @@ import signal
 from typing import Optional, Any, Callable
 
 ### CONSTS
-SUPER_STRING = "Make it SUPer!"
+SUPER_STRING = "Encode"
 
 def from_bdnxml(queue: ...) -> None:
-    from SUPer import BDNRender, LogFacility
+    from SUPer import BDNEncoder
+    from SUPer.internals import LogFacility
     import time
     from datetime import timedelta
 
@@ -43,9 +44,9 @@ def from_bdnxml(queue: ...) -> None:
 
     ts_start = time.monotonic()
     logger.info(f"Loading input BDN: {bdnf}")
-    sup_obj = BDNRender(bdnf, kwargs, supo)
-    sup_obj.encode_input()
-    sup_obj.write_output()
+    bdn_enc = BDNEncoder(bdnf, kwargs)
+    _, epochs = bdn_enc.encode()
+    bdn_enc.write_output(supo, epochs)
     logger.info(f"Finished in {timedelta(seconds=round(time.monotonic() - ts_start, 3))}, exiting...")
 ####
 
@@ -58,8 +59,8 @@ from pathlib import Path
 from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
 
-from SUPer import LogFacility
-from SUPer.optim import Quantizer
+from SUPer.internals import LogFacility
+from SUPer.imgproc import BuiltinQuantizer
 from SUPer.__metadata__ import __version__ as SUPVERS, __author__
 
 #### Functions, main at the end of the file
@@ -67,7 +68,7 @@ def get_kwargs() -> dict[str, Any]:
     return {
         'quality_factor': int(compression_txt.value)/100,
         'refresh_rate': int(refresh_txt.value)/100,
-        'quantize_lib': Quantizer.get_option_id(quantcombo.value),
+        'quantize_lib': BuiltinQuantizer.from_name(quantcombo.value),
         'bt_colorspace': colorspace.value,
         'allow_overlaps': bool(allow_overlaps.value),
         'full_palette': bool(fullpalette.value),
@@ -82,6 +83,8 @@ def get_kwargs() -> dict[str, Any]:
         'redraw_period': float(acqinttb.value),
         'threads': int(threadscombo.value) if threadscombo.value.lower() != 'auto' else 'auto',
         'daemonize': False,
+        'layout_mode': 2,
+        'log_filename': supout.value,
     }
 
 def wrapper_mp() -> None:
@@ -257,9 +260,9 @@ def init_extra_libs(CWD: Path, verbose: bool = True):
             params['super_cfg'] = dict(sup_params)
     elif verbose:
         logger.error("config.ini not found!")
-    if Quantizer.init_piliq(exepath):
+    if BuiltinQuantizer.LIQ.value.configure({'library':exepath}):
         if verbose:
-            logger.info(f"Advanced image quantizer armed: {Quantizer.get_piliq().lib_name}")
+            logger.info(f"Advanced image quantizer armed: {BuiltinQuantizer.LIQ.name}")
         params['quant'] = {'qpath': exepath} | piq_values
     else:
         logger.warning("No good image quantizer found. Falling back to low quality embedded one.")
@@ -277,7 +280,7 @@ if __name__ == '__main__':
 
     #Do not keep returned params, we just want to initialize PILIQ
     init_extra_libs(application_path)
-    opts_quant = Quantizer.get_options()
+    opts_quant = BuiltinQuantizer.get_all()
     opts_log = {'Disabled':  0, 'Succint': -10, 'Standard': 20, 'Minimalist': 25, 'Warnings/errors': 30, 'Debug': 10, 'Max debug': 5}
 
     pos_v = 0
@@ -331,7 +334,7 @@ if __name__ == '__main__':
 
     bquant = Box(app, layout="grid", grid=[1, pos_v], align='left')
     Text(bquant, "Quantizer: ", grid=[0,0], align='left', size=11)
-    quantcombo = Combo(bquant, options=list(map(lambda x: ' '.join(x), opts_quant.values())), grid=[1,0], align='left')
+    quantcombo = Combo(bquant, options=list(map(lambda x: x[1], opts_quant)), grid=[1,0], align='left')
     Hovertip(bquant.tk, "Image quantizer to use (Quality, Speed).\n")
 
     bthread = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1])
