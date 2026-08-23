@@ -116,8 +116,8 @@ class SUPReader:
 
 class GraphicWriter(ABC):
     def __init__(self, mux_offset: int = 0, ts_mask: int = _Masks.W33):
-        self.mux_offset = mux_offset
-        self._ts_mask = ts_mask
+        self.mux_offset = int(mux_offset)
+        self._ts_mask = int(ts_mask)
 
     @abstractmethod
     def _setup_io(self) -> tuple[BytesIO, ...]: ...
@@ -127,6 +127,7 @@ class GraphicWriter(ABC):
     def _write_tail(self, st: tuple[BytesIO, ...]) -> None: pass
 
     def get_mux_timestamps(self, segment: GraphicSegment) -> tuple[int, int]:
+        assert isinstance(segment.pts, int) and isinstance(segment.dts, int)
         mux_pts = (self.mux_offset + segment.pts) & self._ts_mask
         mux_dts = (self.mux_offset + segment.dts) & self._ts_mask
         return mux_pts, mux_dts

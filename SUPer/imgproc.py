@@ -18,18 +18,22 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+from warnings import filterwarnings
+filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
+filterwarnings("ignore", message=r"Kernel", module="SSIM_PIL")
+
 import numpy as np
 
 from abc import ABC, abstractmethod
 from enum import Enum
 from PIL import Image
 from SSIM_PIL import compare_ssim
-from typing import TypeAlias, Any, Self
+from typing import TypeAlias, Any
 
 from brule import HexTree as _HexTree, QtzrUTC as _Qtzr
 
 from .internals import _classproperty, LogFacility
-from .palette import Palette, Matrix
+from .palette import Palette, Matrix, PaletteEntry
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -215,6 +219,9 @@ class BuiltinQuantizer(Enum):
             return __class__(__class__.Qtzr)(image, colors, **kwargs)
         return palette, bitmap
 
+    def quantize(self, image: Image.Image, colors: int, **kwargs) -> tuple[_PaletteT, _BitmapT]:
+        return self(image, colors, **kwargs)
+
     @classmethod
     def from_name(cls, name: str) -> 'BuiltinQuantizer':
         match name.strip().lower():
@@ -242,30 +249,9 @@ class BuiltinQuantizer(Enum):
         return enum
 ####
 
-#%%
-class ImageSequence:
-    def __init__(self, n_images: int, quantizer: QuantizerWrap, matrix: Matrix):
-        self.length = n_images
-        self.quantizer = quantizer
-        self.matrix = matrix
-        self._sequence = None
-        self._idx = 0
-        self._bitmap = None
-        self._cluts = None
-        self._pg_cluts = None
-
-    def add_to_stack(self, img: Image.Image, colors: int) -> bool:
-        if self.length > 1:
-            if self._idx == 0:
-                self._sequence = np.zeros((self.length, *img.size[::-1], 4), np.uint8)
-            clut, img = self.quantizer(img, colors)
-            self._sequence[self._idx, :, :, :] = clut[img]
-        else:
-            self._sequence = self.quantizer(img, colors, single_bitmap=True)
-        self._idx += 1
-        return self._idx == self.length
-
-    def flatten(self, colors: int = 255) -> Self:
+class PaletteSequenceEffect:
+    @staticmethod
+    def solve_sequence_fast(events: list[Image.Image], colors: int, quantizer: QuantizerWrap, **kwargs):
         """
         This functions finds a solution for the provided subtitle animation.
         :param events: PIL images, stacked one after the other
@@ -274,22 +260,21 @@ class ImageSequence:
         :return: bitmap, sequence of palette update to obtain the said input animation.
         """
 
-        assert self._sequence is not None, "No image lined up in the sequence."
-        assert self._idx == self.length
+        if 1 == len(events):
+            clut, img = quantizer.quantize(events[0], colors, single_bitmap=True, **kwargs)
+            return img.copy(), np.expand_dims(clut, 1).copy()
 
-        if 1 == self.length:
-            clut, self._bitmap = self._sequence
-            self._cluts = np.expand_dims(clut, 1).copy()
-            self._bitmap = self._bitmap.copy()
-            return self
-
-        self._sequence = np.moveaxis(self._sequence, 0, 2)
+        sequences = np.zeros((len(events), *events[0].size[::-1], 4), np.uint8)
+        for ke, event in enumerate(events):
+            clut, img = quantizer.quantize(event, colors, single_bitmap=False, **kwargs)
+            sequences[ke, :, :, :] = clut[img]
+        sequences = np.moveaxis(sequences, 0, 2)
 
         #catalog the sequences
-        seq_occ: dict[int, list[int, np.ndarray[tuple[int, int], np.uint8]]] = {}
-        for i in range(self._sequence.shape[0]):
-            for j in range(self._sequence.shape[1]):
-                seq = self._sequence[i, j, :, :]
+        seq_occ: dict[int, tuple[int, np.ndarray]] = {}
+        for i in range(sequences.shape[0]):
+            for j in range(sequences.shape[1]):
+                seq = sequences[i, j, :, :]
                 hsh = hash(seq.tobytes())
                 try:
                     seq_occ[hsh][0] += 1
@@ -301,7 +286,7 @@ class ImageSequence:
         seq_ids = {k: z for z, k in enumerate(seq_sorted.keys())}
 
         #Fill a new array with kept sequences to perform fast norm calculations
-        norm_mat = np.ndarray((colors, *self._sequence[i,j,:,:].shape[0:2]))
+        norm_mat = np.ndarray((colors, *sequences[i,j,:,:].shape[0:2]))
 
         #Match sequences to the most common ones (N[colors] kept)
         remap: dict[int, int] = {}
@@ -318,51 +303,93 @@ class ImageSequence:
                 remap[cnt] = id1[best_fit.argmin() % id1.size]
         del norm_mat
 
-        bitmap = np.zeros(self._sequence.shape[0:2], dtype=np.uint8)
-        for i in range(self._sequence.shape[0]):
-            for j in range(self._sequence.shape[1]):
-                seq = self._sequence[i, j, :, :]
+        bitmap = np.zeros(sequences.shape[0:2], dtype=np.uint8)
+        for i in range(sequences.shape[0]):
+            for j in range(sequences.shape[1]):
+                seq = sequences[i, j, :, :]
                 hsh = hash(seq.tobytes())
                 if seq_ids[hsh] < colors:
                     bitmap[i, j] = seq_ids[hsh]
                 else:
                     bitmap[i, j] = remap[seq_ids[hsh]]
-        #save bitmap and the color sequence (copy only the N kept sequences)
-        self._bitmap = bitmap
-        self._cluts = np.asarray([seq for seq, _ in zip(seq_sorted.values(), range(colors))], dtype=np.uint8)
-        return self
+        #retun bitmap and the color sequence (copy only the kept sequences)
+        return bitmap, np.asarray([seq for seq, _ in zip(seq_sorted.values(), range(colors))], dtype=np.uint8)
 
-    def remap(self, first_index: int = 1) -> tuple[list[Palette], np.ndarray[tuple[int, int], np.uint8]]:
-        assert self._bitmap is not None and self._cluts is not None
-        if self._pg_cluts is not None:
-            return self._pg_cluts, self._bitmap
 
-        transparent_id = np.nonzero(np.all(self._cluts[:,:,-1] == 0, axis=1))[0]
+    @classmethod
+    def solve_and_remap(cls, events: list[Image.Image], quantizer: QuantizerWrap, colors: int = 255, first_index: int = 1, **kwargs):
+        """
+        This function solves the input event sequence and perform ID remapping
+        to optimise the distribution of colour indices wrt PGS constraints
+        :param events: list of PIL images to optimise.
+        :param colors: max number of colours to use.
+        :param first_index: CLUT offset for given bitmap, must be a positive number.
+        :return: bitmap and chain of palettes.
+        """
+        assert 0 < first_index + colors <= 256, "8-bit ID out of range."
+        assert first_index > 0, "Usage of palette ID zero."
+
+        bitmap, cluts = cls.solve_sequence_fast(events, colors, quantizer, **kwargs)
+        transparent_id = np.nonzero(np.all(cluts[:,:,-1] == 0, axis=1))[0]
+
+        kwargs_diff = {'matrix': kwargs.get('bt_colorspace', 'bt709')}
 
         #No transparency at all in this bitmap
         if 0 == len(transparent_id):
-            if np.max(self._bitmap) + first_index == 0xFF:
-                #All colours used incl reserved transparent index. This is incorrect.
-                # caller must be informed and shall decide what to do (try again with less colours)
-                return None, None
-            self._bitmap += first_index
-            self._pg_cluts = self._cluts
+            #All colours used incl reserved transparent index. This is incorrect, requantize with colors-1
+            if np.max(bitmap) + first_index == 0xFF:
+                logger.ldebug("Too many colours used, lowering count.")
+                bitmap, cluts = cls.solve_sequence_fast(events, colors-1, quantizer, **kwargs)
+            palettes = cls.to_ycc_palettes(cluts, **kwargs_diff)
+            bitmap += first_index
         else:
             # Transparent ID is the last one and will be mapped to 0xFF by the first_index shift.
             if max(transparent_id) == (0xFF - first_index):
                 transparent_id = 0xFF - first_index
-                self._bitmap += first_index
+                bitmap += first_index
             else:
                 #Shift only IDs
                 transparent_id = int(transparent_id[0])
-                tsp_mask = (self._bitmap == transparent_id)
-                smaller = self._bitmap < transparent_id
-                larger = self._bitmap > transparent_id
-                self._bitmap[smaller] += first_index
-                self._bitmap[larger] += (first_index - 1)
-                self._bitmap[tsp_mask] = 0xFF
+                tsp_mask = (bitmap == transparent_id)
+                smaller = bitmap < transparent_id
+                larger = bitmap > transparent_id
+                bitmap[smaller] += first_index
+                bitmap[larger] += (first_index - 1)
+                bitmap[tsp_mask] = 0xFF
             #logger.ldebug(f"Remapped fully transparent ID {transparent_id:02X} to FF.")
-            self._pg_cluts = np.delete(self._cluts, [transparent_id], axis=0)
-        return self._bitmap, list(map(lambda p: p.offset(first_index), Palette.from_stacked_rgba(self._pg_cluts, self.matrix)))
+            cluts = np.delete(cluts, [transparent_id], axis=0)
+            palettes = cls.to_ycc_palettes(cluts, **kwargs_diff)
+
+        for kp, pal in enumerate(palettes):
+            palettes[kp] = pal.offset(first_index)
+        assert len(palettes[0]) < colors
+        return bitmap, palettes
+    ####
+    @staticmethod
+    def to_ycc_palettes(cluts, /, *, matrix: str = 'bt709') -> list[Palette]:
+        """
+        :param cluts: RGBA Color look-up tables of the sequence, stacked one after the other.
+        :param matrix: colorspace matrix name
+    
+        :return: N palette objects defining palette that can be converted to PDSes.
+        """
+        stacked_cluts = np.swapaxes(cluts, 1, 0).astype(np.int32)
+        matrix = Matrix(matrix).forward()
+    
+        shape = stacked_cluts.shape
+        stacked_cluts = np.round(np.matmul(stacked_cluts.reshape((-1, 4)), matrix.T))
+        stacked_cluts += np.asarray([[16, 128, 128, 0]])
+        clip_vals = (np.array([[16, 16, 16, 0]]), np.asarray([[235, 240, 240, 255]]))
+        stacked_cluts = np.clip(stacked_cluts, *clip_vals).astype(np.uint8).reshape(shape)
+        #YCbCrA -> YCrCbA
+        stacked_cluts = stacked_cluts[:, :, [0, 2, 1, 3]]
+        
+        palettes = []
+        for palette_array in stacked_cluts:
+            new_palette = Palette()
+            for ke, entry in enumerate(palette_array):
+                new_palette[ke] = PaletteEntry(*entry)
+            palettes.append(new_palette)
+        return palettes
 ####
 

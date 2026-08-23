@@ -32,7 +32,7 @@ from .engine import EpochEncoderEngine
 from .imgproc import BuiltinQuantizer, SSIMPW
 from .internals import TC, LogFacility
 from .pgstreams import Epoch, PesMuiWriter, SUPWriter
-from .verifier import is_compliant, check_pts_dts_sanity, test_rx_bitrate
+from .verifier import is_compliant, check_pts_dts_sanity, test_rx_bitrate, debug_stats
 from .epochctx import EpochFinder, EventsPreprocessor, EpochData, LayoutMode
 from .codecctx import PGStreamCtx
 
@@ -117,8 +117,13 @@ class BDNEncoder:
         logger.info(f"Identified {len(epochs_ctx)} epochs to encode.")
 
         pg_stream_ctx = PGStreamCtx(bdvideo)
-
-        return [EpochEncode(pg_stream_ctx, e_ctx, self.kwargs).preprocess().encode() for e_ctx in epochs_ctx]
+        output_pg_epochs = []
+        for ke, e_ctx in enumerate(epochs_ctx):
+            ee = EpochEncode(pg_stream_ctx, e_ctx, self.kwargs)
+            logger.info(f"Encoding epoch {ke}: {e_ctx.events[0].inTC}->{e_ctx.events[-1].outTC} with {len(e_ctx.events)} event(s), {len(e_ctx.windows)} window(s).")
+            output_pg_epochs.append(ee.preprocess().encode())
+            logger.info(f"=> Encoded as {len(output_pg_epochs[-1])} display sets.")
+        return output_pg_epochs
     ####
 
     def _setup_mt_env(self) -> None:
@@ -144,6 +149,7 @@ class BDNEncoder:
         signal.signal(signal.SIGTERM, f_term)
         if os.name == 'nt':
             signal.signal(signal.SIGBREAK, f_term)
+        logger.debug("Registered signal handlers.")
     ####
 
     def _convert_mt(self, bd_video: BDVideo) -> list[Epoch]:
@@ -152,9 +158,9 @@ class BDNEncoder:
 
         epochs_ctx = EpochFinder(bdn=self.bdn, threads=self._threads, mode=self.kwargs.get('layout_mode', LayoutMode.GREEDY)).get_epochs()
 
-        as_deamon = self.kwargs.get('daemonize', True)
         # No point in having more workers than epochs
         n_threads = min(self._threads, len(epochs_ctx))
+        as_deamon = self.kwargs.get('daemonize', True)
         workers = [BDNEpochWorker(bd_video, self.kwargs, as_deamon) for _ in range(n_threads)]
 
         self._setup_mt_env()
@@ -215,7 +221,7 @@ class BDNEncoder:
             time.sleep(0.2)
 
         if healthy:
-            logger.debug("All jobs finished, cleaning-up.")
+            logger.debug("All workers finished, cleaning-up.")
         time.sleep(0.01)
         for worker in workers:
             try: worker.terminate()
@@ -230,7 +236,7 @@ class BDNEncoder:
             except: ...
         workers.clear()
         if not healthy:
-            logger.warning("One encoder process had an unrecoverable error, giving up.")
+            logger.warning("One worker had an unrecoverable error, giving up.")
             import sys
             sys.exit(1)
         return ep_timeline
@@ -249,15 +255,13 @@ class BDNEncoder:
         self.fix_composition_id(epochs, replace=threaded)
 
         is_valid = self.test_output(bd_video, epochs)
-
         return is_valid, epochs
     ####
 
     def test_output(self, bd_video: BDVideo, epochs: list[Epoch]) -> bool:
-        #if logger.level <= 10:
-        #    logger.debug(debug_stats(self._epochs))
+        if logger.level <= 10:
+            logger.debug(debug_stats(epochs))
 
-        # Final checks
         logger.info("Checking stream consistency and compliancy...")
         LogFacility.associate_log_and_report(logger)
 
@@ -440,7 +444,6 @@ class BDNEpochWorker(mp.Process):
         while (next_tb := tb.tb_next) is not None:
             tb = next_tb
         logger.error(f"Encoder {self._prefix} died: {type(e).__name__}@{tb.tb_frame.f_code.co_name}::L{tb.tb_lineno}" + (f" - {e}." if len(e.args) else "."))
-        self._available.value = -1
 
     def run(self) -> None:
         self.setup_env()
@@ -457,13 +460,13 @@ class BDNEpochWorker(mp.Process):
             if in_data is None:
                 break
             ectx, epoch_id = in_data
-            logger.debug(f"{self._prefix} on EPOCH {epoch_id}")
-            logger.info(f"{self._prefix} encoding epoch {ectx.events[0].inTC}->{ectx.events[-1].outTC} with {len(ectx.events)} event(s), {len(ectx.windows)} window(s).")
+            logger.info(f"{self._prefix} encoding epoch {epoch_id}: {ectx.events[0].inTC}->{ectx.events[-1].outTC} with {len(ectx.events)} event(s), {len(ectx.windows)} window(s).")
             ee = EpochEncode(pg_stream_ctx, ectx, self.kwargs)
             try:
                 new_epoch = ee.preprocess().encode()
             except Exception as e:
                 self._print_tb_except(e)
+                self._available.value = -1
                 break
             else:
                 logger.info(f"{self._prefix} => encoded as {len(new_epoch)} display sets.")

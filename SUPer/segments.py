@@ -58,6 +58,12 @@ class GraphicSegment(ABC):
         payload = self.get_payload()
         return struct.pack(">BH",self.type, len(payload) & _Masks.W16) + payload
 
+    def __repr__(self) -> str:
+        slot_str = ''
+        for slot in self.__slots__:
+            slot_str += slot + "=" + str(object.__getattribute__(self, slot)) + ", "
+        return f"{self.__class__.__name__}(" + slot_str[:-2] + ")"
+
 class CompositionObject:
     __slots__ = 'object_id', 'window_id', 'cropped_flag', 'forced_flag', 'h_pos', 'v_pos', 'crop_obj_x', 'crop_obj_y', 'crop_obj_w', 'crop_obj_h'
 
@@ -102,6 +108,12 @@ class CompositionObject:
             cls(object_id, window_id, h_pos, v_pos, cropped_flag, forced_flag,
                 crop_obj_x, crop_obj_y, crop_obj_w, crop_obj_h)
         return cls(object_id, window_id, h_pos, v_pos, forced_flag=forced_flag)
+
+    def __repr__(self) -> str:
+        slot_str = ''
+        for slot in self.__slots__:
+            slot_str += slot + "=" + str(object.__getattribute__(self, slot)) + ", "
+        return f"{self.__class__.__name__}(" + slot_str[:-2] + ")"
 
 class PCS(GraphicSegment):
     __slots__ = ('width', 'height', 'framerate_value', 'composition_number',
@@ -271,6 +283,12 @@ class WDS(GraphicSegment):
         @classmethod
         def decode(cls, bs: bytes) -> Self:
             return cls(*struct.unpack(">BHHHH", bs))
+
+        def __repr__(self) -> str:
+            slot_str = ''
+            for slot in self.__slots__:
+                slot_str += slot + "=" + str(object.__getattribute__(self, slot)) + ", "
+            return f"{self.__class__.__name__}(" + slot_str[:-2] + ")"
 
     @_classproperty
     def type(cls) -> PGSegmentType:

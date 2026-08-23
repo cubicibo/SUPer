@@ -104,7 +104,8 @@ class Palette(dict):
                 bs += bytes([k]) + bytes(entry)
 
     def offset(self, offset: int) -> Self:
-        assert min(self) + offset >= 0 and max(self) + offset < 256
+        if len(self):
+            assert min(self) + offset >= 0 and max(self) + offset < 256
         return __class__((k+offset, v) for k, v in self.items())
 
     def to_rgba_array(self, matrix: Matrix) -> np.ndarray[tuple[int, int], np.uint8]:

@@ -109,7 +109,7 @@ class Format(Enum):
     VIDEO_1080 = 1920, 1080
 
     @classmethod
-    def from_height(cls, height: int) -> 'Format':
+    def from_height(cls, height: int) -> Self:
         for dim, enfo in cls._value2member_map_.items():
             if dim[1] == height:
                 return cls(enfo)
@@ -141,12 +141,26 @@ class Format(Enum):
         return self.width*self.height
 
     @classmethod
-    def _missing_(cls, v: FormatInputT) -> 'Format':
+    def _missing_(cls, v: FormatInputT) -> Self:
+        if isinstance(v, list):
+            return cls(tuple(v))
         if isinstance(v, int):
             return cls.from_height(v)
         if isinstance(v, str):
             return cls.from_string(v)
         return None
+
+    def __eq__(self, o: ...) -> bool:
+        if isinstance(o, self.__class__):
+            return o.value == self.value
+        elif isinstance(o, (tuple, list)):
+            return o[0] == self.value[0] and o[1] == self.value[1]
+        return NotImplemented
+
+    def __ne__(self, o: ...) -> bool:
+        if isinstance((is_eq := self.__eq__(o)), bool):
+            return not is_eq
+        return NotImplemented
 ####
 
 @dataclass(frozen=True)

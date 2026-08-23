@@ -49,6 +49,8 @@ class Shape:
     w: int
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, 'h', int(self.h))
+        object.__setattr__(self, 'w', int(self.w))
         assert self.h >= 0 and self.w >= 0
 
     @classmethod
