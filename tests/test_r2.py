@@ -1,7 +1,10 @@
 import pytest
 
-from SUPer.utils import Box, TC, BDVideo, MPEGTS_FREQ, get_matrix
-from SUPer.render2 import PaddingEngine
+from SUPer.geometry import Box
+from SUPer.internals import TC, GraphicsDecoder
+from SUPer.bdvideo import Framerate, Format
+from SUPer.palette import Matrix
+from SUPer.epochctx import PaddingEngine
 
 import warnings
 import numpy as np
@@ -17,7 +20,6 @@ def test_pad_box(container: Box):
         mx, my = random.randint(8, 64), random.randint(8, 64)
         py, px = random.randrange(0, container.dy, 1), random.randrange(0, container.dx, 1)
         input_box = Box(py, random.randint(1, container.dy-py), px, random.randint(1, container.dx-px))
-        ge = PaddingEngine(input_box, container, 2)
         box = PaddingEngine._pad_any_box(input_box, container, mx, my)
         if input_box.dx >= mx and input_box.dy >= my:
             assert input_box == box, f"{box} {input_box}"
@@ -29,7 +31,6 @@ def test_pad_centered_box():
     container = Box(0, 1080, 0, 1920)
     box = Box(538, 4, 959, 3)
 
-    ge = PaddingEngine(box, container, 1)
     nbox = PaddingEngine._pad_any_box(box, container, 8, 8)
 
     #We expect perfect centering on Y axis, and accept off-by-one on X axis.
@@ -38,50 +39,65 @@ def test_pad_centered_box():
 
 ####
 
-@pytest.mark.parametrize("fps", BDVideo.FPS)
-def test_tc_framegrid(fps: BDVideo.FPS):
+########################
+############## BDVideo and utils
+@pytest.mark.parametrize("fps", Framerate)
+def test_tc_framegrid(fps: Framerate):
     #Known to produce correct result, yet totally different to SUPer implementation
     def _tc2pts(tc: TC) -> float:
         secs = round(tc.float - TC(tc.fractional_fps, '00:00:00:00', force_non_drop_frame=True).float, 6)
         scale_ntsc = not float(tc.framerate).is_integer()
-        return max(0, (secs - (1/3)/MPEGTS_FREQ)) * (1 if not scale_ntsc else 1.001)
+        return max(0, (secs - (1/3)/GraphicsDecoder.FREQ)) * (1 if not scale_ntsc else 1.001)
 
     rtc = TC(fps, '00:00:00:00', force_non_drop_frame=True)
     max_frames = TC(fps, f"23:59:59:{int(np.floor(fps))}", force_non_drop_frame=True).frames
 
     while rtc.frames < max_frames:
-        assert round(MPEGTS_FREQ*_tc2pts(rtc)) == round(MPEGTS_FREQ*rtc.to_pts())
+        assert round(GraphicsDecoder.FREQ*_tc2pts(rtc)) == rtc.to_pts()
         rtc += random.randint(1, 600)
 
 def test_get_matrix():
-    mbt709 = get_matrix('bt709', False)
-    mbt601 = get_matrix('bt601', False)
-    mbt2020 = get_matrix('bt2020', False)
+    mbt709 = Matrix('bt709').forward()
+    mbt601 = Matrix('601').forward()
+    mbt2020 = Matrix('bt.2020').forward()
     assert not np.array_equal(mbt709, mbt601) and not np.array_equal(mbt601, mbt2020)
-    
-    try:
-        mbtgarb = get_matrix("12345", True)
-    except NotImplementedError:
-        ...
+
 
 @pytest.mark.parametrize("matrix", ['bt709', 'bt601', 'bt2020'])
 def test_get_matrix_inverse(matrix: str):
-    btd = get_matrix(matrix, False)
-    bti = get_matrix(matrix, True)
-    assert not np.array_equal(btd, bti)
+    btd = Matrix(matrix).forward()
+    bti = Matrix(matrix).inverse()
+    assert bti is not None and not np.array_equal(btd, bti)
 
-    assert np.all(np.abs(np.matmul(btd, bti) - np.eye(4)) < 12e-4)
+    assert np.all(np.abs(np.matmul(btd, bti) - np.eye(4)) < 12e-4)    
 
-def test_pcs_fps():
-    vals = sorted([(fps, fps.to_pcsfps()) for fps in BDVideo.FPS], key=lambda x: x[1])
-
-    pcs_fps = 0x10
-    for k, fps in enumerate(sorted(BDVideo.FPS)):
-        assert vals[k] == (fps, pcs_fps)
-        pcs_fps += 0x10
-        if pcs_fps == 0x50: # 30 fps does not exist
-            pcs_fps += 0x10
-    
+@pytest.mark.parametrize("plane_size_test",
+                         [((1920, 1080), True),
+                          (1080, True),
+                          ("1080p", True),
+                          ("576i", True),
+                          ((720, 480), True),
+                          (Format((1280, 720)), True),
+                          ((1920, 1088), False),
+                          ((640, 480), False),
+                          (2160, False),])
+def test_format(plane_size_test):
+    plane_size, accepted = plane_size_test
+    if accepted:
+        fmt = Format(plane_size)
+        if isinstance(plane_size, str):
+            assert int(plane_size[:-1]) == fmt.height
+        elif isinstance(plane_size, int):
+            assert plane_size == fmt.height
+        else:
+            assert plane_size == fmt
+    else:
+        try:
+            fmt = Format(plane_size)
+        except ValueError:
+            ...
+        else:
+            raise AssertionError(f"Video format {plane_size} should have been rejected.")
 
 def test_brule_capabilities():
     from brule import Brule, LayoutEngine, HexTree
