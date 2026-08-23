@@ -26,8 +26,9 @@ from itertools import chain, repeat
 from brule import Brule
 
 from .bdvideo import BDVideo
-from .geometry import Rectangle, Box
+from .geometry import Shape, Box
 from .palette import PaletteEntry, Palette
+from .graphicstream import DisplaySet
 from .segments import PCS, ODS, PDS, WDS, END, CompositionObject
 
 @dataclass
@@ -51,9 +52,11 @@ class _AllocatedVersionedResource:
 
 @dataclass
 class DecoderPalette(_AllocatedVersionedResource):
-    palette: dict[int, PaletteEntry] = field(default_factory=dict)
+    palette: dict[int, PaletteEntry] = field(default_factory=Palette)
     
     def __post_init__(self) -> None:
+        if not isinstance(self.palette, Palette):
+            self.palette = Palette(self.palette)
         assert len(self.palette) < 256
         
     def get_difference(self, new_palette: dict[int, PaletteEntry]):
@@ -65,9 +68,12 @@ class DecoderPalette(_AllocatedVersionedResource):
                 difference[entry_ix] = entry
         return difference
 
+    def clear(self) -> None:
+        self.palette.clear()
+
 @dataclass
 class ObjectSlot(_AllocatedVersionedResource):
-    shape: Rectangle | None = None # due to inheritance with default args
+    shape: Shape | None = None # due to inheritance with default args
     
     def __post_init__(self) -> None:
         assert self.shape.width >= 8 and self.shape.height >= 8
@@ -96,7 +102,7 @@ class PGObjectBuffer:
     def __init__(self):
         self._slots = {}
 
-    def get(self, shape: Rectangle, dts: int | None) -> tuple[int, ObjectSlot] | None:
+    def get(self, shape: Shape, dts: int | None) -> tuple[int, ObjectSlot] | None:
         """
         Get a slot of matching shape that can be used to decode an object.
         """
@@ -104,7 +110,7 @@ class PGObjectBuffer:
             if dts is None or slot.pts is None or dts > slot.pts:
                 return slot_id, slot
     
-    def allocate(self, shape: Rectangle) -> tuple[int, ObjectSlot] | None:
+    def allocate(self, shape: Shape) -> tuple[int, ObjectSlot] | None:
         if sum(map(lambda s: s.size(), self._slots.values())) + shape.area > self.__class__.__MAX_SIZE:
             return None
         if len(self._slots) >= self.__class__.__MAX_SLOTS:
@@ -119,7 +125,7 @@ class PGObjectBuffer:
     def get_indexed(self, slot_id: int) -> ObjectSlot | None:
         return self._slots.get(slot_id, None)
     
-    def allocate_indexed(self, shape: Rectangle, slot_id: int) -> bool:
+    def allocate_indexed(self, shape: Shape, slot_id: int) -> bool:
         if self._slots.get(slot_id, None) is not None:
             return False
         if sum(map(lambda s: s.size(), self._slots.values())) + shape.area > self.__class__.__MAX_SIZE:
@@ -128,12 +134,21 @@ class PGObjectBuffer:
         return True
 
 class PGEpochContext:
-    def __init__(self, stream_ctx: PGStreamCtx, windows: list[Box]) -> None:
+    def __init__(self, stream_ctx: PGStreamCtx, windows: list[Box], differentiate_palette: bool = False) -> None:
         self._windows = windows
         self._stream_ctx = stream_ctx
         self._palettes = [DecoderPalette() for _ in range(8)]
         self.buffer = PGObjectBuffer()
+        self.differentiate_palette = differentiate_palette
         
+    def flush(self) -> None:
+        for palette in self._palettes:
+            palette.clear()
+
+    @property
+    def bd_video(self) -> BDVideo:
+        return self._stream_ctx.bd_video
+
     def get_palette_at(self, dts: int) -> tuple[int, DecoderPalette] | None:
         """
         Request a writable palette at DTS. The Decoding TS must be larger than
@@ -178,7 +193,7 @@ class PGEpochContext:
             A sequence of ODS (one or more)
         """
         data = Brule.encode(bitmap)
-        shp = Rectangle(*bitmap.shape)
+        shp = Shape(*bitmap.shape)
         slot_data = self.buffer.get(shp, dts)
         if slot_data is None:
             slot_data = self.buffer.allocate(shp)
@@ -202,14 +217,18 @@ class PGEpochContext:
             flag = 0
         return ods_list
 
-    def register_palette(self, pts: int, dts: int, palette: Palette, write_full_palette: bool = False) -> PDS | None:
+    def register_palette(self, pts: int, dts: int, palette: Palette, force: bool = False) -> PDS | None:
         """
         Return a palette definition segment based on the hypothetical decoder state
         """
         palette_id, decoder_palette = self.get_palette_at(dts)
-        palette_diff = palette if write_full_palette else decoder_palette.get_difference(palette)
-        if len(palette_diff) > 0:
+        if self.differentiate_palette:
+            palette_diff = decoder_palette.get_difference(palette)
+        else:
+            palette_diff = palette.copy()
+        if len(palette_diff) > 0 or force:
             decoder_palette.reserve(pts)
+            decoder_palette.palette |= palette_diff
             return PDS(pts=pts, dts=dts, palette_id=palette_id,
                        palette_version=decoder_palette.get_cast_version(),
                        palette=palette_diff)
@@ -236,6 +255,18 @@ class PGEpochContext:
         palette.pts = pts
         return is_safe
 
-    @property
-    def bd_video(self) -> BDVideo:
-        return self._stream_ctx.bd_video
+    def get_undisplay_wds_ds(self, c_pts: int, dts: int, palette_id: int) -> DisplaySet:
+        self.update_palette_reservation(palette_id, c_pts, dts)
+        pcs = self.register_composition(c_pts, dts, PCS.CompositionState.NORMAL_CASE, palette_id, False, [])
+        wds = self.get_window_definition_segment(c_pts, c_pts)
+        uds = DisplaySet([pcs, wds, END(pts=c_pts, dts=c_pts)])
+        return uds
+
+    def get_undisplay_pds_ds(self, c_pts: int, dts: int, cobjs: list[CompositionObject], n_colors: int) -> DisplaySet:
+        palette = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(n_colors)})
+        pds = self.register_palette(c_pts, dts, palette)
+        pcs = self.register_composition(c_pts, dts, PCS.CompositionState.NORMAL_CASE, pds.palette_id, True, cobjs)
+        uds = DisplaySet([pcs, pds, END(pts=c_pts, dts=c_pts)])
+        for cobj in cobjs:
+            self.update_object_reservation(cobj.object_id, c_pts)
+        return uds

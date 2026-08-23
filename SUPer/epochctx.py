@@ -26,13 +26,13 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 from functools import reduce, partial
 from pathlib import Path
-from typing import Sequence, Generator
+from typing import Sequence, Generator, Iterable
 
 from brule import LayoutEngine
 
 from .bdnxml import BDNXML, BDNEvent
 from .bdvideo import Format
-from .geometry import Box, Point, Rectangle
+from .geometry import Box, Point, Shape
 from .internals import TC, GraphicsDecoder, GfxCompositor, LogFacility
 
 logger = LogFacility.get_logger('SUPer')
@@ -45,7 +45,7 @@ class LayoutMode(IntEnum):
 @dataclass
 class Graphic:
     point: Point
-    shape: Rectangle
+    shape: Shape
     filepath: Path
     
     def __post_init__(self) -> None:
@@ -55,6 +55,7 @@ class Graphic:
     @property
     def box(self) -> Box:
         return Box(self.point.y, self.shape.height, self.point.x, self.shape.width)
+####
 
 @dataclass
 class EpochEvent(GfxCompositor):
@@ -70,6 +71,7 @@ class EpochEvent(GfxCompositor):
         if len(self.repeated_inTC) > 0:
             assert all(map(lambda p: p[0] < p[1], zip(self.repeated_inTC, self.repeated_inTC[1:])))
             assert self.inTC < self.repeated_inTC[0] <= self.repeated_inTC[-1] < self.outTC
+####
 
 @dataclass
 class EpochData:
@@ -78,6 +80,11 @@ class EpochData:
     min_dts: int | float = -np.inf
     max_pts: int | float =  np.inf
     
+def _minmax(iterable: Iterable):
+    return reduce(lambda x, y: (min(x[0], np.floor(y)), max(x[1], np.ceil(y))),
+                  iterable, (np.inf, -np.inf))
+####
+
 class PaddingEngine:
     def __init__(self, box: Box, container: Box) -> None:
         self.box = box
@@ -92,9 +99,9 @@ class PaddingEngine:
         diff_x = max(0, min_dx - box.dx)
         dv = np.array([[diff_y*(2*box.y + (box.dy - container.dy))/container.dy,
                         diff_x*(2*box.x + (box.dx - container.dx))/container.dx]])
-        minmax = lambda iterable: reduce(lambda x, y: (min(x[0], np.floor(y)), max(x[1], np.ceil(y))), iterable, (np.inf, -np.inf))
-        pu, pd = minmax(map(lambda y: -diff_y/2 + dv[0, 0] + y, range(diff_y)))
-        pl, pr = minmax(map(lambda x: -diff_x/2 + dv[0, 1] + x, range(diff_x)))
+
+        pu, pd = _minmax(map(lambda y: -diff_y/2 + dv[0, 0] + y, range(diff_y)))
+        pl, pr = _minmax(map(lambda x: -diff_x/2 + dv[0, 1] + x, range(diff_x)))
 
         new_x1 = max(0, int(box.x  + (pl if (pl < pr) else 0)))
         new_x2 = min(container.dx, int(box.x2 + (pr if (pl < pr) else 0)))
@@ -262,7 +269,7 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, mode: LayoutMode) ->
 def _bdnev_to_epochevent(bdnev: BDNEvent) -> EpochEvent:
     return EpochEvent(bdnev.inTC, bdnev.outTC,
                       list(map(lambda g: Graphic(Point(y=g.y, x=g.x),
-                                                 Rectangle(h=g.height, w=g.width),
+                                                 Shape(h=g.height, w=g.width),
                                                  g.filepath), bdnev.graphics)))
 
 def _perform_fine_epoch_detection(

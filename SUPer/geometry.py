@@ -44,7 +44,7 @@ class Point:
         return NotImplemented
 
 @dataclass(frozen=True)
-class Rectangle:
+class Shape:
     h: int
     w: int
 
@@ -120,8 +120,8 @@ class Box:
         return (self.y, self.y2, self.x, self.x2)
 
     @property
-    def shape(self) -> Rectangle:
-        return Rectangle(self.dy, self.dx)
+    def shape(self) -> Shape:
+        return Shape(self.dy, self.dx)
 
     @property
     def anchors(self) -> Point:

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from brule import Brule
 
 from .codecctx import PGEpochContext
-from .geometry import Rectangle, Box
+from .geometry import Shape, Box
 from .internals import LogFacility, GraphicsDecoder, TC
 from .palette import Palette
 from .pgstreams import Epoch, DisplaySet
@@ -261,8 +261,9 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                         for pal in pals:
                             pal.clear()
                         pds_vn = [-1]*8
-                    if not epoch_ctx.update_palette_reservation(seg.palette_id, seg.pts, seg.dts) and len(seg.composition_objects):
-                        #logger.error("Cannot decode to the specified palette, it is taken by a preceding display set.")
+                    # Not sure about that one, if there's no PDS it's probably fine?
+                    if not epoch_ctx.update_palette_reservation(seg.palette_id, seg.pts, seg.dts) and len(seg.composition_objects) and len(ds.pds) == 0:
+                        logger.error("Cannot decode to the specified palette, it is taken by a preceding display set.")
                         compliant = False
 
                 elif seg.type == PGSegmentType.WDS:
@@ -295,7 +296,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                             logger.error(f"Illegal object dimensions at {to_tc(current_pts)}, object id={seg.object_id}: {ods_width}x{ods_height}.")
                             compliant = False
                             continue #We can't do the buffer allocation below with the illegal dimension
-                        object_shape = Rectangle(h=seg.height, w=seg.width)
+                        object_shape = Shape(h=seg.height, w=seg.width)
                         if (slot := epoch_ctx.buffer.get_indexed(seg.object_id)) is None:
                             if not epoch_ctx.buffer.allocate_indexed(object_shape, seg.object_id):
                                 logger.error(f"Object buffer overflow (not enough memory for all object slots) at {to_tc(current_pts)}.")
