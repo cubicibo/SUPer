@@ -42,18 +42,18 @@ class BDNGraphic:
     width: int
     height: int
     filepath: Path
-    
+
     def __post_init__(self) -> None:
         assert self.box.area > 0
         assert self.filepath.exists()
-    
+
     @classmethod
     def from_tag(cls, graphic: ET, vf: BDNVideoFormat, parent_folder: Path) -> Self:
         def extract_gfxat(Width = vf.fmt.width, Height = vf.fmt.height, X = 0, Y = 0) -> tuple[int, int, int, int]:
             return int(Width), int(Height), int(X), int(Y)
         dx, dy, x, y = extract_gfxat(**graphic.attrib)
         return cls(x, y, dx, dy, parent_folder.joinpath(graphic.text))
-    
+
     @property
     def box(self) -> Box:
         return Box(self.y, self.height, self.x, self.width)
@@ -64,14 +64,14 @@ class BDNEvent(GfxCompositor):
     outTC: TC
     graphics: tuple[BDNGraphic]
     forced: bool = False
-    
+
     def __post_init__(self) -> None:
         assert isinstance(self.inTC, TC) and isinstance(self.outTC, TC)
         assert self.inTC < self.outTC
         assert isinstance(self.graphics, (tuple, list)) and len(self.graphics) in range(1, 3)
         if self.forced is True:
             raise RuntimeError("Forced flag is not supported.")
-        
+
         #cache?
         object.__setattr__(self, '_bbox', Box.union(*[gfx.box for gfx in self.graphics]))
 
@@ -82,7 +82,7 @@ class BDNEvent(GfxCompositor):
         outTC = TC(vfmt.fps, ev_elem.attrib['OutTC'], force_non_drop_frame=True)
         forced = ev_elem.attrib.get('Forced', 'False').lower() == 'true'
         return cls(inTC, outTC, gfx, forced)
-    
+
     def get_bbox(self) -> Box:
         return self._bbox
 
@@ -98,18 +98,18 @@ class BDNXML:
             raise OSError("Provided BDN XML does not exist.")
         self._fp = xml_filepath
         self._description, self._events = None, None
-    
+
     def parse(self, *, skip_size_check: bool = False) -> None:
         if not skip_size_check and os.stat(self._fp).st_size > (100 << 20):
             raise OSError("XML file too large.")
-        
+
         content = None
         with open(self._fp, 'r', encoding="utf-8-sig") as f:
             content = ET.fromstring(f.read())
         assert content is not None, "Failed to parse file."
         if content.tag.lower() != 'bdn':
             raise RuntimeError("Incorrect file format, expected BDN.")
-        
+
         descr = content.find('Description')
         events = content.find('Events')
         if descr is None or events is None:
@@ -117,11 +117,11 @@ class BDNXML:
 
         bdn_vf = self._parse_header(descr)
         events = self._parse_events(bdn_vf, events)
-        
+
         self._description = bdn_vf
         self._events = events
     ####
-            
+
     @property
     def description(self) -> BDNVideoFormat:
         """
@@ -131,13 +131,13 @@ class BDNXML:
         if self._description is None:
             self.parse()
         return self._description
-    
+
     @property
     def events(self) -> list[BDNEvent]:
         if self._events is None:
             self.parse()
         return self._events
-    
+
     def _parse_header(self, header: ET) -> BDNVideoFormat:
         hcontent = header.find('Events')
         assert hcontent.attrib['Type'].lower() == 'graphic', "Text BDN not supported."
@@ -155,7 +155,7 @@ class BDNXML:
         events = []
         for ev in filter(lambda x: x.tag == 'Event', events_tree):
             events.append(BDNEvent.from_element(ev, vfmt, bdn_ref_directory))
-        
+
         events = sorted(events, key=lambda e: e.inTC.frames)
         for ev0, ev1 in zip(events, events[1:]):
             if ev0.outTC > ev1.inTC:

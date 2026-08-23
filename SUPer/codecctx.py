@@ -41,7 +41,7 @@ class _AllocatedVersionedResource:
         self.pts = pts
         self._version += 1
         return self.version
-    
+
     @property
     def version(self) -> int:
         return self._version
@@ -53,15 +53,15 @@ class _AllocatedVersionedResource:
 @dataclass
 class DecoderPalette(_AllocatedVersionedResource):
     palette: dict[int, PaletteEntry] = field(default_factory=Palette)
-    
+
     def __post_init__(self) -> None:
         if not isinstance(self.palette, Palette):
             self.palette = Palette(self.palette)
         assert len(self.palette) < 256
-        
+
     def get_difference(self, new_palette: dict[int, PaletteEntry]):
         difference = {}
-        
+
         for entry_ix, entry in new_palette.items():
             stored_entry = self.palette.get(entry_ix, None)
             if stored_entry is None or stored_entry != entry:
@@ -74,7 +74,7 @@ class DecoderPalette(_AllocatedVersionedResource):
 @dataclass
 class ObjectSlot(_AllocatedVersionedResource):
     shape: Shape | None = None # due to inheritance with default args
-    
+
     def __post_init__(self) -> None:
         assert self.shape.width >= 8 and self.shape.height >= 8
 
@@ -86,13 +86,13 @@ class PGStreamCtx:
     def __init__(self, bd_video: BDVideo) -> None:
         self.bd_video = bd_video
         self._composition_number = 0
-    
+
     def get_composition_number(self) -> int:
         return self._composition_number
-    
+
     def get_cast_composition_number(self) -> int:
         return self._composition_number & 0xFFFF
-    
+
     def register_new_composition(self) -> None:
         self._composition_number += 1
 
@@ -109,7 +109,7 @@ class PGObjectBuffer:
         for slot_id, slot in filter(lambda x: x[1].shape == shape, self._slots.items()):
             if dts is None or slot.pts is None or dts > slot.pts:
                 return slot_id, slot
-    
+
     def allocate(self, shape: Shape) -> tuple[int, ObjectSlot] | None:
         if sum(map(lambda s: s.size(), self._slots.values())) + shape.area > self.__class__.__MAX_SIZE:
             return None
@@ -121,10 +121,10 @@ class PGObjectBuffer:
                 self._slots[k] = slot
                 return k, slot
         assert 0
-        
+
     def get_indexed(self, slot_id: int) -> ObjectSlot | None:
         return self._slots.get(slot_id, None)
-    
+
     def allocate_indexed(self, shape: Shape, slot_id: int) -> bool:
         if self._slots.get(slot_id, None) is not None:
             return False
@@ -140,7 +140,7 @@ class PGEpochContext:
         self._palettes = [DecoderPalette() for _ in range(8)]
         self.buffer = PGObjectBuffer()
         self.differentiate_palette = differentiate_palette
-        
+
     def flush(self) -> None:
         for palette in self._palettes:
             palette.clear()
@@ -160,7 +160,7 @@ class PGEpochContext:
             if palette.pts < dts:
                 return palette_id, palette
         return None
-    
+
     def register_composition(self,
          pts: int, dts: int, composition_state: PCS.CompositionState,
          palette_id: int, palette_update: bool,
@@ -182,13 +182,13 @@ class PGEpochContext:
         )
         self._stream_ctx.register_new_composition()
         return pcs
-    
+
     def register_object(self, pts: int, dts: int, bitmap: np.ndarray[tuple[int, int], np.uint8]) -> tuple[ODS, ...]:
         """
         Register an object to decode from DTS onwards, and that will be displayed at PTS.
         - The PTS is the composition presentation timestamp.
         - The DTS is either the DTS of the PCS or the DTS for this very object.
-        
+
         Return:
             A sequence of ODS (one or more)
         """
@@ -200,7 +200,7 @@ class PGEpochContext:
             assert slot_data is not None
         slot_id, slot = slot_data
         slot.reserve(pts)
-        
+
         ods_list = []
         flag = ODS.DataFlag.FIRST
         len_rle_data_total = 4 + len(data)
@@ -233,7 +233,7 @@ class PGEpochContext:
                        palette_version=decoder_palette.get_cast_version(),
                        palette=palette_diff)
         return None
-    
+
     def get_window_definition_segment(self, pts: int, dts: int) -> WDS:
         """
         Return the WDS segment for this epoch, at the given PTS, DTS.
@@ -247,7 +247,7 @@ class PGEpochContext:
         is_safe = slot.pts < dts if dts is not None else False
         slot.pts = pts
         return is_safe
-        
+
     def update_palette_reservation(self, palette_id: int, pts: int, dts: int) -> bool:
         palette = self._palettes[palette_id]
         assert palette.pts < pts

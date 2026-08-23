@@ -30,12 +30,12 @@ from .internals import _Masks
 from .segments import GraphicSegment, SegmentParser, PCS
 from .graphicstream import DisplaySet, Epoch
 
-_FileStreamT: TypeAlias = str | Path | BytesIO    
+_FileStreamT: TypeAlias = str | Path | BytesIO
 
 class SUPReader:
     def __init__(self, fp: _FileStreamT):
         self.fp = Path(fp) if isinstance(fp, (str, Path)) else fp
-        
+
     def read_segment(self) -> Generator[GraphicSegment, None, None]:
         if isinstance(self.fp, Path):
             open_stream = lambda: open(self.fp, 'rb')
@@ -62,7 +62,7 @@ class SUPReader:
                     buff = buff[segment_length:]
                 else:
                     can_parse = False
-            ####while   
+            ####while
 
     @staticmethod
     def _gen_group(elements: Generator[..., None, None],
@@ -93,12 +93,12 @@ class SUPReader:
                 group.append(elem)
         ####while True
     ####
-    
+
     def read_displayset(self) -> Generator[DisplaySet, None, None]:
         """
         Returns a generator of DisplaySets. Stops when all DisplaySets in the
         file have been consumed.
-    
+
         :yield: DisplaySet, in order, as they appear in the SUP file.
         """
         condition = lambda seg: isinstance(seg, PCS)
@@ -110,7 +110,7 @@ class SUPReader:
 
     def read_epochs(self) -> list[Epoch]:
         return list(self.read_epoch())
-    
+
     def read_displaysets(self) -> list[DisplaySet]:
         return list(self.read_displayset())
 
@@ -121,30 +121,30 @@ class GraphicWriter(ABC):
 
     @abstractmethod
     def _setup_io(self) -> tuple[BytesIO, ...]: ...
-    
+
     def _write_header(self, st: tuple[BytesIO, ...]) -> None: pass
-    
+
     def _write_tail(self, st: tuple[BytesIO, ...]) -> None: pass
-        
+
     def get_mux_timestamps(self, segment: GraphicSegment) -> tuple[int, int]:
         mux_pts = (self.mux_offset + segment.pts) & self._ts_mask
         mux_dts = (self.mux_offset + segment.dts) & self._ts_mask
         return mux_pts, mux_dts
-    
+
     @abstractmethod
     def _write_segment(self, st: tuple[BytesIO, ...], mux_pts: int, mux_dts: int, segment: GraphicSegment):
         ...
-        
+
     @staticmethod
     def _close_io(st: tuple[BytesIO, ...], use_file_io: bool):
-        if use_file_io: 
+        if use_file_io:
             for stream in st:
                 stream.close()
 
 
     def writer(self) -> Generator[None, GraphicSegment, None]:
         st, use_file_io = self._setup_io()
-        
+
         self._write_header(st)
 
         while True:
@@ -153,11 +153,11 @@ class GraphicWriter(ABC):
                 break
 
             self._write_segment(st, *self.get_mux_timestamps(segment), segment)
-        
+
         self._write_tail(st)
         self.__class__._close_io(st, use_file_io)
         return
-        
+
     def write_segments(self, segments: list[GraphicSegment]) -> None:
         writer = self.writer()
         next(writer)
@@ -165,7 +165,7 @@ class GraphicWriter(ABC):
             writer.send(segment)
         try: writer.send(None)
         except StopIteration: ...
-    
+
     def write_displaysets(self, displaysets: list[DisplaySet]) -> None:
         writer = self.writer()
         next(writer)
@@ -174,8 +174,8 @@ class GraphicWriter(ABC):
                 writer.send(segment)
         try: writer.send(None)
         except StopIteration: ...
-        
-        
+
+
     def write_epochs(self, epochs: list[Epoch]) -> None:
         writer = self.writer()
         next(writer)
@@ -198,9 +198,9 @@ class PesMuiWriter(GraphicWriter):
                 raise ValueError("No IO stream for MUI output")
             self.pes_stream = pes_fp
             self.mui_stream = mui_fp
-            
+
         super().__init__(mux_offset or 54000000, _Masks.W33)
-           
+
     def _write_segment(self, st: tuple[BytesIO, ...], mux_pts: int, mux_dts: int, segment: GraphicSegment):
         mui_segment_meta = struct.pack(">BI", segment.type, segment.length + 3)
         payload = bytearray(b'\x00'*9)
@@ -213,24 +213,24 @@ class PesMuiWriter(GraphicWriter):
 
         st[0].write(mui_segment_meta + payload)
         st[1].write(bytes(segment))
-    
+
     def _write_header(self, st: tuple[BytesIO, ...]) -> None:
         st[0].write(b'\x00\x00\x00\x03')
-    
+
     def _write_tail(self, st: tuple[BytesIO, ...]) -> None:
         st[0].write(b'\xFF' + bytes(13))
-    
+
     def _setup_io(self) -> tuple[tuple[BytesIO, ...], bool]:
         use_file_io = isinstance(self.pes_stream, Path)
         pes_stream = open(self.pes_stream, 'wb') if use_file_io else self.pes_stream
         mui_stream = open(self.mui_stream, 'wb') if use_file_io else self.mui_stream
         return (mui_stream, pes_stream), use_file_io
-    
+
 class SUPWriter(GraphicWriter):
     def __init__(self, sup_fp: _FileStreamT, mux_offset: int = 0):
         self.sup_stream = Path(sup_fp) if isinstance(sup_fp, (Path, str)) else sup_fp
         super().__init__(mux_offset, _Masks.W32)
-    
+
     def _write_segment(self, st: tuple[BytesIO, ...], mux_pts: int, mux_dts: int, segment: GraphicSegment):
         raw = b'PG' + struct.pack(">II", mux_pts & _Masks.W32, mux_dts & _Masks.W32) + bytes(segment)
         st[0].write(raw)
@@ -239,7 +239,7 @@ class SUPWriter(GraphicWriter):
         use_file_io = isinstance(self.sup_stream, Path)
         sup_stream = open(self.sup_stream, 'wb') if use_file_io else self.sup_stream
         return (sup_stream,), use_file_io
-        
+
 # class BufferedGraphicEpochWriter:
 #     """
 #     Buffer incoming epoch and write them linearly whenever possible.
@@ -260,7 +260,7 @@ class SUPWriter(GraphicWriter):
 #         assert promise.uuid < self._next_promise_idx
 #         self._pending[promise.uuid] = data
 #         self._flush()
-    
+
 #     def _flush(self) -> None:
 #         k = 0
 #         while (epoch := self._pending.get(self._next_write_idx + k, None)) is not None:

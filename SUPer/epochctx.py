@@ -40,18 +40,18 @@ logger = LogFacility.get_logger('SUPer')
 class LayoutMode(IntEnum):
     SAFE   = 0
     NORMAL = 1
-    GREEDY = 2       
+    GREEDY = 2
 
 @dataclass
 class Graphic:
     point: Point
     shape: Shape
     filepath: Path
-    
+
     def __post_init__(self) -> None:
         assert self.box.area > 0
         assert self.filepath.exists()
-    
+
     @property
     def box(self) -> Box:
         return Box(self.point.y, self.shape.height, self.point.x, self.shape.width)
@@ -63,7 +63,7 @@ class EpochEvent(GfxCompositor):
     outTC: TC
     graphics: tuple[Graphic]
     repeated_inTC: list[TC] = field(default_factory=list)
-    
+
     def __post_init__(self) -> None:
         assert isinstance(self.inTC, TC) and isinstance(self.outTC, TC)
         assert self.inTC < self.outTC
@@ -79,7 +79,7 @@ class EpochData:
     events: list[EpochEvent]
     min_dts: int | float = -np.inf
     max_pts: int | float =  np.inf
-    
+
 def _minmax(iterable: Iterable):
     return reduce(lambda x, y: (min(x[0], np.floor(y)), max(x[1], np.ceil(y))),
                   iterable, (np.inf, -np.inf))
@@ -232,9 +232,9 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, mode: LayoutMode) ->
         if flip_results:
             cwd = tuple(reversed(cwd))
             scores[0] = scores[1]
-    
+
     cwd = _to_absolute_coordinates(cwd, cbox)
-    decode_duration = scores[0]        
+    decode_duration = scores[0]
 
     # given this, evaluate the single window layout (this epoch bounding box)
     base_box = box_factory(leng.get_raw_container())
@@ -282,16 +282,16 @@ def _perform_fine_epoch_detection(
     """
     screen = Box(0, plane_format.height, 0, plane_format.width)
     layout = LayoutEngine(plane_format.value)
-    
+
     minimum_epoch_start = _get_epoch_start_duration((Box(0, 0, 0, 0),), screen.area)
-    
+
     epochs = []
     events_in_epoch = []
     for ev in reversed(events):
         channel = np.ascontiguousarray(ev.image.getchannel('A'), dtype=np.uint8)
         if not np.any(channel):
             continue
-        
+
         if len(events_in_epoch) > 0:
             delta_ticks = (events_in_epoch[0].inTC.to_pts() - ev.outTC.to_pts())
             if delta_ticks > minimum_epoch_start:
@@ -300,7 +300,7 @@ def _perform_fine_epoch_detection(
                     epochs.insert(0, EpochData(cwd, events_in_epoch, min_dts=ev.inTC.to_pts()+1))
                     events_in_epoch = []
                     layout.reset()
-        
+
         events_in_epoch.insert(0, _bdnev_to_epochevent(ev))
         bbox = ev.get_bbox()
         layout.add_to_layout(bbox.x, bbox.y, channel)
@@ -326,12 +326,12 @@ class EpochFinder:
         self.mode = LayoutMode(mode)
         self.bdn = bdn
         self.threads = threads
-        
+
     def _get_rough_split(self) -> Generator[Sequence[BDNEvent], None, None]:
         plane = self.bdn.description.fmt
         window = Box(0, plane.height, 0, plane.width)
         screen_transfer_max = _get_epoch_start_duration((window,), plane.area)
-        
+
         epoch = [self.bdn.events[0]]
         for event in self.bdn.events[1:]:
             # + 1 to avoid PTS(last event) = DTS(epoch start) which would not guarantee a display of the last event
@@ -345,10 +345,10 @@ class EpochFinder:
         plane = self.bdn.description.fmt
         p_find_epochs_layouts = partial(_perform_fine_epoch_detection, plane_format=plane, mode=self.mode)
         epochs_data = []
-        
+
         pbar = LogFacility.get_progress_bar(logger, self.bdn.events)
         pbar.set_description("Finding epochs and layouts", True)
-        
+
         if self.threads > 1:
             with mp.Pool(self.threads, _pool_worker_init) as mpp:
                 for r in mpp.imap_unordered(p_find_epochs_layouts, self._get_rough_split()):
@@ -369,7 +369,7 @@ class EpochFinder:
                 #inflate a bit the epoch start to allow for WDS stacking at epoch start.
                 ed_next.min_dts = max(ed.events[-1].outTC.to_pts() + 1,
                                       ed_next.events[0].inTC.to_pts() - _get_epoch_start_duration(ed_next.windows, plane.area) - get_composition_time(ed_next.windows))
-            
+
             ed.max_pts = min(ed_next.min_dts - 1, ed.events[-1].outTC.to_pts() + get_composition_time(ed.windows))
             assert ed.min_dts < ed.max_pts < ed_next.min_dts < ed_next.max_pts
         if logger.level <= 10:
@@ -392,7 +392,7 @@ class EventsPreprocessor:
             return 0
         n_refreshes = int(((event.outTC - event.inTC).to_realtime(as_float=True) - period) // period)
         return max(0, n_refreshes)
-    
+
     @staticmethod
     def remove_duplicates(events: list[BDNEvent | EpochEvent]) -> list[BDNEvent | EpochEvent]:
         trimmed = [events[0]]

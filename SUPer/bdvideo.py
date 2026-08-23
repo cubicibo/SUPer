@@ -51,22 +51,22 @@ class Framerate(Enum):
     @classmethod
     def _missing_(cls, fps: FramerateInputT) -> Self:
         return cls.from_fps(fps)
-    
+
     @classmethod
     def from_coded_frame_rate(cls, v: int) -> Self:
         if v not in range(1, 9) or v == 4:
             raise ValueError("Unknown coded frame rate.")
         v -= 2 if v >= 4 else 1
         return list(cls)[v]
-        
+
     def to_coded_frame_rate(self) -> int:
         cls = __class__
         return {cls.FPS_23976: 1, cls.FPS_24: 2, cls.FPS_25: 3, cls.FPS_2997: 4,
                 cls.FPS_50: 6, cls.FPS_5994: 7, cls.FPS_60: 8}[self]
-    
+
     def __bytes__(self) -> bytes:
         return bytes(self.to_coded_frame_rate())
-    
+
     def __float__(self) -> float:
         return float(self.value)
 
@@ -101,20 +101,20 @@ class Framerate(Enum):
         elif isinstance(other, (int, float, Fraction)): return self.value < other
         return NotImplemented
 
-#%%        
+#%%
 class Format(Enum):
     VIDEO_480 = 720, 480
     VIDEO_576 = 720, 576
     VIDEO_720 = 1280, 720
     VIDEO_1080 = 1920, 1080
-    
+
     @classmethod
     def from_height(cls, height: int) -> 'Format':
         for dim, enfo in cls._value2member_map_.items():
             if dim[1] == height:
                 return cls(enfo)
         assert ValueError("Illegal BD video format.")
-    
+
     @classmethod
     def from_string(cls, fmt: str) -> 'Format':
         """
@@ -125,21 +125,21 @@ class Format(Enum):
         while (idx := idx - 1) > 0 and fmt[idx].isalpha():
             pass
         if idx == 0:
-            raise ValueError("Incorrect video format.") 
+            raise ValueError("Incorrect video format.")
         return cls.from_height(int(fmt[:idx+1]))
-    
+
     @property
     def width(self) -> int:
         return self.value[0]
-    
+
     @property
     def height(self) -> int:
         return self.value[1]
-    
+
     @property
     def area(self) -> int:
         return self.width*self.height
-    
+
     @classmethod
     def _missing_(cls, v: FormatInputT) -> 'Format':
         if isinstance(v, int):
@@ -155,20 +155,16 @@ class BDVideo:
     fps: Framerate | FramerateInputT
     uhd_bd: bool = False
     matrix: Matrix | None = None
-    
+
     def __post_init__(self) -> None:
         if not isinstance(self.fmt, Format):    object.__setattr__(self, 'fmt', Format(self.fmt))
         if not isinstance(self.fps, Framerate): object.__setattr__(self, 'fps', Framerate(self.fps))
         if self.fmt.height < 1080 and self.uhd_bd:
             raise ValueError("UHD BD requires a 1920x1080 video format.")
-
-    def set_matrix(self, matrix_name: str | None = None):
-        if matrix_name is None:
-            if self.uhd_bd:
+        if self.matrix is None:
+            if self.uhd_bd is True:
                 raise ValueError("UHD BD requires a colour-space conversion matrix.")
             object.__setattr__(self, 'matrix', Matrix('BT709') if self.fmt.height >= 720 else Matrix('BT601'))
-        else:
-            object.__setattr__(self, 'matrix', Matrix(matrix_name))
 
     def validate(self) -> bool:
         match self.fmt.height:

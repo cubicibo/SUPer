@@ -53,7 +53,7 @@ class BDNEncoder:
             logfile = str(log_filename) + ".txt"
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
-        
+
         str_kwa = ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
 
         if self.kwargs.get('quantize_lib', None) is None:
@@ -68,10 +68,11 @@ class BDNEncoder:
             LogFacility.add_file_report(logger, str(self.outfile) + ".txt")
 
         logger.iinfo(f"Parameters: {str_kwa}")
-        
+
         bdvideo = BDVideo(self.bdn.description.fmt,
                           self.bdn.description.fps,
-                          self.kwargs.get('uhd_bd', False))
+                          self.kwargs.get('uhd_bd', False),
+                          self.kwargs.get('matrix', None))
 
         if len(self.bdn.events) == 0:
             raise RuntimeError("No BDN event found, exiting.")
@@ -88,11 +89,11 @@ class BDNEncoder:
                 #conversion was done internally in BDNXML already.
             else:
                 logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
-        
+
         self._adjust_thread_count()
         return bdvideo
     ####
-    
+
     def _adjust_thread_count(self) -> None:
         n_threads = self._threads
         if (n_threads_auto := isinstance(n_threads, str)): # auto
@@ -110,8 +111,6 @@ class BDNEncoder:
     ####
 
     def _convert_single(self, bdvideo: BDVideo) -> list[Epoch]:
-        bdvideo.set_matrix(self.kwargs.get('matrix', None))
-        
         logger.info("Finding all epochs and their screen layout:")
         epochs_ctx = EpochFinder(bdn=self.bdn, threads=1,
                                  mode=self.kwargs.get('layout_mode', LayoutMode.GREEDY)).get_epochs()
@@ -244,13 +243,13 @@ class BDNEncoder:
             epochs = self._convert_mt(bd_video)
         else:
             epochs = self._convert_single(bd_video)
-        
+
         # with multithreading we have non deterministic generation order of DisplaySets
         # so fix the composition number here
         self.fix_composition_id(epochs, replace=threaded)
 
         is_valid = self.test_output(bd_video, epochs)
-        
+
         return is_valid, epochs
     ####
 
@@ -279,10 +278,10 @@ class BDNEncoder:
             if warnings == 0:
                 logger.info("=> Output PGS is compliant.")
             else:
-                logger.info("=> Output PGS seems compliant but has minor issues (see warnings).")            
+                logger.info("=> Output PGS seems compliant but has minor issues (see warnings).")
         else:
             logger.error("=> Output PGS is not compliant. Expect display issues or decoder crash.")
-        
+
         LogFacility.dissociate_log_and_report(logger)
         return compliant
     ####
@@ -337,7 +336,7 @@ class BDNEncoder:
         if is_sup:
             logger.info(f"Writing output file {fp_sup}")
             SUPWriter(fp_sup).write_epochs(epochs)
-    ####def            
+    ####def
 ####
 
 class EpochEncode:
@@ -346,11 +345,11 @@ class EpochEncode:
         self.pg_stream_ctx = pg_stream_ctx
         self.kwargs = kwargs
         self.epoch_data = epoch_data
-        
+
     def preprocess(self, remove_dupes: bool = True, add_refreshes: float = 0) -> Self:
         if remove_dupes:
             self.epoch_data.events = EventsPreprocessor.remove_duplicates(self.epoch_data.events)
-        
+
         if add_refreshes >= 1.0:
             for event in self.epoch_data.events:
                 if (count := EventsPreprocessor.get_refresh_count(event)) > 0:
@@ -389,17 +388,15 @@ class BDNEpochWorker(mp.Process):
         cls._instance_cnt = 0
 
     def setup_env(self) -> None:
-        self.video_fmt.set_matrix(self.kwargs.get('matrix', None))
-        
         LogFacility.disable_tqdm()
-        
+
         log_filename = self.kwargs.get('log_filename', None)
         file_logging_level = self.kwargs.get('log_to_file', False)
         if file_logging_level > 0 and log_filename:
             logfile = str(log_filename) + f"_{self._prefix}"  + ".txt"
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
-        
+
         libs_params = self.kwargs.get('ini_opts', {})
         logger.debug(f"INI parameters: {libs_params}")
         requested_qtz = self.kwargs['quantize_lib']
@@ -407,7 +404,7 @@ class BDNEpochWorker(mp.Process):
             if not BuiltinQuantizer.LIQ.value.configure(libs_params.get('quant', {})):
                 self.kwargs['quantize_lib'] = BuiltinQuantizer.Qtzr
                 logger.warning("Failed to configure PNG/ImageQuant, using Qtzr as a fallback.")
-        
+
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
         logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")

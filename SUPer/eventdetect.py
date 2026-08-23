@@ -99,7 +99,7 @@ class TreeAnalyzer:
     def __init__(self, region: Box, *, _depth: int = 0):
         self.region = Box(0, region.dy, 0, region.dx)
         self.depth = _depth
-    
+
     def _get_layout(self, composite: Image.Image, frame: Image.Image) -> tuple[bool, tuple[Box, Box, Box]]:
         leng = LayoutEngine((self.region.dx, self.region.dy))
         leng.add_to_layout(0, 0, np.asarray(composite.getchannel('A')))
@@ -241,7 +241,7 @@ class ObjectDetector:
         else:
             empty = True
         return work_plane, empty
-    
+
     @staticmethod
     def _generate_object(
         alpha_compo: Image.Image,
@@ -261,7 +261,7 @@ class ObjectDetector:
             mask = mask[:-unseen]
             containers = containers[:-unseen]
         return ProspectiveObject(f_start, mask, containers, Box.from_coords(y, y2, x, x2))
-    
+
     def analyze(self) -> Generator[ProspectiveObject, None, None]:
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
@@ -341,7 +341,7 @@ class WindowsObjectDetector:
 
         # run the analysis on both windows, event per event. Collect all objects returned in a list, for each window
         pgobjs = [[] for k in range(len(self.windows))]
-        
+
         # to flush a detector, two consecutives None have to be sent.
         for event in chain(events, [None]*2):
             # load image once, regardless of the window count.
@@ -362,7 +362,7 @@ class WindowsObjectDetector:
         ssim_score = min(0.9999, 0.9608 + self.fmt.value[1]*(0.986-0.972)/(1080-480))
 
         pgobjs = self.identify_primary_objects(events, ssim_threshold, ssim_score)
-        
+
         if self.nested_analysis:
             raise NotImplementedError("Nested analysis currently not implemented.")
         return pgobjs

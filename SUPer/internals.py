@@ -40,11 +40,11 @@ class GraphicsDecoder:
     RD = 16000000
     RC = 32000000
     FREQ = 90000
-        
+
     @classmethod
     def get_object_duration(cls, object_area: int) -> int:
         return int(np.ceil(object_area * cls.FREQ / cls.RD))
-    
+
     @classmethod
     def get_composition_duration(cls, window_area: int) -> int:
         return int(np.ceil(window_area * cls.FREQ / cls.RC))
@@ -124,7 +124,7 @@ class GfxCompositor(ABC):
         if (img := Image.open(self.graphics[0].filepath)).mode != 'RGBA':
             img = img.convert('RGBA')
         return img
-    
+
 class LogFacility:
     _logger = dict()
     _logpbar = dict()
@@ -253,7 +253,7 @@ class LogFacility:
         cls.set_file_log(cls._logrep, report_filename, simple_format=True)
         cls.set_logger_level('event_report', cls._logrep.level)
         logger.addHandler(cls._logrep)
-        
+
     @classmethod
     def dissociate_log_and_report(cls, logger) -> None:
         if cls._logrep is None:
@@ -262,7 +262,7 @@ class LogFacility:
             if hdl == cls._logrep.handlers[0]:
                 logger.handlers.pop(ih)
                 break
-            
+
     @classmethod
     def associate_log_and_report(cls, logger) -> None:
         if cls._logrep is None:

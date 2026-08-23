@@ -244,13 +244,13 @@ class EpochEncoderEngine:
         self.kwargs = kwargs
         self._codec = PGEpochContext(stream_ctx, self.ectx.windows,
                                      differentiate_palette=(not self.kwargs.get('full_palette', False)))
-        
+
     def analyze(self) -> tuple[...]:
         ssim_tol = self.kwargs.get('ssim_tol', 0)
         detector = WindowsObjectDetector(self._codec.bd_video.fmt, self.ectx.windows, ssim_tol)
-        
+
         pgobjs = detector.get_objects(self.ectx.events)
-        
+
         # Create all potential display sets in the epoch
         durs, nodes = self.create_displaysets_nodes([objs.copy() for objs in pgobjs])
         return pgobjs, durs, nodes
@@ -263,7 +263,7 @@ class EpochEncoderEngine:
         #Set-up datastructures for bytestream generation
         self.set_pgobjects_extended_visibilities(nodes)
         r_states, r_durs, r_nodes, r_flags = self.roll_nodes(nodes, durs, flags, states)
-        
+
         return r_states, pgobjs, r_durs, r_flags, r_nodes
 
     def encode(self, ctx: tuple[...]) -> Epoch:
@@ -722,7 +722,7 @@ class EpochEncoderEngine:
                 offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x[1].box, compositions)))
                 last_imgs = [None] * len(compositions)
                 img_seq = ImageSequence(k-i, self.kwargs['quantize_lib'], self._codec.bd_video.matrix)
-    
+
                 for j in range(i, k):
                     coords = np.zeros((2,), np.int32)
                     a_img = Image.new('RGBA', dims, (0, 0, 0, 0))
@@ -788,7 +788,7 @@ class EpochEncoderEngine:
                     if normal_case_refresh:
                         #An object may be suggested but it is masked for the entire acquisition and
                         # subsequent normal cases: pad palette as it won't be in the composition list.
-                        pals.append([Palette()] * (k-i))                
+                        pals.append([Palette()] * (k-i))
                 elif isinstance(normal_case_refresh, list) and not normal_case_refresh[oix]:
                     assert 1 == sum(normal_case_refresh) and id_skipped is None and prev_cobjs is not None
                     composition = next(filter(lambda c: c.window_id == pgo.wid, prev_cobjs))
@@ -810,7 +810,7 @@ class EpochEncoderEngine:
 
                 n_colors_qtz = n_colors + (-1 if oix == 1 else 1)*bias
                 clut_offset = 1 + (n_colors - 1 + bias)*(oix == 1 and has_two_objs)
-                
+
                 wd_bitmap, wd_pal = None, None
                 for trial in range(2):
                     last_img = None
@@ -824,7 +824,7 @@ class EpochEncoderEngine:
                         crop_coords = (pgo.box.x, pgo.box.y, pgo.box.x2, pgo.box.y2)
                         img_seq.add_to_stack(Image.fromarray(multiplier*last_img, 'RGBA').crop(crop_coords), n_colors_qtz-trial)
 
-                
+
                     wd_bitmap, wd_pal = img_seq.flatten(n_colors_qtz-trial).remap(clut_offset)
                     if wd_bitmap is not None:
                         break
@@ -877,7 +877,7 @@ class EpochEncoderEngine:
                         objs[ix] = obj
             return objs
         ####
-        
+
         i = states.index(PCS.CompositionState.EPOCH_START)
         c_pts = 0
         last_cobjs = []
@@ -961,7 +961,7 @@ class EpochEncoderEngine:
                     if durs[z][1] != 0:
                         assert nodes[z].parent is not None
                         logger.debug(f"Writing screen wipe in palette update chain at PTS={self.ectx.events[z-1].outTC}={c_pts:.03f}")
-                        uds = self._get_undisplay_pds(self.ectx.events[z-1].outTC.to_pts(), nodes[z].parent.dts(), cobjs, max(pal.palette)+1)
+                        uds = self._codec.get_undisplay_pds_ds(self.ectx.events[z-1].outTC.to_pts(), nodes[z].parent.dts(), cobjs, max(pal.palette)+1)
                         DSNode.apply_pts_dts(uds, nodes[z].parent.set_pts_dts_sc(uds, self._codec.buffer, displaysets[0].wds))
                         displaysets.append(uds)
 
@@ -1053,7 +1053,7 @@ class EpochEncoderEngine:
             uds = self._codec.get_undisplay_pds_ds(self.ectx.events[-1].outTC.to_pts(), final_node.dts(), last_cobjs, 255)
             DSNode.apply_pts_dts(uds, final_node.set_pts_dts_sc(uds, self._codec.buffer, displaysets[0].wds))
             displaysets.append(uds)
-            
+
             #Prepare an additional display set to undraw the screen if it can fit (< self.ectx.max_pts)
             nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self._codec.bd_video.fps))))
             tc_final_pts = self.ectx.events[-1].outTC + nf_shift
@@ -1196,4 +1196,3 @@ class EpochEncoderEngine:
         return r_states, r_durs, r_nodes, r_flags
     ####
 ####
-    

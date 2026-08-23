@@ -121,7 +121,7 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
     bytes_in_epoch = 0
     for epoch in epochs:
         for ds in epoch:
-            bytes_in_ds = 0 
+            bytes_in_ds = 0
             for seg in ds:
                 is_ok &= leaky.step(seg)
                 bytes_in_ds += seg.length + 13
@@ -206,7 +206,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
         if epoch[0].wds is None:
             logger.critical("An epoch cannot start without defining windows.")
             return False, np.inf
-            
+
         for wd in epoch[0].wds.windows:
             if wd.h_pos + wd.width > epoch[0].pcs.width or wd.v_pos + wd.height > epoch[0].pcs.height:
                 logger.error(f"Window {wd.window_id} out of screen in epoch starting at {to_tc(epoch[0].pcs.pts)}.")
@@ -238,7 +238,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
             is_dupe = False
             if len(ds) == len(last_ds) and ds.pcs.composition_number == prev_pcs_id:
                 # Make copies and wipe fields that could change (timestamps, composition state)
-                
+
                 different = False
                 for s1, s2 in zip(ds[1:], last_ds[1:]):
                     if s1.get_payload() != s2.get_payload():

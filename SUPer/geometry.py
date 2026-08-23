@@ -25,17 +25,17 @@ from typing import Self, Sequence
 class Point:
     y: int
     x: int
-    
+
     def __post_init__(self) -> None:
         assert self.y >= 0 and self.x >= 0
-        
+
     def __add__(self, other: Self | Sequence[int]) -> Self:
         if isinstance(other, __class__):
             return Point(self.y + other.y, self.x + other.x)
         elif isinstance(other, (tuple, list)) and len(other) == 2:
             return Point(self.y + other[0], self.x + other[1])
         return NotImplemented
-    
+
     def __sub__(self, other: Self | Sequence[int]) -> Self:
         if isinstance(other, __class__):
             return Point(self.y - other.y, self.x - other.x)
@@ -176,17 +176,17 @@ class Box:
         if isinstance(other, __class__):
             return self.coords == other.coords
         return NotImplemented
-    
+
     def __and__(self, other: 'Box') -> 'Box':
         if isinstance(other, __class__):
             return self.intersect(other)
         return NotImplemented
-    
+
     def __or__(self, other: 'Box') -> 'Box':
         if isinstance(other, __class__):
             return self.union(other)
         return NotImplemented
-    
+
     def __neq__(self, other: 'Box') -> bool:
         if isinstance((is_equal := (self == other)), bool):
             return not is_equal

@@ -49,7 +49,7 @@ class QuantizerWrap(ABC):
         assert 2 <= colors <= 256
         return cls._postprocess(*cls._palettize(*cls._preprocess(image, colors, **kwargs)))
 
-    @classmethod    
+    @classmethod
     def _preprocess(cls, image: Image.Image, colors: int, *args, **kwargs) -> tuple[Image.Image, int, ...]:
         return image, colors, *args, kwargs
 
@@ -65,7 +65,7 @@ class QuantizerWrap(ABC):
     @_classproperty
     def name(cls) -> str:
         return cls.__name__.replace("Wrap", "")
-    
+
     @classmethod
     def is_optimized(cls) -> bool:
         return True
@@ -94,7 +94,7 @@ class HexTreeWrap(QuantizerWrap):
     @classmethod
     def is_optimized(cls) -> bool:
         return 'C' in _HexTree.get_capabilities()
-    
+
 class QtzrWrap(QuantizerWrap):
     @classmethod
     def _preprocess(cls, image: Image.Image, colors: int, **kwargs) -> tuple[Image.Image, int, ...]:
@@ -103,10 +103,10 @@ class QtzrWrap(QuantizerWrap):
         n_clusters = min(colors, int(np.ceil(20 + n_clusters*235/255)))
         return image, n_clusters
 
-    @classmethod    
+    @classmethod
     def _palettize(cls, image: Image.Image, colors: int) -> tuple[_PaletteT, _BitmapT]:
         return _Qtzr.quantize(np.asarray(image, dtype=np.uint8), colors)[::-1]
-    
+
     @classmethod
     def is_optimized(cls) -> bool:
         return 'C' in _Qtzr.get_capabilities()
@@ -121,14 +121,14 @@ class PillowWrap(QuantizerWrap):
             img_padded = image
         return img_padded, colors, {'_pil_input_img': image, '_colors': colors}
 
-    @classmethod          
+    @classmethod
     def _palettize(cls, image: Image.Image, colors: int, ctx: dict[str, Image.Image]) -> tuple[_PaletteT, _BitmapT, dict[str, Any]]:
         img_out = image.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
         bitmap = np.asarray(img_out, dtype=np.uint8)
         palette = np.asarray(list(img_out.palette.colors.keys()), dtype=np.uint8)
         return palette, bitmap, ctx | {'_pil_output_img': img_out}
 
-    @classmethod    
+    @classmethod
     def _postprocess(cls, palette: _PaletteT, bitmap: _BitmapT, ctx: dict[str, Image.Image]) -> tuple[_PaletteT, _BitmapT]:
         img_in, img_out, colors = ctx['_pil_input_img'], ctx['_pil_output_img'], ctx['_colors']
         #bug workaround: sometime pillow may sometimes not return all palette entries
@@ -155,12 +155,12 @@ class ImageQuantWrap(QuantizerWrap):
             cls.__piq.set_dithering_level(kwargs['__orig_dither']*0.9)
             cls.__piq.set_quality(max(1, int(np.ceil(kwargs['__orig_quality']*0.975))))
         return image, max(2, nc), kwargs
-    
+
     @classmethod
     def _palettize(cls, image: Image.Image, colors: int, settings: dict[str, Any]) -> tuple[_PaletteT, _BitmapT, dict[str, Any]]:
         palette, bitmap = cls.__piq.quantize(image, min(colors, int(np.ceil(20+colors*235/255))))
         return palette, bitmap, settings
-         
+
     @classmethod
     def _postprocess(cls, palette: _PaletteT, bitmap: _BitmapT, settings: dict[str, Any]) -> tuple[_PaletteT, _BitmapT]:
         if settings.get('__orig_dither', None) is not None:
@@ -172,11 +172,11 @@ class ImageQuantWrap(QuantizerWrap):
     @_classproperty
     def name(cls) -> str:
         return super().name + f"({cls.__piq.lib_name})"
-    
+
     @classmethod
     def is_ready(cls) -> bool:
         return False if cls.__piq is None else cls.__piq.is_ready()
-    
+
     @classmethod
     def configure(cls, settings: dict[Any, Any] = {}) -> bool:
         from piliq import PILIQ
@@ -202,11 +202,11 @@ class BuiltinQuantizer(Enum):
     HexTree = HexTreeWrap
     Qtzr = QtzrWrap
     Pillow = PillowWrap
-    
+
     @classmethod
     def configure_all(cls, settings: dict[Any, Any]) -> list[bool]:
         return list(map(lambda q: q.configure(settings), cls))
-    
+
     def __call__(self, image: Image.Image, colors: int, **kwargs) -> tuple[_PaletteT, _BitmapT]:
         palette, bitmap = self.value.quantize(image, colors, **kwargs)
         # Pillow can miserably fail (internal bug), so evaluate the input again with Qtzr which
@@ -214,7 +214,7 @@ class BuiltinQuantizer(Enum):
         if self == __class__.Pillow and palette is None:
             return __class__(__class__.Qtzr)(image, colors, **kwargs)
         return palette, bitmap
-    
+
     @classmethod
     def from_name(cls, name: str) -> 'BuiltinQuantizer':
         match name.strip().lower():
@@ -273,18 +273,18 @@ class ImageSequence:
 
         :return: bitmap, sequence of palette update to obtain the said input animation.
         """
-        
+
         assert self._sequence is not None, "No image lined up in the sequence."
         assert self._idx == self.length
-                
+
         if 1 == self.length:
             clut, self._bitmap = self._sequence
             self._cluts = np.expand_dims(clut, 1).copy()
             self._bitmap = self._bitmap.copy()
             return self
-        
+
         self._sequence = np.moveaxis(self._sequence, 0, 2)
-        
+
         #catalog the sequences
         seq_occ: dict[int, list[int, np.ndarray[tuple[int, int], np.uint8]]] = {}
         for i in range(self._sequence.shape[0]):
@@ -336,7 +336,7 @@ class ImageSequence:
         assert self._bitmap is not None and self._cluts is not None
         if self._pg_cluts is not None:
             return self._pg_cluts, self._bitmap
-        
+
         transparent_id = np.nonzero(np.all(self._cluts[:,:,-1] == 0, axis=1))[0]
 
         #No transparency at all in this bitmap
