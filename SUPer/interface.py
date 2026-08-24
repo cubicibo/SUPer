@@ -122,7 +122,7 @@ class BDNEncoder:
             ee = EpochEncode(pg_stream_ctx, e_ctx, self.kwargs)
             logger.info(f"Encoding epoch {ke}: {e_ctx.events[0].inTC}->{e_ctx.events[-1].outTC} with {len(e_ctx.events)} event(s), {len(e_ctx.windows)} window(s).")
             output_pg_epochs.append(ee.preprocess().encode())
-            logger.info(f"=> Encoded as {len(output_pg_epochs[-1])} display sets.")
+            logger.info(f"=> Encoded epoch {ke} as {len(output_pg_epochs[-1])} display sets.")
         return output_pg_epochs
     ####
 
@@ -469,7 +469,7 @@ class BDNEpochWorker(mp.Process):
                 self._available.value = -1
                 break
             else:
-                logger.info(f"{self._prefix} => encoded as {len(new_epoch)} display sets.")
+                logger.info(f"{self._prefix} => encoded epoch {epoch_id} as {len(new_epoch)} display sets.")
 
             self._q_tx.put((new_epoch, epoch_id))
             self._available.value = 1

@@ -866,6 +866,10 @@ class EpochEncoderEngine:
         insert_acqs = self.kwargs.get('insert_acquisitions', 0)
         displaysets = []
 
+        pbar = LogFacility.get_progress_bar(logger, range(n_actions))
+        pbar.set_description("Encoding", False)
+        pbar.reset(n_actions)
+
         ## Internal helper function
         def get_obj(frame, pgobjs: dict[int, list[ProspectiveObject]]) -> dict[int, ProspectiveObject | None]:
             objs = {}
@@ -1050,7 +1054,10 @@ class EpochEncoderEngine:
                 ####if t_diff >
             i = k
             last_cobjs = cobjs
+            pbar.n = i
+            pbar.update()
         ####while
+        LogFacility.close_progress_bar(logger)
 
         #We can't undraw the screen due to delta PTS constraint, we clear it with a palette update and will undraw optionally at +N frames
         if not perform_wds_end:

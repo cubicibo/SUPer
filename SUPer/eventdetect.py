@@ -342,6 +342,9 @@ class WindowsObjectDetector:
         # run the analysis on both windows, event per event. Collect all objects returned in a list, for each window
         pgobjs = [[] for k in range(len(self.windows))]
 
+        pbar = LogFacility.get_progress_bar(logger, range(len(events)))
+        pbar.set_description("Analyzing", False)
+
         # to flush a detector, two consecutives None have to be sent.
         for event in chain(events, [None]*2):
             # load image once, regardless of the window count.
@@ -354,6 +357,11 @@ class WindowsObjectDetector:
                 if pgobj is not None:
                     logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
                     pgobjs[wid].append(pgobj)
+            if event is not None:
+                pbar.n += 1
+                if pbar.n & 0xF == 0 or pbar.n == len(events):
+                    pbar.refresh()
+        pbar.clear()
         return pgobjs
 
     def get_objects(self, events: list[EpochEvent]) -> list[list[ProspectiveObject]]:
