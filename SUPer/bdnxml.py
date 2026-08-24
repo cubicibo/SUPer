@@ -25,7 +25,7 @@ from typing import Self
 from dataclasses import dataclass
 from pathlib import Path
 
-from .bdvideo import Format, Framerate
+from .display.bdvideo import Format, Framerate
 from .internals import GfxCompositor, TC
 from .geometry import Box
 

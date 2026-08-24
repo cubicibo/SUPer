@@ -22,15 +22,16 @@ from PIL import Image
 from itertools import zip_longest, starmap
 from typing import Self, Any
 
-from .geometry import Box, Shape
-from .internals import GraphicsDecoder, LogFacility, TC
-from .codecctx import PGStreamCtx, PGEpochContext, PGObjectBuffer
 from .imgproc import PaletteSequenceEffect
 from .eventdetect import WindowsObjectDetector, ProspectiveObject
 
-from .palette import Palette, PaletteEntry
-from .pgstreams import Epoch, DisplaySet
-from .segments import PCS, END, CompositionObject
+from ..geometry import Box, Shape
+from ..internals import GraphicsDecoder, LogFacility, TC
+from .codecctx import PGStreamCtx, PGEpochContext, PGObjectBuffer
+
+from ..display.palette import Palette, PaletteEntry
+from ..bytestream.pgstreams import Epoch, DisplaySet
+from ..bytestream.segments import PCS, END, CompositionObject
 
 logger = LogFacility.get_logger('SUPer')
 

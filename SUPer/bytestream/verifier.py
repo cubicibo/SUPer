@@ -23,10 +23,10 @@ import numpy as np
 from dataclasses import dataclass
 from brule import Brule
 
-from .codecctx import PGEpochContext
-from .geometry import Shape, Box
-from .internals import LogFacility, GraphicsDecoder, TC
-from .palette import Palette
+from ..encoder.codecctx import PGEpochContext
+from ..geometry import Shape, Box
+from ..internals import LogFacility, GraphicsDecoder, TC
+from ..display.palette import Palette
 from .pgstreams import Epoch, DisplaySet
 from .segments import GraphicSegment, PCS, ODS, END, PGSegmentType
 

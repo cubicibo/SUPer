@@ -2,9 +2,9 @@ import pytest
 
 from SUPer.geometry import Box
 from SUPer.internals import TC, GraphicsDecoder
-from SUPer.bdvideo import Framerate, Format
-from SUPer.palette import Matrix
-from SUPer.epochctx import PaddingEngine
+from SUPer.display.bdvideo import Framerate, Format
+from SUPer.display.palette import Matrix
+from SUPer.encoder.epochctx import PaddingEngine
 
 import warnings
 import numpy as np

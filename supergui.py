@@ -60,7 +60,7 @@ from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
 from idlelib.tooltip import Hovertip
 
 from SUPer.internals import LogFacility
-from SUPer.imgproc import BuiltinQuantizer
+from SUPer.encoder.imgproc import BuiltinQuantizer
 from SUPer.__metadata__ import __version__ as SUPVERS, __author__
 
 #### Functions, main at the end of the file

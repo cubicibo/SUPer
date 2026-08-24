@@ -24,8 +24,8 @@ from abc import ABC, abstractmethod
 from enum import IntEnum, IntFlag
 from typing import Self
 
-from .palette import Palette, PaletteEntry
-from .internals import _Masks, _classproperty
+from ..display.palette import Palette, PaletteEntry
+from ..internals import _Masks, _classproperty
 
 class PGSegmentType(IntEnum):
     PDS = 0x14

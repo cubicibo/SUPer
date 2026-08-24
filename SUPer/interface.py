@@ -27,14 +27,15 @@ from pathlib import Path
 from typing import Any, NoReturn, Self
 
 from .bdnxml import BDNXML
-from .bdvideo import BDVideo
-from .engine import EpochEncoderEngine
-from .imgproc import BuiltinQuantizer, SSIMPW
 from .internals import TC, LogFacility
-from .pgstreams import Epoch, PesMuiWriter, SUPWriter
-from .verifier import is_compliant, check_pts_dts_sanity, test_rx_bitrate, debug_stats
-from .epochctx import EpochFinder, EventsPreprocessor, EpochData, LayoutMode
-from .codecctx import PGStreamCtx
+
+from .bytestream.pgstreams import Epoch, PesMuiWriter, SUPWriter
+from .bytestream.verifier import is_compliant, check_pts_dts_sanity, test_rx_bitrate, debug_stats
+from .display.bdvideo import BDVideo
+from .encoder.codecctx import PGStreamCtx
+from .encoder.engine import EpochEncoderEngine
+from .encoder.epochctx import EpochFinder, EventsPreprocessor, EpochData, LayoutMode
+from .encoder.imgproc import BuiltinQuantizer, SSIMPW
 
 logger = LogFacility.get_logger('SUPer')
 

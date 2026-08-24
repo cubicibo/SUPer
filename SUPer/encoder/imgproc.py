@@ -32,8 +32,8 @@ from typing import TypeAlias, Any
 
 from brule import HexTree as _HexTree, QtzrUTC as _Qtzr
 
-from .internals import _classproperty, LogFacility
-from .palette import Palette, Matrix, PaletteEntry
+from ..internals import _classproperty, LogFacility
+from ..display.palette import Palette, Matrix, PaletteEntry
 
 logger = LogFacility.get_logger('SUPer')
 

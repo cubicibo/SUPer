@@ -26,7 +26,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Generator, TypeAlias, Type, Callable
 
-from .internals import _Masks
+from ..internals import _Masks
 from .segments import GraphicSegment, SegmentParser, PCS
 from .graphicstream import DisplaySet, Epoch
 

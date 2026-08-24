@@ -24,7 +24,7 @@ if __name__ == '__main__':
 
 from SUPer import BDNEncoder
 from SUPer.internals import LogFacility
-from SUPer.imgproc import BuiltinQuantizer
+from SUPer.encoder.imgproc import BuiltinQuantizer
 from SUPer.__metadata__ import __author__, __version__ as LIB_VERSION
 
 import os

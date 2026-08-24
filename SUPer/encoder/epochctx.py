@@ -30,10 +30,10 @@ from typing import Sequence, Generator, Iterable
 
 from brule import LayoutEngine
 
-from .bdnxml import BDNXML, BDNEvent
-from .bdvideo import Format
-from .geometry import Box, Point, Shape
-from .internals import TC, GraphicsDecoder, GfxCompositor, LogFacility
+from ..display.bdvideo import Format
+from ..bdnxml import BDNXML, BDNEvent
+from ..geometry import Box, Point, Shape
+from ..internals import TC, GraphicsDecoder, GfxCompositor, LogFacility
 
 logger = LogFacility.get_logger('SUPer')
 

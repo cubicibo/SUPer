@@ -28,7 +28,7 @@ from timecode import Timecode
 from typing import TypeAlias, TypeVar
 
 from .geometry import Box
-from .bdvideo import Framerate, FramerateInputT
+from .display.bdvideo import Framerate, FramerateInputT
 
 try:
     from tqdm import tqdm

@@ -18,13 +18,5 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from .__metadata__ import __name__, __version__
-
-from .interface import BDNEncoder
-from .bdnxml import BDNXML
-
-from .display import BDVideo, Framerate, Format, Matrix, Palette, PaletteEntry
-from .encoder import EpochFinder, EventsPreprocessor, LayoutMode, QuantizerWrap
-from .bytestream.graphicstream import Epoch, DisplaySet
-from .bytestream.pgstreams import SUPReader, SUPWriter, PesMuiWriter
-from .bytestream.segments import PCS, WDS, ODS, PDS, END, CompositionObject, SegmentParser
+from .bdvideo import BDVideo, Framerate, Format
+from .palette import Palette, PaletteEntry, Matrix

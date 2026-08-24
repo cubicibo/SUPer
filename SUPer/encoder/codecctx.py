@@ -25,11 +25,10 @@ from typing import Sequence
 from itertools import chain, repeat
 from brule import Brule
 
-from .bdvideo import BDVideo
-from .geometry import Shape, Box
-from .palette import PaletteEntry, Palette
-from .graphicstream import DisplaySet
-from .segments import PCS, ODS, PDS, WDS, END, CompositionObject
+from ..display.bdvideo import BDVideo
+from ..display.palette import PaletteEntry, Palette
+from ..geometry import Shape, Box
+from ..bytestream import PCS, ODS, PDS, WDS, END, CompositionObject, DisplaySet
 
 @dataclass
 class _AllocatedVersionedResource:
