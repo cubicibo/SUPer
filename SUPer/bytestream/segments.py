@@ -229,12 +229,12 @@ class ODS(GraphicSegment):
         super().__init__(pts, dts)
         self.object_id = object_id
         self.object_version = object_version
-        self.flag = __class__.DataFlag(flag)
+        self.flag = self.__class__.DataFlag(flag)
         self.data = data
 
-        if self.flag & __class__.DataFlag.FIRST:
+        if self.flag & self.__class__.DataFlag.FIRST:
             self.data_len = data_len
-            if self.flag & __class__.DataFlag.LAST:
+            if self.flag & self.__class__.DataFlag.LAST:
                 assert len(self.data) + 4 == self.data_len
             self.width = width
             self.height = height
@@ -243,19 +243,19 @@ class ODS(GraphicSegment):
 
     def get_payload(self) -> bytes:
         bs = struct.pack(">HBB", self.object_id, self.object_version, self.flag << 6)
-        if self.flag & __class__.DataFlag.FIRST:
+        if self.flag & self.__class__.DataFlag.FIRST:
             bs += struct.pack(">IHH", self.data_len & _Masks.W24, self.width, self.height)[1:]
         return bs + self.data
 
     @classmethod
     def decode(cls, bs: bytes, pts: int = 0, dts: int = 0) -> Self:
         object_id, object_version, flag = struct.unpack(">HBB", bs[:4])
-        flag = __class__.DataFlag(flag >> 6)
+        flag = cls.DataFlag(flag >> 6)
         data_len = None
-        if flag & __class__.DataFlag.FIRST:
+        if flag & cls.DataFlag.FIRST:
             width, height = struct.unpack(">HH", bs[7:11])
             data = bs[11:]
-            if flag & __class__.DataFlag.LAST:
+            if flag & cls.DataFlag.LAST:
                 data_len = 4 + len(data)
                 assert data_len == (bs[4] << 16) | (bs[5] << 8) | bs[6]
         else:
@@ -315,7 +315,7 @@ class WDS(GraphicSegment):
         assert 0 < n_windows <= 2
         windows = []
         for k in range(1, len(bs), 9):
-            windows += [__class__.WindowDefinition.decode(bs[k:k+9])]
+            windows += [cls.WindowDefinition.decode(bs[k:k+9])]
         return cls(pts, dts, windows)
 
 class END(GraphicSegment):

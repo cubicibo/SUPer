@@ -239,7 +239,6 @@ class TreeAnalyzer:
             score = 1.0
         return score, cross_percentage
 
-
 class ObjectDetector:
     def __init__(self,
          window: Box,

@@ -20,11 +20,13 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
 import signal
+import time
 import multiprocessing as mp
 
+from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
-from typing import Any, NoReturn, Self
+from typing import Any, NoReturn, Self, Callable
 
 from .bdnxml import BDNXML
 from .internals import TC, LogFacility
@@ -39,13 +41,19 @@ from .encoder.imgproc import BuiltinQuantizer, SSIMPW
 
 logger = LogFacility.get_logger('SUPer')
 
+@dataclass(frozen=True)
+class EncodeResult:
+    epochs: list[Epoch]
+    valid: bool
+
 #%%
 class BDNEncoder:
     def __init__(self, bdn: BDNXML, kwargs: dict[str, Any]) -> None:
         self.bdn = bdn if isinstance(bdn, BDNXML) else BDNXML(bdn)
         self.kwargs = kwargs
         self._threads = kwargs.get('threads', 1)
-        self._allow_pes_output = True
+
+        self._adjust_thread_count()
 
     def _prepare(self) -> BDVideo:
         log_filename = self.kwargs.get('log_filename', None)
@@ -74,6 +82,11 @@ class BDNEncoder:
                           self.bdn.description.fps,
                           self.kwargs.get('uhd_bd', False),
                           self.kwargs.get('matrix', None))
+        if not bdvideo.validate():
+            if bdvideo.fmt != (1920, 1080):
+                logger.error("Non-compliant VideoFormat & Framerate combination.")
+            else:
+                logger.warning("This VideoFormat & Framerate combination is exclusive to the UHD BD format.")
 
         if len(self.bdn.events) == 0:
             raise RuntimeError("No BDN event found, exiting.")
@@ -91,7 +104,6 @@ class BDNEncoder:
             else:
                 logger.info("NDF NTSC detected: scaling all timestamps by 1.001.")
 
-        self._adjust_thread_count()
         return bdvideo
     ####
 
@@ -127,9 +139,10 @@ class BDNEncoder:
         return output_pg_epochs
     ####
 
-    def _setup_mt_env(self) -> None:
+    @staticmethod
+    def _setup_mt_env(workers: mp.Process) -> None:
         LogFacility.disable_tqdm()
-        def sighandler(workers, snum, frame) -> NoReturn:
+        def sighandler(snum, frame, workers) -> NoReturn:
             for worker in workers:
                 try:
                     if worker.is_alive():
@@ -144,8 +157,8 @@ class BDNEncoder:
                 except (ValueError, RuntimeError, AssertionError):
                     pass
             sys.exit(1)
-
-        f_term = lambda signal_num, frame: sighandler(self._workers, signal_num, frame)
+        from functools import partial
+        f_term = partial(sighandler, workers=workers)
         signal.signal(signal.SIGINT, f_term)
         signal.signal(signal.SIGTERM, f_term)
         if os.name == 'nt':
@@ -154,7 +167,6 @@ class BDNEncoder:
     ####
 
     def _convert_mt(self, bd_video: BDVideo) -> list[Epoch]:
-        import time
         BDNEpochWorker.reset_module()
 
         epochs_ctx = EpochFinder(bdn=self.bdn, threads=self._threads, mode=self.kwargs.get('layout_mode', LayoutMode.GREEDY)).get_epochs()
@@ -164,7 +176,7 @@ class BDNEncoder:
         as_deamon = self.kwargs.get('daemonize', True)
         workers = [BDNEpochWorker(bd_video, self.kwargs, as_deamon) for _ in range(n_threads)]
 
-        self._setup_mt_env()
+        self.__class__._setup_mt_env(workers)
 
         logger.debug("Starting workers...")
         for worker in workers:
@@ -204,43 +216,47 @@ class BDNEncoder:
             logger.info("Done distributing epochs, waiting for all workers to finish.")
         time.sleep(0.2)
 
+        running = {w.iid: True for w in workers}
         while any(busy_flags.values()) and healthy:
-            for free_worker in filter(lambda worker: busy_flags[worker.iid] or worker.is_available(), workers):
-                if free_worker.is_available() and (epoch_data := free_worker.get()) is not None:
+            for worker in filter(lambda w: running[w.iid], workers):
+                if not worker.is_healthy():
+                    healthy = False
+                    break
+                if worker.is_available() and (epoch_data := worker.get()) is not None:
                     ep_timeline[epoch_data[1]] = epoch_data[0]
                     busy_flags[free_worker.iid] = False
-                if not busy_flags[free_worker.iid] or not free_worker.is_alive():
-                    if free_worker.is_alive():
-                        free_worker.send(None)
-                        time.sleep(0.1)
-                    else:
-                        busy_flags[free_worker.iid] = False
-                    logger.info(f"Worker {free_worker.iid} closed.")
-                    free_worker.terminate()
-                    free_worker.join(0.2)
-                    free_worker.close()
+                    worker.send(None)
+                if not busy_flags[worker.iid] or not worker.is_alive():
+                    time.sleep(0.1)
+                    busy_flags[worker.iid] = False
+                    logger.info(f"Worker {worker.iid} closed.")
+                    worker.terminate()
+                    worker.join(0.2)
+                    worker.close()
+                    running[worker.iid] = False
             time.sleep(0.2)
 
         if healthy:
             logger.debug("All workers finished, cleaning-up.")
-        time.sleep(0.01)
-        for worker in workers:
-            try: worker.terminate()
-            except: ...
-        time.sleep(0.05)
-        for worker in workers:
-            try: worker.kill()
-            except: ...
-        time.sleep(0.05)
-        for worker in workers:
-            try: worker.join()
-            except: ...
+        __class__._broadcast_mp_func(workers, mp.Process.terminate, 0.01)
+        __class__._broadcast_mp_func(workers, mp.Process.kill)
+        __class__._broadcast_mp_func(workers, mp.Process.join)
+
+        # referenced by the registered signal function, so clear the list.
         workers.clear()
         if not healthy:
             logger.warning("One worker had an unrecoverable error, giving up.")
             import sys
             sys.exit(1)
         return ep_timeline
+    ####
+
+    @staticmethod
+    def _broadcast_mp_func(workers: list[mp.Process], function: Callable[[mp.Process], ...], sleep_ms: float = 0.05) -> None:
+        time.sleep(0.01)
+        for worker in workers:
+            try: function(worker)
+            except: ...
     ####
 
     def encode(self) -> tuple[bool, list[Epoch]]:
@@ -256,7 +272,7 @@ class BDNEncoder:
         self.fix_composition_id(epochs, replace=threaded)
 
         is_valid = self.test_output(bd_video, epochs)
-        return is_valid, epochs
+        return EncodeResult(epochs, is_valid)
     ####
 
     def test_output(self, bd_video: BDVideo, epochs: list[Epoch]) -> bool:
@@ -274,7 +290,6 @@ class BDNEncoder:
             compliant &= check_pts_dts_sanity(epochs, final_fps)
             if not compliant:
                 logger.error("=> Stream has a PTS/DTS issue!!")
-                self._allow_pes_output = False
             elif (max_bitrate := self.kwargs.get('max_kbps', False)) > 0:
                 logger.info(f"Checking PGS bitrate and buffer usage w.r.t user max bitrate: {max_bitrate} Kbps...")
                 if not test_rx_bitrate(epochs, int(max_bitrate*1000/8), final_fps):
@@ -312,18 +327,20 @@ class BDNEncoder:
             composition_num += composition_num_in_epoch
     ####
 
-    def write_output(self, output_file: Path | str, epochs: list[Epoch]) -> None:
+    def write_output(self, output_file: Path | str, encode_result: EncodeResult) -> None:
         fp = output_file
-        if not epochs:
+        if not encode_result.epochs:
             raise RuntimeError("No data to write.")
 
-        is_pes = fp.lower().endswith('pes')
-        is_sup = fp.lower().endswith('sup')
+        if self.kwargs.get('output_all_formats', False):
+            is_pes = is_sup = True
+        else:
+            is_pes = fp.lower().endswith('pes')
+            is_sup = fp.lower().endswith('sup')
+
         if not (is_pes or is_sup):
             logger.warning("Unknown extension, assuming a .SUP file...")
             is_sup = True
-        if self.kwargs.get('output_all_formats', False):
-            is_pes = is_sup = True
         if len(filepath := fp.split('.')) > 1:
             fp_pes = '.'.join(filepath[:-1]) + '.pes'
             fp_sup = '.'.join(filepath[:-1]) + '.sup'
@@ -332,15 +349,14 @@ class BDNEncoder:
             fp_sup = filepath[0] + '.sup'
 
         if is_pes:
-            if self._allow_pes_output:
-                logger.info(f"Writing output file {fp_pes}")
-                PesMuiWriter(fp_pes).write_epochs(epochs)
+            if encode_result.valid:
+                logger.info(f"Writing output file {fp_pes}.")
+                PesMuiWriter(fp_pes).write_epochs(encode_result.epochs)
             else:
                 logger.warning("PES+MUI not generated as the stream is not compliant.")
-        ##if is_pes
         if is_sup:
             logger.info(f"Writing output file {fp_sup}")
-            SUPWriter(fp_sup).write_epochs(epochs)
+            SUPWriter(fp_sup).write_epochs(encode_result.epochs)
     ####def
 ####
 

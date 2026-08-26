@@ -212,8 +212,8 @@ def main():
     }
     ts_start = time.monotonic()
     bdnr = BDNEncoder(args.input, parameters)
-    _, epochs = bdnr.encode()
-    bdnr.write_output(args.output, epochs)
+    result = bdnr.encode()
+    bdnr.write_output(args.output, result)
     exit_msg(f"Success. Duration: {timedelta(seconds=round(time.monotonic() - ts_start, 3))}", False)
 ####
 

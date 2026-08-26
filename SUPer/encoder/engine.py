@@ -70,11 +70,14 @@ class DSNode:
         return new_node
 
     def wipe_duration(self) -> int:
+        """
+        Duration to erase the area of both windows (one operation for the decoder)
+        """
         return int(np.ceil(sum(map(lambda w: GraphicsDecoder.FREQ*w.area/GraphicsDecoder.RC, self.windows))))
 
     def write_duration(self) -> int:
         """
-        Duration to write a window
+        Duration to write both window, one after the other
         """
         return int(sum(map(lambda w: np.ceil(GraphicsDecoder.FREQ*w.area/GraphicsDecoder.RC), self.windows)))
 
@@ -118,16 +121,16 @@ class DSNode:
             delay_write = 2 == len(target_windows) and 1 == len(assigned_wids)
 
             t_other_copy = 0
-            for obj in filter(lambda o: o is not None, self.objects):
+            for oix, obj in filter(lambda o: o[1] is not None, enumerate(self.objects)):
                 write = self.windows[obj.wid].area*GraphicsDecoder.FREQ
-                if self.slots[obj.wid] is not None:
-                    read = self.slots[obj.wid].area*GraphicsDecoder.FREQ
+                if self.slots[oix] is not None:
+                    read = self.slots[oix].area*GraphicsDecoder.FREQ
                 else:
                     logger.error(f"Node at {self.tc_pts} lacks an object slot, assuming windows-size.")
                     read = write
-                if not self.partial or (self.partial and self.new_mask[obj.wid]):
+                if not self.partial or (self.partial and self.new_mask[oix]):
                     t_decoding.append(int(np.ceil(read/GraphicsDecoder.RD)))
-                elif self.partial and not self.new_mask[obj.wid]:
+                elif self.partial and not self.new_mask[oix]:
                     #the other object is copied at the end.
                     assert sum(self.new_mask) == 1 and t_other_copy == 0
                     t_other_copy = int(np.ceil(write/GraphicsDecoder.RC))
@@ -293,19 +296,19 @@ class EpochEncoderEngine:
         k = last_acq = 0
         for k, (acq, forced, margin, node) in enumerate(zip(acqs[1:], absolutes[1:], margins[1:], nodes[1:]), 1):
             if not node.is_palette_update:
-                for wid in range(len(self.ectx.windows)):
-                    box_assets = list(filter(lambda x: x is not None, [positions[wid], cboxes[k][wid]]))
+                for oix in range(len(node.objects)):
+                    box_assets = list(filter(lambda x: x is not None, [positions[oix], cboxes[k][oix]]))
                     if len(box_assets) > 0:
                         cont = Box.union(*box_assets)
 
-                        if cont.dx > bslots[wid].w or cont.dy > bslots[wid].h:
-                            assert cboxes[k][wid] is not None
+                        if cont.dx > bslots[oix].w or cont.dy > bslots[oix].h:
+                            assert cboxes[k][oix] is not None
                             states[k] = PCS.CompositionState.ACQUISITION
                             absolutes[k] = True
-                            node.new_mask[wid] = True #For possible Normal case update
+                            node.new_mask[oix] = True #For possible Normal case update
                             drought = 0
                         else:
-                            positions[wid] = cont
+                            positions[oix] = cont
                 #### for wid
             #### if not nc
             if thresh == 0 and not node.is_palette_update:
@@ -376,6 +379,9 @@ class EpochEncoderEngine:
           allow_overlaps: bool,
           pts_delta: float,
       ) -> None:
+        """
+        Attempts to move an object definition earlier in time to make it decodable and displayable.
+        """
         #First backtrack: remove acquisitions to display one window after the other
         for k, node in enumerate(nodes):
             if acqs[k] or node.objects == [] or sum(node.new_mask) != 1:
@@ -477,7 +483,7 @@ class EpochEncoderEngine:
 
          Everything done here is relevant solely if both --ahead and --allow-normal are used.
         """
-        running_objs = [[] for _ in range(len(self.ectx.windows))]
+        running_objs = [[] for _ in nodes[0].objects]
         nk = 0
         for node in nodes:
             # skip wipes: composition objects encoding is agnostic to them
@@ -486,18 +492,18 @@ class EpochEncoderEngine:
             nk = node.idx
             assert nk >= 0
             wipe_everything = [False] * len(self.ectx.windows)
-            for wid, obj in enumerate(node.objects):
+            for oix, obj in enumerate(node.objects):
                 empty_wd = obj is None
                 assert empty_wd or obj.is_active(nk), (nk, obj.f, len(obj.mask), obj.mask)
                 if empty_wd or not obj.is_visible(nk): # ext range of a masked object will be updated several time
-                    wipe_everything[wid] = True
-            for wid, _ in filter(lambda tw: tw[1], enumerate(wipe_everything)):
-                for past_object in running_objs[wid]:
+                    wipe_everything[oix] = True
+            for oix, _ in filter(lambda tw: tw[1], enumerate(wipe_everything)):
+                for past_object in running_objs[oix]:
                     past_object.set_extended_visibility_limit(nk)
-                running_objs[wid].clear()
-            for wid, obj in enumerate(node.objects):
-                if obj is not None and (0 == len(running_objs[wid]) or running_objs[wid][-1] != obj):
-                    running_objs[wid].append(obj)
+                running_objs[oix].clear()
+            for oix, obj in enumerate(node.objects):
+                if obj is not None and (0 == len(running_objs[oix]) or running_objs[oix][-1] != obj):
+                    running_objs[oix].append(obj)
         #overly careful - set extended visibility of remaining objects to epoch length
         for past_object in running_objs[0] + (running_objs[1] if (2 == len(running_objs)) else []):
             past_object.set_extended_visibility_limit(nk+1)
@@ -602,7 +608,7 @@ class EpochEncoderEngine:
                     logger.info(f"Discarded event at {nodes[zk].tc_pts} preceeding new Epoch Start.")
                     flags[zk] = -1
                 states[k] = PCS.CompositionState.EPOCH_START
-                # the encoder function initializes the iterator to the index of epoch start - remove unused one.
+                # the encoder function initializes the iterator to the index of epoch start: we remove unused one.
                 states[0] = PCS.CompositionState.ACQUISITION
                 continue #(or break)
 
@@ -771,7 +777,7 @@ class EpochEncoderEngine:
                     coords += offset
                     o_ods += new_ods
             pals.append([Palette() for _ in range(len(pals[0]))])
-            ####for wid, pgo
+            ####for oix, pgo
         else:
             # If in the chain there's a NORMAL_CASE redefinition, we
             # must work with separate palette for each object (127+1 colors per window by default)
@@ -869,7 +875,6 @@ class EpochEncoderEngine:
         n_actions = len(durs)
         insert_acqs = self.kwargs.get('insert_acquisitions', 0)
         displaysets = []
-
         pbar = LogFacility.get_progress_bar(logger, range(n_actions))
         pbar.set_description("Encoding", False)
         pbar.reset(n_actions)
@@ -1064,7 +1069,9 @@ class EpochEncoderEngine:
                         bbox = node.objects[oix].get_bbox_at(node.idx)
                         min_boxes[oix] = np.max((min_boxes[oix], (bbox.dy, bbox.dx)), axis=0)
                         running_bbox[oix] = bbox
-                    elif node.objects[oix].is_active(node.idx): # we never fall here on the first frame an object is active (is_visible is true)
+                    # impossible at this stage of the encode process, an object is always visible on its first frame.
+                    # however after "shift_forward_overlay" is executed this may no longer be true.
+                    elif node.objects[oix].is_active(node.idx):
                         assert (k > 0) and (running_bbox[oix] is not None)
                         bbox = running_bbox[oix]
                     else:
@@ -1104,7 +1111,7 @@ class EpochEncoderEngine:
             if (clear_duration := tic-top) > 0:
                 delays += [clear_duration]
                 nodes.append(DSNode([], self.ectx.windows, self.ectx.events[ne-1].outTC, is_palette_update=True))
-                nodes[-1].idx = -1 # screen wipes do not refer to valid events in the array
+                nodes[-1].idx = -1 # screen wipes do not refer to valid events in the prospective object timeline
             ####
             delays += [toc-tic]
 

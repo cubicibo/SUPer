@@ -45,8 +45,8 @@ def from_bdnxml(queue: ...) -> None:
     ts_start = time.monotonic()
     logger.info(f"Loading input BDN: {bdnf}")
     bdn_enc = BDNEncoder(bdnf, kwargs)
-    _, epochs = bdn_enc.encode()
-    bdn_enc.write_output(supo, epochs)
+    result = bdn_enc.encode()
+    bdn_enc.write_output(supo, result)
     logger.info(f"Finished in {timedelta(seconds=round(time.monotonic() - ts_start, 3))}, exiting...")
 ####
 
