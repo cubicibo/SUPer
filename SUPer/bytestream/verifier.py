@@ -250,6 +250,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                     is_dupe = is_dupe and ds.pcs.get_payload()[11:] == last_ds.pcs.get_payload()[11:]
             last_ds = ds
 
+            current_ods_processed = None
             for ks, seg in enumerate(ds.segments):
                 if seg.type == PGSegmentType.PCS:
                     if not is_dupe and seg.composition_number != (prev_pcs_id + 1) & 0xFFFF and seg.composition_state != PCS.CompositionState.EPOCH_START:
@@ -290,7 +291,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                         ods_data = bytearray()
                         ods_width = seg.width
                         ods_height = seg.height
-                        ods_object_id = seg.object_id
+                        current_ods_processed = ods_object_id = seg.object_id
                         ods_object_vn = seg.object_version
                         if 8 > min(ods_width, ods_height) or 4096 < max(ods_width, ods_height):
                             logger.error(f"Illegal object dimensions at {to_tc(current_pts)}, object id={seg.object_id}: {ods_width}x{ods_height}.")
@@ -310,14 +311,14 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                         if cumulated_ods_size > 0:
                             logger.error("A past ODS was not properly terminated! Stream is critically corrupted!")
                             compliant = False
-                    elif ods_object_id != seg.object_id or ods_object_vn != seg.object_version:
+                    elif ods_object_id != seg.object_id or ods_object_vn != seg.object_version or current_ods_processed is None:
                         logger.error("Object definition header mismatch in a chain of segments! Stream is critically corrupted!")
                         compliant = False
 
                     cumulated_ods_size += seg.length
                     ods_data += seg.data
 
-                    if seg.flag & ODS.DataFlag.LAST:
+                    if seg.flag & ODS.DataFlag.LAST and current_ods_processed is not None:
                         data_hash = hash(bytes(ods_data))
                         # +6 (PES header) +13 (Optional PES header), +1 (type) +2 (length) +2 (object_id) +1 (object_vn) +1 (flags) = 26
                         # +13 (header(2) + PTS(4) + DTS(4) + type(1) + length(2)) +2 (object_id) +1 (object_vn) +1 (flags) = 17
@@ -349,6 +350,11 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                                 logger.warning(f"ODS at {to_tc(current_pts)} uses undefined palette entries (first: {pe:02X}). Some pixels will not display.")
                                 warnings += 1
                                 break
+                        current_ods_processed = None
+                    elif current_ods_processed is None:
+                        logger.error("Object definition header mismatch in a chain of segments! Stream is critically corrupted!")
+                        compliant = False
+
                     #### if seg.flags
                 elif seg.type == PGSegmentType.END:
                     # Control the spatial values of the composition w.r.t. object

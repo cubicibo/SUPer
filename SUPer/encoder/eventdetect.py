@@ -21,10 +21,10 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 import cv2
 import numpy as np
 
-from dataclasses import dataclass
-from itertools import chain
+from dataclasses import dataclass, field
+from itertools import chain, count
 from PIL import Image
-from typing import Sequence, Generator
+from typing import Sequence, Generator, Self
 
 from brule import LayoutEngine
 
@@ -37,6 +37,7 @@ from ..internals import LogFacility
 
 logger = LogFacility.get_logger('SUPer')
 
+#%%
 @dataclass
 class ProspectiveObject:
     f:     int
@@ -44,6 +45,8 @@ class ProspectiveObject:
     boxes: list[Box]
     box: Box
     wid: int = None
+    # Must not be set by the user
+    __uuid: int = field(default_factory=count().__next__)
 
     def __post_init__(self) -> None:
         assert len(self.mask) == len(self.boxes)
@@ -51,6 +54,13 @@ class ProspectiveObject:
         assert self.box.area > 0
         assert self.f >= 0
         self.ext_range = self.f + len(self.mask)
+
+    def __hash__(self) -> int:
+        return self.__uuid
+
+    @property
+    def uuid(self) -> int:
+        return self.__uuid
 
     def is_active(self, frame: int) -> bool:
         """
@@ -91,9 +101,28 @@ class ProspectiveObject:
         assert frame > self.f and not self.is_active(frame), f"{frame} < {self.f} ? act={self.is_active(frame)}"
         return frame < self.ext_range
 
-    def copy(self) -> 'ProspectiveObject':
+    def copy(self) -> Self:
+        # DO NOT set the uuid
         return self.__class__(self.f, self.mask.copy(), self.boxes.copy(), self.box, self.wid)
 
+def _get_windowed_image(window: Box, event: EpochEvent, img: Image.Image) -> np.ndarray[tuple[int, int, int], np.uint8]:
+    event_box = event.get_bbox()
+    zone_overlap = Box.intersect(window, event_box)
+    work_plane = np.zeros((window.dy, window.dx, 4), dtype=np.uint8)
+    empty = False
+    if zone_overlap.area > 0:
+        #plane slices
+        psy = slice(zone_overlap.y - window.y, zone_overlap.y2 - window.y)
+        psx = slice(zone_overlap.x - window.x, zone_overlap.x2 - window.x)
+        #image slices
+        isy = slice(zone_overlap.y - event_box.y, zone_overlap.y2 - event_box.y)
+        isx = slice(zone_overlap.x - event_box.x, zone_overlap.x2 - event_box.x)
+        work_plane[psy, psx, :] = np.asarray(img, dtype=np.uint8)[isy, isx, :]
+    else:
+        empty = True
+    return work_plane, empty
+
+#%%
 ####
 class TreeAnalyzer:
     MAX_DEPTH = 4
@@ -227,21 +256,7 @@ class ObjectDetector:
         self.overlap_threshold = overlap_threshold
 
     def mask_event(self, event: EpochEvent, img: Image.Image) -> tuple[np.ndarray[tuple[int, int, int], np.uint8], bool]:
-        event_box = event.get_bbox()
-        zone_overlap = Box.intersect(self.window, event_box)
-        work_plane = np.zeros((self.window.dy, self.window.dx, 4), dtype=np.uint8)
-        empty = False
-        if zone_overlap.area > 0:
-            #plane slices
-            psy = slice(zone_overlap.y - self.window.y, zone_overlap.y2 - self.window.y)
-            psx = slice(zone_overlap.x - self.window.x, zone_overlap.x2 - self.window.x)
-            #image slices
-            isy = slice(zone_overlap.y - event_box.y, zone_overlap.y2 - event_box.y)
-            isx = slice(zone_overlap.x - event_box.x, zone_overlap.x2 - event_box.x)
-            work_plane[psy, psx, :] = np.asarray(img, dtype=np.uint8)[isy, isx, :]
-        else:
-            empty = True
-        return work_plane, empty
+        return _get_windowed_image(self.window, event, img)
 
     @staticmethod
     def _generate_object(
@@ -346,7 +361,7 @@ class WindowsObjectDetector:
         pbar = LogFacility.get_progress_bar(logger, range(len(events)))
         pbar.set_description("Analyzing", False)
 
-        # to flush a detector, two consecutives None have to be sent.
+        # to flush a detector, two consecutives None must be sent.
         for event in chain(events, [None]*2):
             # load image once, regardless of the window count.
             ev_img = event.image if event else None
@@ -356,6 +371,7 @@ class WindowsObjectDetector:
                 except StopIteration:
                     pgobj = None
                 if pgobj is not None:
+                    pgobj.wid = wid
                     logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
                     pgobjs[wid].append(pgobj)
             if event is not None:

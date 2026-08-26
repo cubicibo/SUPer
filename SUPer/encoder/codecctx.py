@@ -41,6 +41,9 @@ class _AllocatedVersionedResource:
         self._version += 1
         return self.version
 
+    def is_available_at(self, dts: int) -> bool:
+        return dts > self.pts
+
     @property
     def version(self) -> int:
         return self._version

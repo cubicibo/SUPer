@@ -209,14 +209,9 @@ def _get_epoch_start_duration(windows: Sequence[Box], plane_area: int) -> int:
         dd = max(t_dec, dd) + GraphicsDecoder.get_composition_duration(wd.area)
     return dd
 
-def _to_absolute_coordinates(windows: Sequence[Box], container: Box) -> tuple[Box, ...]:
-    return tuple(map(lambda w: Box(container.y + w.y, w.dy, container.x + w.x, w.dx), windows))
-
 def _find_modify_layout(leng: LayoutEngine, container: Box, mode: LayoutMode) -> tuple[Box, ...]:
     cbox, w1, w2, is_vertical = leng.get_layout()
-    box_factory = lambda x: Box.from_coords(x[1], x[3], x[0], x[2])
-
-    cbox, w1, w2 = tuple(map(box_factory, (cbox, w1, w2)))
+    cbox, w1, w2 = tuple(map(Box.from_layout, (cbox, w1, w2)))
 
     cwd = (w1, w2) if w1 != w2 else (w1,)
     cwd = PaddingEngine(cbox, container=container).directional_pad(cwd, is_vertical)
@@ -233,11 +228,11 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, mode: LayoutMode) ->
             cwd = tuple(reversed(cwd))
             scores[0] = scores[1]
 
-    cwd = _to_absolute_coordinates(cwd, cbox)
+    cwd = tuple(map(lambda w: w.to_absolute(cbox), cwd))
     decode_duration = scores[0]
 
     # given this, evaluate the single window layout (this epoch bounding box)
-    base_box = box_factory(leng.get_raw_container())
+    base_box = Box.from_layout(leng.get_raw_container())
     decode_duration_single = _get_epoch_start_duration((base_box,), container.area)
     is_bad_split = decode_duration >= max(1, decode_duration_single-10)
 
@@ -257,7 +252,7 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, mode: LayoutMode) ->
         greedy_wds = (box1, box2)
         greedy_duration = _get_epoch_start_duration(greedy_wds, container.area)
         if decode_duration > greedy_duration:
-            cwd = _to_absolute_coordinates(greedy_wds, base_box)
+            cwd = tuple(map(lambda w: w.to_absolute(base_box), greedy_wds))
             layout_modifier = 'G'
         # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
     if layout_modifier == 'N' and is_bad_split and not may_not_fit_buffer:

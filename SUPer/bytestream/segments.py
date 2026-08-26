@@ -216,8 +216,8 @@ class ODS(GraphicSegment):
     __slots__ = ('object_id', 'object_version', 'flag', 'width', 'height', 'data_len', 'data')
 
     class DataFlag(IntFlag):
-        FIRST = 0b01
-        LAST  = 0b10
+        FIRST = 0b10
+        LAST  = 0b01
 
     @_classproperty
     def type(cls) -> PGSegmentType:
@@ -230,21 +230,21 @@ class ODS(GraphicSegment):
         self.object_id = object_id
         self.object_version = object_version
         self.flag = __class__.DataFlag(flag)
+        self.data = data
+
         if self.flag & __class__.DataFlag.FIRST:
             self.data_len = data_len
+            if self.flag & __class__.DataFlag.LAST:
+                assert len(self.data) + 4 == self.data_len
             self.width = width
             self.height = height
         else:
             self.width = self.height = self.data_len = None
-        self.data = data
 
     def get_payload(self) -> bytes:
         bs = struct.pack(">HBB", self.object_id, self.object_version, self.flag << 6)
         if self.flag & __class__.DataFlag.FIRST:
-            length = (4 + len(self.data))
-            assert length < _Masks.W24
-            bs += bytes([(length >> 16) & 0xFF, (length >> 8) & 0xFF, length & 0xFF])
-            bs += struct.pack(">HH", self.width, self.height)
+            bs += struct.pack(">IHH", self.data_len & _Masks.W24, self.width, self.height)[1:]
         return bs + self.data
 
     @classmethod
@@ -264,8 +264,15 @@ class ODS(GraphicSegment):
 
         return cls(pts, dts, object_id, object_version, flag, data, width, height, data_len)
 
+    def __repr__(self) -> str:
+        slot_str = ''
+        for slot in self.__slots__:
+            if slot == 'data': continue
+            slot_str += slot + "=" + str(object.__getattribute__(self, slot)) + ", "
+        return f"{self.__class__.__name__}(" + slot_str[:-2] + ")"
+
 class WDS(GraphicSegment):
-    __slots__ = 'windows'
+    __slots__ = ('windows', )
 
     class WindowDefinition:
         __slots__ = 'window_id', 'h_pos', 'v_pos', 'width', 'height'

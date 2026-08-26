@@ -171,25 +171,32 @@ class Box:
         return __class__(y1, y2-y1, x1, x2-x1)
 
     @classmethod
-    def from_coords(cls, y: int, y2: int, x : int, x2: int) -> 'Box':
+    def from_coords(cls, y: int, y2: int, x : int, x2: int) -> Self:
         return cls(min(y, y2), abs(y2-y), min(x, x2), abs(x2-x))
 
-    def __eq__(self, other: 'Box') -> bool:
+    @classmethod
+    def from_layout(cls, coords) -> Self:
+        return cls.from_coords(coords[1], coords[3], coords[0], coords[2])
+
+    def to_absolute(self, parent: Self) -> Self:
+        return self.__class__(parent.y + self.y, self.dy, parent.x + self.x, self.dx)
+
+    def __eq__(self, other: Self) -> bool:
         if isinstance(other, __class__):
             return self.coords == other.coords
         return NotImplemented
 
-    def __and__(self, other: 'Box') -> 'Box':
+    def __and__(self, other: Self) -> Self:
         if isinstance(other, __class__):
             return self.intersect(other)
         return NotImplemented
 
-    def __or__(self, other: 'Box') -> 'Box':
+    def __or__(self, other: Self) -> Self:
         if isinstance(other, __class__):
             return self.union(other)
         return NotImplemented
 
-    def __neq__(self, other: 'Box') -> bool:
+    def __neq__(self, other: Self) -> bool:
         if isinstance((is_equal := (self == other)), bool):
             return not is_equal
         return NotImplemented
