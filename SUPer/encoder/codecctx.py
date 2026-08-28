@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,17 +16,19 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import numpy as np
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 from itertools import chain, repeat
+
+import numpy as np
 from brule import Brule
 
+from ..bytestream import END, ODS, PCS, PDS, WDS, CompositionObject, DisplaySet
 from ..display.bdvideo import BDVideo
-from ..display.palette import PaletteEntry, Palette
-from ..geometry import Shape, Box
-from ..bytestream import PCS, ODS, PDS, WDS, END, CompositionObject, DisplaySet
+from ..display.palette import Palette, PaletteEntry
+from ..geometry import Box, Shape
+
 
 @dataclass
 class _AllocatedVersionedResource:
@@ -113,7 +113,7 @@ class PGObjectBuffer:
                 return slot_id, slot
 
     def allocate(self, shape: Shape) -> tuple[int, ObjectSlot] | None:
-        if sum(map(lambda s: s.size(), self._slots.values())) + shape.area > self.__class__.__MAX_SIZE:
+        if sum(s.size() for s in self._slots.values()) + shape.area > self.__class__.__MAX_SIZE:
             return None
         if len(self._slots) >= self.__class__.__MAX_SLOTS:
             return None
@@ -130,7 +130,7 @@ class PGObjectBuffer:
     def allocate_indexed(self, shape: Shape, slot_id: int) -> bool:
         if self._slots.get(slot_id, None) is not None:
             return False
-        if sum(map(lambda s: s.size(), self._slots.values())) + shape.area > self.__class__.__MAX_SIZE:
+        if sum(s.size() for s in self._slots.values()) + shape.area > self.__class__.__MAX_SIZE:
             return False
         self._slots[slot_id] = ObjectSlot(shape=shape)
         return True
@@ -240,7 +240,7 @@ class PGEpochContext:
         """
         Return the WDS segment for this epoch, at the given PTS, DTS.
         """
-        definitions = list(map(lambda w: WDS.WindowDefinition(w[0], w[1].x, w[1].y, w[1].dx, w[1].dy), zip(range(len(self._windows)), self._windows)))
+        definitions = [WDS.WindowDefinition(wid, w.x, w.y, w.dx, w.dy) for wid, w in enumerate(self._windows)]
         return WDS(pts, dts, definitions)
 
     def update_object_reservation(self, object_id: int, pts: int, dts: int | None = None) -> bool:

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,26 +16,28 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+import multiprocessing as mp
 import os
 import signal
+import sys
 import time
-import multiprocessing as mp
-
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from itertools import chain
 from pathlib import Path
-from typing import Any, NoReturn, Self, Callable
+from queue import Empty
+from typing import Any, NoReturn, Self
 
 from .bdnxml import BDNXML
-from .internals import TC, LogFacility
-
 from .bytestream.pgstreams import Epoch, PesMuiWriter, SUPWriter
-from .bytestream.verifier import is_compliant, check_pts_dts_sanity, test_rx_bitrate, debug_stats
+from .bytestream.verifier import check_pts_dts_sanity, debug_stats, is_compliant, test_rx_bitrate
 from .display.bdvideo import BDVideo
 from .encoder.codecctx import PGStreamCtx
 from .encoder.engine import EpochEncoderEngine
-from .encoder.epochctx import EpochFinder, EventsPreprocessor, EpochData, LayoutMode
-from .encoder.imgproc import BuiltinQuantizer, SSIMPW
+from .encoder.epochctx import EpochData, EpochFinder, EventsPreprocessor, LayoutMode
+from .encoder.imgproc import SSIMPW, BuiltinQuantizer
+from .internals import TC, LogFacility
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -149,7 +149,6 @@ class BDNEncoder:
                         worker.kill()
                 except ValueError:
                     pass
-            import sys, time
             time.sleep(0.005)
             for worker in workers:
                 try:
@@ -157,7 +156,6 @@ class BDNEncoder:
                 except (ValueError, RuntimeError, AssertionError):
                     pass
             sys.exit(1)
-        from functools import partial
         f_term = partial(sighandler, workers=workers)
         signal.signal(signal.SIGINT, f_term)
         signal.signal(signal.SIGTERM, f_term)
@@ -182,7 +180,7 @@ class BDNEncoder:
         for worker in workers:
             worker.start()
 
-        while not all(map(lambda worker: worker.is_available(), workers)):
+        while not all(worker.is_available() for worker in workers):
             time.sleep(0.2)
         ###
 
@@ -207,7 +205,7 @@ class BDNEncoder:
                         free_worker.send((group_data, group_id))
                     else:
                         break
-            healthy = all(map(lambda worker: worker.is_healthy(), workers))
+            healthy = all(worker.is_healthy() for worker in workers)
             ####for
         ####while
 
@@ -256,7 +254,7 @@ class BDNEncoder:
         time.sleep(0.01)
         for worker in workers:
             try: function(worker)
-            except: ...
+            except Exception: ...
     ####
 
     def encode(self) -> tuple[bool, list[Epoch]]:
@@ -421,10 +419,9 @@ class BDNEpochWorker(mp.Process):
         libs_params = self.kwargs.get('ini_opts', {})
         logger.debug(f"INI parameters: {libs_params}")
         requested_qtz = self.kwargs['quantize_lib']
-        if requested_qtz == BuiltinQuantizer.LIQ:
-            if not BuiltinQuantizer.LIQ.value.configure(libs_params.get('quant', {})):
-                self.kwargs['quantize_lib'] = BuiltinQuantizer.Qtzr
-                logger.warning("Failed to configure PNG/ImageQuant, using Qtzr as a fallback.")
+        if requested_qtz == BuiltinQuantizer.LIQ and not BuiltinQuantizer.LIQ.value.configure(libs_params.get('quant', {})):
+            self.kwargs['quantize_lib'] = BuiltinQuantizer.Qtzr
+            logger.warning("Failed to configure PNG/ImageQuant, using Qtzr as a fallback.")
 
         if (sup_params := libs_params.get('super_cfg', None)) is not None:
             SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
@@ -449,7 +446,7 @@ class BDNEpochWorker(mp.Process):
         """
         try:
             return self._q_tx.get_nowait()
-        except:
+        except Empty:
             return None
 
     @property
@@ -470,7 +467,7 @@ class BDNEpochWorker(mp.Process):
         while True:
             try:
                 in_data = self._q_rx.get(timeout=0.1)
-            except:
+            except Empty:
                 continue
             else:
                 self._available.value = 0

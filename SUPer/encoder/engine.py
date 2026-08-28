@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -17,22 +15,21 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
+from itertools import chain, starmap, zip_longest
+from typing import Self
+
 import numpy as np
 from PIL import Image
-from itertools import zip_longest, starmap, chain
-from typing import Self, Any
 
-from .imgproc import PaletteSequenceEffect
-from .eventdetect import WindowsObjectDetector, ProspectiveObject
-
-from ..geometry import Box, Shape
-from ..internals import GraphicsDecoder, LogFacility, TC
-from .codecctx import PGStreamCtx, PGEpochContext, PGObjectBuffer
-from .epochctx import EpochData
-
+from ..bytestream.pgstreams import DisplaySet, Epoch
+from ..bytestream.segments import END, PCS, CompositionObject
 from ..display.palette import Palette, PaletteEntry
-from ..bytestream.pgstreams import Epoch, DisplaySet
-from ..bytestream.segments import PCS, END, CompositionObject
+from ..geometry import Box, Shape
+from ..internals import TC, GraphicsDecoder, LogFacility
+from .codecctx import PGEpochContext, PGObjectBuffer, PGStreamCtx
+from .epochctx import EpochData
+from .eventdetect import ProspectiveObject, WindowsObjectDetector
+from .imgproc import PaletteSequenceEffect
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -42,9 +39,12 @@ class DSNode:
             windows: list[Box],
             tc_pts: TC,
             is_palette_update: bool = False,
-            new_mask: list[bool] = []
+            new_mask: list[bool] | None = None
         ) -> None:
-        assert len(objects) == len(new_mask)
+        if new_mask is None:
+            new_mask = []
+        else:
+            assert len(objects) == len(new_mask)
         self.objects = objects
         self.windows = windows
         self.tc_pts = tc_pts
@@ -95,13 +95,13 @@ class DSNode:
         """
         Duration to erase the area of both windows (one operation for the decoder)
         """
-        return int(np.ceil(sum(map(lambda w: GraphicsDecoder.FREQ*w.area/GraphicsDecoder.RC, self.windows))))
+        return int(np.ceil(sum(GraphicsDecoder.FREQ*w.area/GraphicsDecoder.RC for w in self.windows)))
 
     def write_duration(self) -> int:
         """
         Duration to write both window, one after the other
         """
-        return int(sum(map(lambda w: np.ceil(GraphicsDecoder.FREQ*w.area/GraphicsDecoder.RC), self.windows)))
+        return int(sum(np.ceil(GraphicsDecoder.FREQ*w.area/GraphicsDecoder.RC) for w in self.windows))
 
     def set_dts(self, dts: int | None) -> None:
         if dts is not None:
@@ -135,7 +135,7 @@ class DSNode:
 
         if not self.is_palette_update:
             assert any(self.objects)
-            target_windows = list(map(lambda o: o.wid, filter(lambda o: o is not None, self.objects)))
+            target_windows = [o.wid for o in filter(lambda o: o is not None, self.objects)]
             assigned_wids = set(target_windows)
             decode_duration = int(sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*GraphicsDecoder.FREQ/GraphicsDecoder.RC) for wid in range(len(self.windows)) if wid not in assigned_wids]))
 
@@ -204,9 +204,9 @@ class DSNode:
         if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
             decode_duration = int(np.ceil(ds.pcs.width*ds.pcs.height*GraphicsDecoder.FREQ/GraphicsDecoder.RC))
         else:
-            assigned_windows = list(map(lambda x: x.window_id, ds.pcs.composition_objects))
+            assigned_windows = [x.window_id for x in ds.pcs.composition_objects]
             unassigned_windows = [wd for wid, wd in enumerate(self.windows) if wid not in assigned_windows]
-            decode_duration = int(sum([np.ceil(wd.area*GraphicsDecoder.FREQ/GraphicsDecoder.RC) for wd in unassigned_windows]))
+            decode_duration = int(sum(np.ceil(wd.area*GraphicsDecoder.FREQ/GraphicsDecoder.RC) for wd in unassigned_windows))
 
         object_decode_duration = ddurs.copy()
 
@@ -234,7 +234,7 @@ class DSNode:
             assert new_dts <= dts or ds.pcs.palette_update, f"new={new_dts}, min={dts}, {self.tc_pts}"
             dts = new_dts
         elif ds.pcs.composition_state != PCS.CompositionState.EPOCH_START:
-            assert self.dts() == dts, f"node {self.tc_pts}: expected: {self.dts()}, actual={dts}, n_objs: {len(ds.pcs.composition_objects)}, PU={ds.pcs.palette_update}, nno={sum(map(lambda o: o is not None, self.objects))}."
+            assert self.dts() == dts, f"node {self.tc_pts}: expected: {self.dts()}, actual={dts}, n_objs: {len(ds.pcs.composition_objects)}, PU={ds.pcs.palette_update}, nno={sum(o is not None for o in self.objects)}."
 
         #PCS always exist
         ts_pairs = [(ds.pcs.pts, dts)]
@@ -282,7 +282,7 @@ class EpochEncoderEngine:
     def plan(self, ctx: tuple[...]) -> tuple[...]:
         pgobjs, durs, nodes = ctx
         #Plan datastream
-        cboxes = self.shape_stream(durs, nodes)
+        _ = self.shape_stream(durs, nodes)
         
         #Set-up datastructures for bytestream generation
         self.set_pgobjects_extended_visibilities(nodes)
@@ -373,7 +373,7 @@ class EpochEncoderEngine:
             if node.state == 0 and node.is_palette_update:
                 last_possible_dts = np.inf
                 current_dts = node.dts()
-                if (current_dts) < first_possible_dts and first_possible_dts < (node.pts()):
+                if current_dts < first_possible_dts < node.pts():
                     for ckf, future_node in enumerate(nodes[ck+1:], ck+1):
                         if future_node.flag >= 0:
                             last_possible_dts = (future_node.dts())
@@ -419,7 +419,7 @@ class EpochEncoderEngine:
                 if pnode.objects == []:
                     continue
                 redefine_same_object = next(filter(lambda x: x > 1, map(sum, zip(node.new_mask, pnode.new_mask))), None) is not None
-                overlap_in_window = sum(map(lambda x: x is not None, [node.objects[future_obj_idx], pnode.objects[future_obj_idx]])) > 1
+                overlap_in_window = sum(x is not None for x in [node.objects[future_obj_idx], pnode.objects[future_obj_idx]]) > 1
                 other_new_mask += pnode.new_mask[1-future_obj_idx]
                 #Same object is redefined in the previous DS, give up
                 if redefine_same_object or overlap_in_window or other_new_mask > 1 or pk > 15:
@@ -559,8 +559,8 @@ class EpochEncoderEngine:
             zk = k
             while (zk := zk + 1) < len(nodes) and (nodes[zk].state == PCS.CompositionState.NORMAL_CASE or nodes[zk].flag == -1): pass
             dec_objs = [obj if cls._object_is_relevant(obj, nodes, slice(k, zk)) else None for obj in nodes[k].objects]
-            n_valid_obj = sum(map(lambda x: x is not None, dec_objs))
-            diff = sum(map(lambda x: x is not None, nodes[k].objects)) - n_valid_obj
+            n_valid_obj = sum(x is not None for x in dec_objs)
+            diff = sum(x is not None for x in nodes[k].objects) - n_valid_obj
 
             if 1 == diff and 2 == len(self.ectx.windows):
                 old_object_list = nodes[k].objects
@@ -584,14 +584,14 @@ class EpochEncoderEngine:
                 ### if round
             #### if 1 ==
 
-            assert nodes[k].state == PCS.CompositionState.ACQUISITION, f"Filtering error: {nodes[k].tc_pts} k={nodes[k].idx} is not an acquisition. NM={nodes[k].new_mask} OM={list(map(lambda x: x is not None, nodes[k].objects))}."
+            assert nodes[k].state == PCS.CompositionState.ACQUISITION, f"Filtering error: {nodes[k].tc_pts} k={nodes[k].idx} is not an acquisition. NM={nodes[k].new_mask} OM={[x is not None for x in nodes[k].objects]}."
             dts_start_nc = dts_start = nodes[k].dts()
             j = j_nc = k - 1
             while j > 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts()):
                 j -= 1
 
             #Normal case is only possible if we discard past acquisitions that redefined the same object
-            normal_case_possible = sum(nodes[k].new_mask) == 1 and sum(map(lambda x: x is not None, nodes[k].objects)) == 2
+            normal_case_possible = sum(nodes[k].new_mask) == 1 and sum(x is not None for x in nodes[k].objects) == 2
             normal_case_possible &= allow_normal_case
             if normal_case_possible:
                 mask = nodes[k].new_mask.copy()
@@ -613,7 +613,7 @@ class EpochEncoderEngine:
             if nc_not_ok or (not normal_case_possible and j == 0 and (nodes[j].dts_end() >= dts_start or nodes[j].pts() + pts_delta >= nodes[k].pts())):
                 #epoch start up to k are all cluttered together... we just move epoch start to k.
                 logger.info(f"Epoch Start squeeze: dropping {k} event(s) before new ES at {nodes[k].tc_pts} (old ES: {nodes[0].tc_pts}).")
-                for zk in range(0, k):
+                for zk in range(k):
                     logger.info(f"Discarded event at {nodes[zk].tc_pts} preceeding new Epoch Start.")
                     nodes[zk].discard = True
                 nodes[k].state = PCS.CompositionState.EPOCH_START
@@ -631,7 +631,7 @@ class EpochEncoderEngine:
 
             #screen wipes don't contain objects, take the previous list
             objs = nodes[j_iter if len(nodes[j_iter].objects) else (j_iter-1)].objects
-            objs = list(map(lambda obj: obj is not None, objs))
+            objs = [obj is not None for obj in objs]
             for l in range(j_iter+1, k):
                 # We ran out of PCS to buffer or the objects are too different or min delta PTS -> drop
                 if nodes[l].flag >= 0 and (not allow_overlaps or sum(objs) == 0 or num_pcs_buffered >= 7 or (nodes[l].pts() + pts_delta + 1 >= nodes[k].pts())):
@@ -647,7 +647,7 @@ class EpochEncoderEngine:
                         nodes[l].set_dts(max(dts_iter - 1, dts_end_iter))
                 assert nodes[l].flag != 1
                 if any(nodes[l].new_mask) and nodes[l].flag == 0 and allow_overlaps:
-                    composition_count = sum(map(lambda x: x is not None, nodes[l].objects))
+                    composition_count = sum(x is not None for x in nodes[l].objects)
                     if composition_count == 2:
                         logger.info(f"Downgraded event at {nodes[l].tc_pts} to a palette update to perform a mendatory acquisition.")
                     else:
@@ -665,7 +665,7 @@ class EpochEncoderEngine:
                 logger.info(f"Object refreshed with a Normal Case at {nodes[k].tc_pts}.")
             last_dts = nodes[k].dts()
 
-        assert 1 == sum(map(lambda n: n.state == PCS.CompositionState.EPOCH_START, nodes))
+        assert 1 == sum(n.state == PCS.CompositionState.EPOCH_START for n in nodes)
         ####while (k := k - 1) > 0
     ####filter_events
 
@@ -685,7 +685,7 @@ class EpochEncoderEngine:
                 prev_idx = node.idx
             if node.flag == 0 and node.state == PCS.CompositionState.NORMAL_CASE:
                 #Palette update
-                assert nodes[k].is_palette_update, f"{node.tc_pts} palette update k-node {k} not configured, NM={node.new_mask} P={node.partial}."
+                assert node.is_palette_update, f"{node.tc_pts} palette update k-node {k} not configured, NM={node.new_mask} P={node.partial}."
                 assert allow_overlaps or not node.is_custom_dts()
             elif node.flag == 1:
                 #Normal Case redefinition
@@ -697,8 +697,8 @@ class EpochEncoderEngine:
 
     @staticmethod
     def _get_stack_direction(*box) -> tuple[np.ndarray[tuple[int, int], np.uint8], tuple[int, int]]:
-        widths = list(map(lambda b: b.dx, box))
-        heights = list(map(lambda b: b.dy, box))
+        widths = [b.dx for b in box]
+        heights = [b.dy for b in box]
 
         if max(heights)*sum(widths) <= max(widths)*sum(heights):
             return np.array([widths[0], 0], np.int32), (sum(widths), max(heights))
@@ -744,7 +744,7 @@ class EpochEncoderEngine:
             compositions = [(oix, pgo) for oix, pgo in pgobs_items if __class__._object_is_relevant(pgo, nodes, slice(i, k))]
             assert len(compositions) == 2
             #todo: stack using slot dimensions?
-            offset, dims = self.__class__._get_stack_direction(*list(map(lambda x: x[1].box, compositions)))
+            offset, dims = self.__class__._get_stack_direction(*[x[1].box for x in compositions])
             last_imgs = [None] * len(compositions)
 
             imgs_chain = []
@@ -796,9 +796,9 @@ class EpochEncoderEngine:
             n_colors = 255
             bias = 0
             if has_two_objs and normal_case_refresh:
-                assert all(filter(lambda x: x.h in range(0, self._codec.bd_video.fmt.height) and x.w in range(0, self._codec.bd_video.fmt.width), node.slots))
-                assert sum(map(lambda x: x is not None, node.slots)) == 2
-                ratio_area = (node.slots[0].area - node.slots[1].area)/sum(map(lambda s: s.area, node.slots))
+                assert all(filter(lambda x: x.h in range(self._codec.bd_video.fmt.height) and x.w in range(self._codec.bd_video.fmt.width), node.slots))
+                assert sum(x is not None for x in node.slots) == 2
+                ratio_area = (node.slots[0].area - node.slots[1].area)/sum(s.area for s in node.slots)
                 bias = 0 if abs(ratio_area) < 0.5 else int(67*(ratio_area-np.sign(ratio_area)*0.25))
                 n_colors = 128
                 assert n_colors > abs(bias) + 10
@@ -884,7 +884,6 @@ class EpochEncoderEngine:
 
     def _convert(self, pgobjs, input_nodes: list[DSNode]):
         n_actions = len(input_nodes)
-        insert_acqs = self.kwargs.get('insert_acquisitions', 0)
         displaysets = []
         pbar = LogFacility.get_progress_bar(logger, range(n_actions))
         pbar.set_description("Encoding", False)
@@ -909,7 +908,7 @@ class EpochEncoderEngine:
         nodes = input_nodes + [final_node]
         #Do we have time to redraw the window (with some margin)?
         perform_wds_end = (self.ectx.events[-1].outTC.frames - self.ectx.events[-1].inTC.frames)
-        perform_wds_end = (perform_wds_end*GraphicsDecoder.FREQ / self._codec.bd_video.fps) >= np.ceil((final_node.write_duration() + 10))
+        perform_wds_end = (perform_wds_end*GraphicsDecoder.FREQ / self._codec.bd_video.fps) >= np.ceil(final_node.write_duration() + 10)
 
         #Generate datastream according to all assets
         while i < n_actions:
@@ -922,7 +921,7 @@ class EpochEncoderEngine:
                     DSNode.apply_pts_dts(uds, nodes[i].parent.set_pts_dts_sc(uds, self._codec.buffer))
                     logger.debug(f"Writing screen clear with WDS at PTS={self.ectx.events[nodes[i].idx-1].outTC} before an acquisition.")
                 else:
-                    uds = self._codec.get_undisplay_pds_ds(w_pts, nodes[i].parent.dts(), list(map(lambda x: x[1], prev_cobjs_refs)), 255)
+                    uds = self._codec.get_undisplay_pds_ds(w_pts, nodes[i].parent.dts(), [x[1] for x in prev_cobjs_refs], 255)
                     DSNode.apply_pts_dts(uds, nodes[i].parent.set_pts_dts_sc(uds, self._codec.buffer))
                     logger.debug(f"Writing screen clear with palette update before an acquisition at PTS={self.ectx.events[nodes[i].idx-1].outTC}")
                 displaysets.append(uds)
@@ -965,7 +964,7 @@ class EpochEncoderEngine:
             DSNode.apply_pts_dts(nds, nodes[i].set_pts_dts_sc(nds, self._codec.buffer))
             displaysets.append(nds)
 
-            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}, L(ODS)={len(o_ods)}, f: {i}->{k}")
+            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(len(bytes(x)) for x in o_ods)}, L(ODS)={len(o_ods)}, f: {i}->{k}")
 
             if len(pals[0]) > 1:
                 # Pad palette chains
@@ -1001,7 +1000,7 @@ class EpochEncoderEngine:
                         r = self._encode_composition_objects(z, k, get_obj(nodes[z].idx, pgobjs).items(), nodes,
                                                              has_two_objs, c_pts, normal_case_refresh, cobjs_ref)
                         cobjs, n_pals, o_ods, cobjs_ref = r
-                        logger.debug(f"Normal Case: PTS={nodes[z].tc_pts}={c_pts}, NM={nodes[z].new_mask} S(ODS)={sum(map(lambda x: len(bytes(x)), o_ods))}")
+                        logger.debug(f"Normal Case: PTS={nodes[z].tc_pts}={c_pts}, NM={nodes[z].new_mask} S(ODS)={sum(len(bytes(x)) for x in o_ods)}")
                         idxnc = nodes[z].new_mask.index(True)
                         assert nodes[z].objects[idxnc] is not None
                         assert len(n_pals[idxnc][0]) > 0
@@ -1043,12 +1042,12 @@ class EpochEncoderEngine:
         #We can't undraw the screen due to delta PTS constraint, we clear it with a palette update and will undraw optionally at +N frames
         if not perform_wds_end:
             logger.debug(f"Performing palette wipe (delta PTS too short) at {self.ectx.events[-1].outTC} (end of epoch).")
-            uds = self._codec.get_undisplay_pds_ds(self.ectx.events[-1].outTC.to_pts(), final_node.dts(), list(map(lambda x: x[1], prev_cobjs_refs)), 255)
+            uds = self._codec.get_undisplay_pds_ds(self.ectx.events[-1].outTC.to_pts(), final_node.dts(), [x[1] for x in prev_cobjs_refs], 255)
             DSNode.apply_pts_dts(uds, final_node.set_pts_dts_sc(uds, self._codec.buffer))
             displaysets.append(uds)
 
             #Prepare an additional display set to undraw the screen if it can fit (< self.ectx.max_pts)
-            nf_shift = max(1, int(np.ceil(((final_node.write_duration()+10)*self._codec.bd_video.fps))))
+            nf_shift = max(1, int(np.ceil((final_node.write_duration()+10)*self._codec.bd_video.fps)))
             tc_final_pts = self.ectx.events[-1].outTC + nf_shift
             perform_wds_end = tc_final_pts.to_pts() < self.ectx.max_pts
             final_node.tc_pts = tc_final_pts
@@ -1131,10 +1130,9 @@ class EpochEncoderEngine:
                     is_new[wid] = False
                     if objs[wid] is not None and not objs[wid].is_active(ne):
                         objs[wid] = None
-                    if len(pgobjs_proc[wid]):
-                        if not objs[wid] and pgobjs_proc[wid][0].is_active(ne):
-                            objs[wid] = pgobjs_proc[wid].pop(0)
-                            is_new[wid] = True
+                    if len(pgobjs_proc[wid]) and not objs[wid] and pgobjs_proc[wid][0].is_active(ne):
+                        objs[wid] = pgobjs_proc[wid].pop(0)
+                        is_new[wid] = True
 
                 nodes.append(DSNode(objs.copy(), self.ectx.windows, event.inTC, new_mask=is_new))
                 nodes[-1].idx = ne

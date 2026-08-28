@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2023-26 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,5 +16,5 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from .bdvideo import BDVideo, Framerate, Format
-from .palette import Palette, PaletteEntry, Matrix
+from .bdvideo import BDVideo, Format, Framerate
+from .palette import Matrix, Palette, PaletteEntry

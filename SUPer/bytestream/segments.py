@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -19,13 +17,13 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import struct
-
 from abc import ABC, abstractmethod
 from enum import IntEnum, IntFlag
 from typing import Self
 
 from ..display.palette import Palette, PaletteEntry
-from ..internals import _Masks, _classproperty
+from ..internals import _classproperty, _Masks
+
 
 class PGSegmentType(IntEnum):
     PDS = 0x14
@@ -65,7 +63,7 @@ class GraphicSegment(ABC):
         return f"{self.__class__.__name__}(" + slot_str[:-2] + ")"
 
 class CompositionObject:
-    __slots__ = 'object_id', 'window_id', 'cropped_flag', 'forced_flag', 'h_pos', 'v_pos', 'crop_obj_x', 'crop_obj_y', 'crop_obj_w', 'crop_obj_h'
+    __slots__ = ('object_id', 'window_id', 'cropped_flag', 'forced_flag', 'h_pos', 'v_pos', 'crop_obj_x', 'crop_obj_y', 'crop_obj_w', 'crop_obj_h')
 
     def __init__(self, object_id: int, window_id: int, h_pos: int, v_pos: int,
                  cropped_flag: bool = False, forced_flag: bool = False,
@@ -84,9 +82,9 @@ class CompositionObject:
 
         list_crop = [self.crop_obj_x, self.crop_obj_y, self.crop_obj_w, self.crop_obj_h]
         if self.cropped_flag:
-            assert all(map(lambda x: x is not None, list_crop))
+            assert all(x is not None for x in list_crop)
         else:
-            assert all(map(lambda x: x is None, list_crop))
+            assert all(x is None for x in list_crop)
 
     def __bytes__(self) -> bytes:
         bs = struct.pack(">HBBHH", self.object_id, self.window_id, (self.cropped_flag << 7) | (self.forced_flag << 6),
@@ -198,7 +196,7 @@ class PDS(GraphicSegment):
         assert len(self.palette) <= 256
 
     def get_payload(self) -> bytes:
-        return bytes([self.palette_id, self.palette_version]) + b''.join(map(lambda pe: bytes([pe[0]]) + bytes(pe[1]), self.palette.items()))
+        return bytes([self.palette_id, self.palette_version]) + b''.join((bytes([pe[0]]) + bytes(pe[1])) for pe in self.palette.items())
 
     @classmethod
     def decode(cls, bs: bytes, pts: int = 0, dts: int = 0) -> Self:
@@ -275,7 +273,7 @@ class WDS(GraphicSegment):
     __slots__ = ('windows', )
 
     class WindowDefinition:
-        __slots__ = 'window_id', 'h_pos', 'v_pos', 'width', 'height'
+        __slots__ = ('window_id', 'h_pos', 'v_pos', 'width', 'height')
 
         def __init__(self, window_id: int, h_pos: int, v_pos: int, width: int, height: int) -> None:
             self.window_id = window_id

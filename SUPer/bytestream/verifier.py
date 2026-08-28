@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,17 +16,17 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import numpy as np
-
 from dataclasses import dataclass
+
+import numpy as np
 from brule import Brule
 
-from ..encoder.codecctx import PGEpochContext
-from ..geometry import Shape, Box
-from ..internals import LogFacility, GraphicsDecoder, TC
 from ..display.palette import Palette
-from .pgstreams import Epoch, DisplaySet
-from .segments import GraphicSegment, PCS, ODS, END, PGSegmentType
+from ..encoder.codecctx import PGEpochContext
+from ..geometry import Box, Shape
+from ..internals import TC, GraphicsDecoder, LogFacility
+from .pgstreams import DisplaySet, Epoch
+from .segments import END, ODS, PCS, GraphicSegment, PGSegmentType
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -88,7 +86,7 @@ class LeakyBuffer:
         self.rate_past = list(filter(lambda x: (curr_ts - x[1]) & self.__class__.TS_MASK <= GraphicsDecoder.FREQ, self.rate_past))
         self.rate_past.append((size_ds, curr_ts))
 
-        crate = sum(map(lambda x: x[0], self.rate_past))/(128*1024)
+        crate = sum(x[0] for x in self.rate_past)/(128*1024)
         if crate >= self.stats.max1s:
             self.stats.tsavg = self._tc_func(curr_ts)
             self.stats.max1s = crate
@@ -116,9 +114,9 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
 
     leaky.set_tc_func(f_print_tc)
 
-    dur_offset = 0
+    total_duration = 0
     ts_first = prev_ts
-    bytes_in_epoch = 0
+    total_bytes = 0
     for epoch in epochs:
         for ds in epoch:
             bytes_in_ds = 0
@@ -127,15 +125,15 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
                 bytes_in_ds += seg.length + 13
             leaky.set_bitrate(bytes_in_ds, ds.pcs.pts, prev_ts)
             if ds.pcs.pts < prev_ts and ts_first < np.inf and ts_first != prev_ts:
-                dur_offset += LeakyBuffer.TS_MASK + 1
+                total_duration += LeakyBuffer.TS_MASK + 1
                 ts_first = np.inf
-            bytes_in_epoch += bytes_in_ds
+            total_bytes += bytes_in_ds
             prev_ts = ds.pcs.pts
     ##for epoch
-    dur_offset += (epochs[-1][-1].pcs.pts - epochs[0][0].pcs.pts)
+    total_duration += (epochs[-1][-1].pcs.pts - epochs[0][0].pcs.pts)
     stats = leaky.get_stats()
 
-    avg_bitrate = sum(map(lambda x: bytes_in_epoch, epochs))/(dur_offset/GraphicsDecoder.FREQ)
+    avg_bitrate = total_bytes/(total_duration/GraphicsDecoder.FREQ)
     logger.iinfo(f"Bitrate: AVG={avg_bitrate/(128*1024):.04f} Mbps, PEAK(1s)={stats[2]:.03f} Mbps @ {leaky.stats.tsavg}.")
 
     f_log_fun = logger.iinfo if is_ok else logger.warning
@@ -212,7 +210,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                 logger.error(f"Window {wd.window_id} out of screen in epoch starting at {to_tc(epoch[0].pcs.pts)}.")
                 compliant = False
             windows[wd.window_id] = (wd.h_pos, wd.v_pos, wd.width, wd.height)
-        lwdb = list(map(lambda w: Box(w[1], w[3], w[0], w[2]), windows.values()))
+        lwdb = [Box(w[1], w[3], w[0], w[2]) for w in  windows.values()]
         if len(lwdb) == 2 and Box.intersect(*lwdb).area > 0:
             logger.error(f"Overlapping windows in epoch starting at {to_tc(epoch[0].pcs.pts)}.")
             compliant = False
@@ -329,9 +327,8 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                             compliant = False
                         cumulated_ods_size = 0
 
-                        if seg.object_id in ods_filled and ods_hash.get(seg.object_id, None) != data_hash:
-                            if ods_vn[seg.object_id] == seg.object_version:
-                                logger.warning(f"Object {seg.o_id} at {to_tc(current_pts)} differs from previous but does not increment version number. It will be discarded.")
+                        if seg.object_id in ods_filled and ods_hash.get(seg.object_id, None) != data_hash and ods_vn[seg.object_id] == seg.object_version:
+                            logger.warning(f"Object {seg.o_id} at {to_tc(current_pts)} differs from previous but does not increment version number. It will be discarded.")
                         ods_filled.add(seg.object_id)
                         ods_vn[seg.object_id] = seg.object_version
                         ods_hash[seg.object_id] = data_hash
@@ -400,7 +397,7 @@ def debug_stats(epochs: list[Epoch]) -> str:
     cnt_nc_ods = 0
     cnt_pu = cnt_buffered_pu = 0
     for epoch in epochs:
-        pts_delta_w = list(map(lambda w: int(np.ceil(w.width*w.height*GraphicsDecoder.FREQ/GraphicsDecoder.RC)), epoch[0].wds.windows))
+        pts_delta_w = [int(np.ceil(w.width*w.height*GraphicsDecoder.FREQ/GraphicsDecoder.RC)) for w in epoch[0].wds.windows]
         pts_delta = sum(pts_delta_w)
         for ds in epoch:
             if ds.pcs.composition_state == PCS.CompositionState.NORMAL_CASE:
@@ -425,7 +422,7 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     frame_duration = np.floor(GraphicsDecoder.FREQ/fps)
 
     for k, epoch in enumerate(epochs):
-        pts_delta = int(sum(map(lambda w: np.ceil(w.width*w.height*GraphicsDecoder.FREQ/GraphicsDecoder.RC), epoch[0].wds.windows)))
+        pts_delta = int(sum(np.ceil(w.width*w.height*GraphicsDecoder.FREQ/GraphicsDecoder.RC) for w in epoch[0].wds.windows))
         wipe_duration = int(np.ceil(epoch[0].pcs.width*epoch[0].pcs.height*GraphicsDecoder.FREQ/GraphicsDecoder.RC))
         pts_dts_delta_epoch_start = (epoch[0].pcs.pts - epoch[0].pcs.dts) > wipe_duration
         #Must not decode epoch start before previous epoch is fully finished (at PTS)

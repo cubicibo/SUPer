@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -19,19 +17,21 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import os
+import signal
 import sys
 import time
-import signal
-from typing import Optional, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 ### CONSTS
 SUPER_STRING = "Encode"
 
 def from_bdnxml(queue: ...) -> None:
-    from SUPer import BDNEncoder
-    from SUPer.internals import LogFacility
     import time
     from datetime import timedelta
+
+    from SUPer import BDNEncoder
+    from SUPer.internals import LogFacility
 
     #### This function runs in MP context, not main.
     logger = LogFacility.get_logger('SUPer')
@@ -55,13 +55,17 @@ if __name__ == '__main__':
     mp.freeze_support()
     print("Loading...")
 
-from pathlib import Path
-from guizero import App, PushButton, Text, CheckBox, Combo, Box, TextBox
+from functools import partial
 from idlelib.tooltip import Hovertip
+from pathlib import Path
+from queue import Empty
 
-from SUPer.internals import LogFacility
+from guizero import App, Box, CheckBox, Combo, PushButton, Text, TextBox
+
+from SUPer.__metadata__ import __author__
+from SUPer.__metadata__ import __version__ as SUPVERS
 from SUPer.encoder.imgproc import BuiltinQuantizer
-from SUPer.__metadata__ import __version__ as SUPVERS, __author__
+from SUPer.internals import LogFacility
 
 #### Functions, main at the end of the file
 def get_kwargs() -> dict[str, Any]:
@@ -116,7 +120,7 @@ def wrapper_mp() -> None:
     while True:
         try:
             do_super.queue.get_nowait()
-        except:
+        except Empty:
             break
     do_super.proc = mp.Process(target=from_bdnxml, args=(do_super.queue,), daemon=(1 == kwargs['threads']), name="SUPinternal")
     do_super.proc.start()
@@ -127,7 +131,7 @@ def wrapper_mp() -> None:
 
 def _tryfunc(f: Callable[[Any], None]) -> None:
     try: f()
-    except: pass
+    except Exception: pass
 
 def _win_nt_abort(proc) -> None:
     import psutil
@@ -143,8 +147,8 @@ def _win_nt_abort(proc) -> None:
         from subprocess import call as scall
         for child in alive:
             logger.info(f"Using OS to terminate {child.pid}.")
-            _tryfunc(lambda: scall(f"taskkill /f /PID {child.pid}", creationflags=0x08000000))
-            _tryfunc(lambda: child.wait(0.1))
+            _tryfunc(partial(scall, f"taskkill /f /PID {child.pid}", creationflags=0x08000000))
+            _tryfunc(partial(child.wait, 0.1))
 ####
 
 def _posix_abort(proc, hard: bool = True) -> None:
@@ -152,12 +156,12 @@ def _posix_abort(proc, hard: bool = True) -> None:
     if hard:
         time.sleep(0.5)
         _tryfunc(proc.kill)
-    _tryfunc(lambda: proc.join(0.2))
+    _tryfunc(partial(proc.join, 0.2))
 
-def abort(proc: Optional['mp.Process'] = None, hard: bool = True) -> None:
+def abort(proc: mp.Process | None = None, hard: bool = True) -> None:
     try:
         do_abort.enabled = False
-    except:
+    except Exception:
         pass
     if proc is None:
         proc = do_super.proc
@@ -171,13 +175,12 @@ def monitor_mp() -> None:
     do_reset = False
     if time.time()-do_super.ts < 2:
         return
-    if do_super.proc and do_super.proc.pid:
-        if not do_super.proc.is_alive():
-            while True:
-                try:
-                    do_super.queue.get_nowait()
-                except:
-                    break
+    if do_super.proc and do_super.proc.pid and not do_super.proc.is_alive():
+        while True:
+            try:
+                do_super.queue.get_nowait()
+            except Empty:
+                break
             abort(do_super.proc, False)
             do_super.proc = None
             logger.info("Closed gracefully encoder process.")
@@ -229,8 +232,6 @@ def set_outputsup() -> None:
 ####
 
 def terminate(frame = None, sig = None):
-    global app
-    global do_super
     proc, do_super.proc = do_super.proc, None
 
     app.cancel(monitor_mp)
@@ -238,7 +239,7 @@ def terminate(frame = None, sig = None):
     abort(proc)
 
 def init_extra_libs(CWD: Path, verbose: bool = True):
-    def get_value_key(config, key: str) -> Optional[Any]:
+    def get_value_key(config, key: str) -> Any | None:
         try: return config[key]
         except KeyError: return None
     ####
@@ -248,7 +249,7 @@ def init_extra_libs(CWD: Path, verbose: bool = True):
     exepath = None
     piq_values = {}
     if ini_file.exists():
-        exepath, piq_quality = None, None
+        exepath = None
         import configparser
         config = configparser.ConfigParser()
         config.read(ini_file)
@@ -275,7 +276,7 @@ if __name__ == '__main__':
     is_win32 = sys.platform == 'win32'
     try:
         application_path = Path(sys.argv[0]).resolve().parent
-    except:
+    except (OSError, RuntimeError):
         application_path = Path(sys.argv[0]).absolute().parent
 
     #Do not keep returned params, we just want to initialize PILIQ
@@ -295,7 +296,7 @@ if __name__ == '__main__':
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
     meipass = getattr(sys, '_MEIPASS', None)
     ico_paths = Path(Path.cwd() if meipass is None else meipass)
-    ico_paths = next(filter(lambda x: x.exists(), map(lambda fl: Path.joinpath(ico_paths, fl, 'icon.ico'), ['misc', 'lib', '.'])), None)
+    ico_paths = next(filter(lambda x: x.exists(), [Path.joinpath(ico_paths, fl, 'icon.ico') for fl in ['misc', 'lib', '.']]), None)
     if ico_paths is not None:#and not (is_win32 and meipass is not None):
         from PIL import Image
         app.icon = Image.open(ico_paths)
@@ -334,7 +335,7 @@ if __name__ == '__main__':
 
     bquant = Box(app, layout="grid", grid=[1, pos_v], align='left')
     Text(bquant, "Quantizer: ", grid=[0,0], align='left', size=11)
-    quantcombo = Combo(bquant, options=list(map(lambda x: x[1], opts_quant)), grid=[1,0], align='left')
+    quantcombo = Combo(bquant, options=[x[1] for x in opts_quant], grid=[1,0], align='left')
     Hovertip(bquant.tk, "Image quantizer to use (Quality, Speed).\n")
 
     bthread = Box(app, layout="grid", grid=[0, pos_v:=pos_v+1])

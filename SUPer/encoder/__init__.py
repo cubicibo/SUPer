@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2023-26 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,7 +16,7 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from .codecctx import PGObjectBuffer, PGEpochContext, PGStreamCtx
+from .codecctx import PGEpochContext, PGObjectBuffer, PGStreamCtx
 from .engine import EpochEncoderEngine
-from .epochctx import EpochFinder, LayoutMode, EventsPreprocessor
+from .epochctx import EpochFinder, EventsPreprocessor, LayoutMode
 from .imgproc import QuantizerWrap

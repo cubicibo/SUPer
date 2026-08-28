@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2024 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,15 +16,16 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import numpy as np
 
 from dataclasses import dataclass
 from itertools import starmap
-from typing import Self, TypeAlias, TypeVar
+from typing import Self, TypeVar
 
-ColorMatrixT: TypeAlias = np.ndarray[tuple[int, int], np.dtype[float]]
-ColorVectorT = TypeVar("ColourVectorT", np.ndarray[tuple[int, int], np.dtype[np.uint8]],
-                                         np.ndarray[tuple[int, int, int], np.dtype[np.uint8]])
+import numpy as np
+
+ColorMatrixT: type = np.ndarray[tuple[int, int], np.dtype[float]]
+ColorVectorT = TypeVar("ColorVectorT", np.ndarray[tuple[int, int], np.dtype[np.uint8]],
+                                       np.ndarray[tuple[int, int, int], np.dtype[np.uint8]])
 
 _csp_matrices = {
     'BT601':
@@ -94,14 +93,12 @@ class PaletteEntry:
         return bytes([self.Y, self.Cr, self.Cb, self.A])
 
 class Palette(dict):
-    def sort(self) -> None:
-        self = __class__(sorted(self.items(), key=lambda x: x[0]))
-
     def __bytes__(self) -> bytes:
         bs = bytearray()
         for k in range(256):
             if (entry := self.get(k, None)) is not None:
                 bs += bytes([k]) + bytes(entry)
+        return bytes(bs)
 
     def offset(self, offset: int) -> Self:
         if len(self):

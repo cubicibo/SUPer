@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2023-2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,22 +16,26 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+
 import multiprocessing as mp
+import os
+import sys
+import time
+
 if __name__ == '__main__':
     mp.freeze_support()
 
-from SUPer import BDNEncoder
-from SUPer.internals import LogFacility
-from SUPer.encoder.imgproc import BuiltinQuantizer
-from SUPer.__metadata__ import __author__, __version__ as LIB_VERSION
-
-import os
-import sys
-from pathlib import Path
 from argparse import ArgumentParser, BooleanOptionalAction
-from typing import NoReturn, Union
-import time
 from datetime import timedelta
+from pathlib import Path
+from typing import NoReturn
+
+from SUPer import BDNEncoder
+from SUPer.__metadata__ import __author__
+from SUPer.__metadata__ import __version__ as LIB_VERSION
+from SUPer.encoder.imgproc import BuiltinQuantizer
+from SUPer.internals import LogFacility
+
 
 def exit_msg(msg: str, is_error: bool = True) -> NoReturn:
     if msg != '':
@@ -44,7 +46,7 @@ def exit_msg(msg: str, is_error: bool = True) -> NoReturn:
     sys.exit(is_error)
 ####
 
-def check_output(fp: Union[Path, str], overwrite: bool) -> None:
+def check_output(fp: Path | str, overwrite: bool) -> None:
     ext = ''
     fp =  Path(fp)
     if fp.exists() and not overwrite:
@@ -62,7 +64,7 @@ class BruleCapAction(BooleanOptionalAction):
         super().__init__(option_strings, dest, **kwargs)
 
     def __call__(self, parser, namespace, values = None, option_string=None):
-        from brule import LayoutEngine, Brule, HexTree, QtzrUTC
+        from brule import Brule, HexTree, LayoutEngine, QtzrUTC
         f_strcap = lambda caps: ', '.join(caps)
 
         print(f"LayoutEngine: {f_strcap(LayoutEngine.get_capabilities())}")
@@ -109,16 +111,12 @@ def main():
     assert 0 <= args.compression <= 100
     assert 0 <= args.acqrate <= 100
     assert 0 <= args.redraw_period
-    if args.quantizer not in range(0, 5):
+    if args.quantizer not in range(5):
         logger.warning("Unknown quantization mode, attempting to use pngquant/libimagequant.")
         args.quantizer = 3
     if args.bt not in [601, 709, 2020]:
         logger.warning("Unknown transfer matrix, using bt709.")
         args.bt = 709
-
-    if not (2 >= args.layout >= 0):
-        logger.warning("Invalid layout mode specified, falling back to default: greedy.")
-        args.layout = 2
 
     if args.extra_acq < 0:
         logger.warning("Got invalid extra-acq, disabling option.")
@@ -158,7 +156,7 @@ def main():
 
     try:
         application_path = Path(sys.argv[0]).resolve().parent
-    except:
+    except (OSError, RuntimeError):
         application_path = Path(sys.argv[0]).absolute().parent
 
     config_file = application_path.joinpath('config.ini')
@@ -189,6 +187,13 @@ def main():
             parameters['ini_opts'] |= ini_opts
     else:
         logger.error("config.ini not found!")
+
+    if args.layout not in range(3):
+        if parameters['ini_opts']['super_cfg'].get('layout_mode', None) is not None:
+            args.layout = parameters['ini_opts']['super_cfg']['layout_mode']
+        if args.layout not in range(3):
+            logger.warning("Invalid layout mode specified, falling back to default: greedy.")
+            args.layout = 2
 
     ###
     parameters |= {
