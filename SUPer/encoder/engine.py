@@ -276,13 +276,13 @@ class EpochEncoderEngine:
         pgobjs = detector.get_objects(self.ectx.events)
 
         # Create all potential display sets in the epoch
-        durs, nodes = self.create_displaysets_nodes([objs.copy() for objs in pgobjs])
-        return pgobjs, durs, nodes
+        nodes = self.create_displaysets_nodes([objs.copy() for objs in pgobjs])
+        return pgobjs, nodes
 
     def plan(self, ctx: tuple[...]) -> tuple[...]:
-        pgobjs, durs, nodes = ctx
+        pgobjs, nodes = ctx
         #Plan datastream
-        _ = self.shape_stream(durs, nodes)
+        _ = self.shape_stream(nodes)
         
         #Set-up datastructures for bytestream generation
         self.set_pgobjects_extended_visibilities(nodes)
@@ -296,14 +296,13 @@ class EpochEncoderEngine:
         return self._convert(pgobjs, r_nodes)
 
     def shape_stream(self,
-         durs: list[int],
          nodes: list[DSNode],
     ) -> list[list[Box]]:
 
         allow_normal_case = self.kwargs.get('allow_normal_case', False)
         allow_overlaps = self.kwargs.get('allow_overlaps', False)
 
-        absolutes, margins, bslots, cboxes = self.find_acqs(durs, nodes)
+        absolutes, margins, bslots, cboxes = self.find_acqs(nodes)
 
         nodes[0].state = PCS.CompositionState.EPOCH_START
         drought = 0
@@ -1061,7 +1060,7 @@ class EpochEncoderEngine:
         return Epoch(displaysets)
     ####
 
-    def find_acqs(self, durs: list[int], nodes: list[DSNode]):
+    def find_acqs(self, nodes: list[DSNode]):
         dtl = np.zeros((len(nodes)), dtype=float)
         absolutes = [False] * len(nodes)
 
@@ -1092,38 +1091,35 @@ class EpochEncoderEngine:
 
         write_duration = nodes[0].write_duration()
         min_boxes = list(starmap(Shape, min_boxes))
-        prev_dt = 0
-        for k, (dt, node) in enumerate(zip(durs, nodes)):
+        prev_node_pts = 0
+        for k, node in enumerate(nodes):
             if not node.is_palette_update:
                 node.slots = min_boxes.copy()
             if k == 0:
                 prev_pts = prev_dts = -np.inf
             else:
-                margin = prev_dt/self._codec.bd_video.fps
+                margin = (node.tc_pts.to_pts() - prev_node_pts)
                 prev_dts = nodes[k-1].dts_end()
                 prev_pts = nodes[k-1].pts()
             is_valid = (node.dts() > prev_dts) and (node.pts() - prev_pts > write_duration)
-            dtl[k] = (node.dts() - prev_dts)/(GraphicsDecoder.FREQ*margin) if (is_valid and k > 0) else (-1 + 2*int(k==0))
-            prev_dt = dt
+            dtl[k] = ((node.dts() - prev_dts)/margin) if (is_valid and k > 0) else (-1 + 2*int(k==0))
+            prev_node_pts = node.tc_pts.to_pts()
         return absolutes, dtl, min_boxes, chain_boxes
     ####
 
-    def create_displaysets_nodes(self, pgobjs_proc: dict[int, list[ProspectiveObject]]) -> tuple[list['DSNode'], list[int]]:
+    def create_displaysets_nodes(self, pgobjs_proc: dict[int, list[ProspectiveObject]]) -> list[DSNode]:
         objs = [None for objs in pgobjs_proc]
         top = self.ectx.events[0].inTC.frames
-        delays, nodes = [], []
+        nodes = []
 
         # we unroll the events to a list of display updates. n(events) <= n(nodes)
         for ne, event in enumerate(self.ectx.events):
             # gap between two events in an epoch: add a screen wipe. These never defines or reference any objects.
-            if (clear_duration := event.inTC.frames - top) > 0:
-                delays += [clear_duration]
+            if (event.inTC.frames - top) > 0:
                 nodes.append(DSNode([], self.ectx.windows, self.ectx.events[ne-1].outTC, is_palette_update=True))
                 nodes[-1].idx = nodes[-2].idx
             for inTC, outTC in zip(chain([event.inTC], event.repeated_inTC), chain(event.repeated_inTC, [event.outTC])):
-                tic = inTC.frames
                 toc = outTC.frames
-                delays += [toc-tic]
 
                 is_new = [False] * len(self.ectx.windows)
                 for wid, _ in enumerate(self.ectx.windows):
@@ -1134,10 +1130,10 @@ class EpochEncoderEngine:
                         objs[wid] = pgobjs_proc[wid].pop(0)
                         is_new[wid] = True
 
-                nodes.append(DSNode(objs.copy(), self.ectx.windows, event.inTC, new_mask=is_new))
+                nodes.append(DSNode(objs.copy(), self.ectx.windows, inTC, new_mask=is_new))
                 nodes[-1].idx = ne
             top = toc
-        return delays, nodes
+        return nodes
     ####
 
     def roll_nodes(self, nodes) -> tuple[list, list, list, list]:
