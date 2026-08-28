@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,10 +16,11 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import TypeVar, Sequence, Self
+from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
-from dataclasses import dataclass
+from typing import Self, TypeVar
 
 from .palette import Matrix
 

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,22 +16,22 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import os
-import numpy as np
 import multiprocessing as mp
-
+import os
+from collections.abc import Generator, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum
-from functools import reduce, partial
+from functools import partial, reduce
+from itertools import pairwise
 from pathlib import Path
-from typing import Sequence, Generator, Iterable
 
+import numpy as np
 from brule import LayoutEngine
 
-from ..display.bdvideo import Format
 from ..bdnxml import BDNXML, BDNEvent
+from ..display.bdvideo import Format
 from ..geometry import Box, Point, Shape
-from ..internals import TC, GraphicsDecoder, GfxCompositor, LogFacility
+from ..internals import TC, GfxCompositor, GraphicsDecoder, LogFacility
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -69,7 +67,7 @@ class EpochEvent(GfxCompositor):
         assert self.inTC < self.outTC
         assert isinstance(self.graphics, (tuple, list)) and len(self.graphics) in range(1, 3)
         if len(self.repeated_inTC) > 0:
-            assert all(map(lambda p: p[0] < p[1], zip(self.repeated_inTC, self.repeated_inTC[1:])))
+            assert all(p0 < p1 for p0, p1 in pairwise(self.repeated_inTC))
             assert self.inTC < self.repeated_inTC[0] <= self.repeated_inTC[-1] < self.outTC
 ####
 
@@ -100,8 +98,8 @@ class PaddingEngine:
         dv = np.array([[diff_y*(2*box.y + (box.dy - container.dy))/container.dy,
                         diff_x*(2*box.x + (box.dx - container.dx))/container.dx]])
 
-        pu, pd = _minmax(map(lambda y: -diff_y/2 + dv[0, 0] + y, range(diff_y)))
-        pl, pr = _minmax(map(lambda x: -diff_x/2 + dv[0, 1] + x, range(diff_x)))
+        pu, pd = _minmax([(-diff_y/2 + dv[0, 0] + y) for y in range(diff_y)])
+        pl, pr = _minmax([(-diff_x/2 + dv[0, 1] + x) for x in range(diff_x)])
 
         new_x1 = max(0, int(box.x  + (pl if (pl < pr) else 0)))
         new_x2 = min(container.dx, int(box.x2 + (pr if (pl < pr) else 0)))
@@ -120,7 +118,7 @@ class PaddingEngine:
     @staticmethod
     def check_best(new_lwd: tuple[Box], prev_lwd: tuple[Box]) -> tuple[Box]:
         lwd = (Box.union(*new_lwd),) if (Box.intersect(*new_lwd).area > 0) else new_lwd
-        if sum(map(lambda wd: wd.area, lwd)) < sum(map(lambda wd: wd.area, prev_lwd)):
+        if sum(wd.area for wd in lwd) < sum(wd.area for wd in prev_lwd):
             return lwd
         return prev_lwd
 
@@ -188,7 +186,8 @@ class PaddingEngine:
 def _pool_worker_init() -> None:
     if os.name == 'nt':
         _parent_id = os.getpid()
-        import psutil, signal
+        import signal
+        import psutil
 
         def sig_int(signal_num, frame):
             parent = psutil.Process(_parent_id)
@@ -228,7 +227,7 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, mode: LayoutMode) ->
             cwd = tuple(reversed(cwd))
             scores[0] = scores[1]
 
-    cwd = tuple(map(lambda w: w.to_absolute(cbox), cwd))
+    cwd = tuple([w.to_absolute(cbox) for w in cwd])
     decode_duration = scores[0]
 
     # given this, evaluate the single window layout (this epoch bounding box)
@@ -238,21 +237,21 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, mode: LayoutMode) ->
 
     #coded object buffer can fit at most 16 ODS: we need roughly +150 bytes in the buffer
     #note: technically we need to also consider the 2*height line-endings bytes, but let's assume there's *some* compression
-    may_not_fit_buffer = any(map(lambda b: b.area >= (1 << 20)-150, cwd))
+    may_not_fit_buffer = any((b.area >= (1 << 20)-150) for b in cwd)
     is_greedysplit_worthwile = (decode_duration_single*0.85 < decode_duration and base_box.area > 125000) or may_not_fit_buffer
 
     #With greedy mode, anytime we're dealing with very big objects we abuse the 1/2 1/2. This also prevents coded buffer overflow.
     layout_modifier = 'N'
     if (mode == LayoutMode.GREEDY or is_bad_split) and is_greedysplit_worthwile:
         cx, cy = (1, 0.5)
-        box1 = Box(0, int(round(cy*base_box.dy)), 0, int(round(base_box.dx*cx)))
+        box1 = Box(0, round(cy*base_box.dy), 0, round(base_box.dx*cx))
         box2 = Box.from_coords(box1.y2, base_box.dy, 0, base_box.dx)
         assert base_box.area == Box.union(box1, box2).area and abs(1-box1.area/box2.area) < 1e-1
 
         greedy_wds = (box1, box2)
         greedy_duration = _get_epoch_start_duration(greedy_wds, container.area)
         if decode_duration > greedy_duration:
-            cwd = tuple(map(lambda w: w.to_absolute(base_box), greedy_wds))
+            cwd = tuple([w.to_absolute(base_box) for w in greedy_wds])
             layout_modifier = 'G'
         # Objects could still not fit in buffer at this point, but there's so much we can do to help authorers...
     if layout_modifier == 'N' and is_bad_split and not may_not_fit_buffer:
@@ -263,9 +262,7 @@ def _find_modify_layout(leng: LayoutEngine, container: Box, mode: LayoutMode) ->
 
 def _bdnev_to_epochevent(bdnev: BDNEvent) -> EpochEvent:
     return EpochEvent(bdnev.inTC, bdnev.outTC,
-                      list(map(lambda g: Graphic(Point(y=g.y, x=g.x),
-                                                 Shape(h=g.height, w=g.width),
-                                                 g.filepath), bdnev.graphics)))
+                      [Graphic(Point(y=g.y, x=g.x), Shape(h=g.height, w=g.width), g.filepath) for g in bdnev.graphics])
 
 def _perform_fine_epoch_detection(
     events: Sequence[BDNEvent],
@@ -347,19 +344,19 @@ class EpochFinder:
         if self.threads > 1:
             with mp.Pool(self.threads, _pool_worker_init) as mpp:
                 for r in mpp.imap_unordered(p_find_epochs_layouts, self._get_rough_split()):
-                    pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
+                    pbar.update(sum(len(ctx.events) for ctx in r))
                     epochs_data += r
             epochs_data = sorted(epochs_data, key=lambda e: e.events[0].inTC.frames)
         else:
             for r in map(p_find_epochs_layouts, self._get_rough_split()):
-                pbar.update(sum(map(lambda ctx: len(ctx.events), r)))
+                pbar.update(sum(len(ctx.events) for ctx in r))
                 epochs_data += r
 
         pbar.update(len(self.bdn.events)-pbar.n+1)
         LogFacility.close_progress_bar(logger)
 
-        get_composition_time = lambda windows: 1 + GraphicsDecoder.get_composition_duration(sum(map(lambda x: x.area, windows)))
-        for ed, ed_next in zip(epochs_data, epochs_data[1:]):
+        get_composition_time = lambda windows: 1 + GraphicsDecoder.get_composition_duration(sum(x.area for x in windows))
+        for ed, ed_next in pairwise(epochs_data):
             if np.isinf(ed_next.min_dts):
                 #inflate a bit the epoch start to allow for WDS stacking at epoch start.
                 ed_next.min_dts = max(ed.events[-1].outTC.to_pts() + 1,
@@ -393,10 +390,10 @@ class EventsPreprocessor:
         trimmed = [events[0]]
         for event in events[1:]:
             add = True
-            if trimmed[-1].outTC == event.inTC and trimmed[-1].get_bbox() == event.get_bbox():
-                if np.array_equal(np.asarray(event.image), np.asarray(trimmed[-1].image)):
-                    trimmed[-1].set_outTC(event.outTC)
-                    add = False
+            if trimmed[-1].outTC == event.inTC and trimmed[-1].get_bbox() == event.get_bbox() and\
+               np.array_equal(np.asarray(event.image), np.asarray(trimmed[-1].image)):
+                trimmed[-1].set_outTC(event.outTC)
+                add = False
             if add:
                 trimmed.append(event)
 

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,8 +16,10 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Self, Sequence
+from typing import Self
+
 
 @dataclass(frozen=True)
 class Point:
@@ -55,8 +55,8 @@ class Shape:
 
     @classmethod
     def union(cls, *rects) -> Self:
-        w = max(map(lambda dim: dim.w, rects))
-        h = max(map(lambda dim: dim.h, rects))
+        w = max([r.w for r in rects])
+        h = max([r.h for r in rects])
         return cls(h, w)
 
     @property
@@ -156,18 +156,18 @@ class Box:
 
     def intersect(self, *boxes) -> 'Box':
         boxes = [self] + [*boxes] * bool(isinstance(self, __class__) and len(boxes))
-        x2 = min(map(lambda b: b.x2, boxes))
-        y2 = min(map(lambda b: b.y2, boxes))
-        x1 = max(map(lambda b: b.x, boxes))
-        y1 = max(map(lambda b: b.y, boxes))
+        x2 = min([b.x2 for b in boxes])
+        y2 = min([b.y2 for b in boxes])
+        x1 = max([b.x for b in boxes])
+        y1 = max([b.y for b in boxes])
         return __class__(y1, max((y2-y1), 0), x1, max((x2-x1), 0))
 
     def union(self, *boxes) -> 'Box':
         boxes = [self] + [*boxes] * bool(isinstance(self, __class__) and len(boxes))
-        x2 = max(map(lambda b: b.x2, boxes))
-        y2 = max(map(lambda b: b.y2, boxes))
-        x1 = min(map(lambda b: b.x, boxes))
-        y1 = min(map(lambda b: b.y, boxes))
+        x2 = max([b.x2 for b in boxes])
+        y2 = max([b.y2 for b in boxes])
+        x1 = min([b.x for b in boxes])
+        y1 = min([b.y for b in boxes])
         return __class__(y1, y2-y1, x1, x2-x1)
 
     @classmethod
@@ -181,22 +181,22 @@ class Box:
     def to_absolute(self, parent: Self) -> Self:
         return self.__class__(parent.y + self.y, self.dy, parent.x + self.x, self.dx)
 
-    def __eq__(self, other: Self) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, __class__):
             return self.coords == other.coords
         return NotImplemented
 
-    def __and__(self, other: Self) -> Self:
+    def __and__(self, other: object) -> Self:
         if isinstance(other, __class__):
             return self.intersect(other)
         return NotImplemented
 
-    def __or__(self, other: Self) -> Self:
+    def __or__(self, other: object) -> Self:
         if isinstance(other, __class__):
             return self.union(other)
         return NotImplemented
 
-    def __neq__(self, other: Self) -> bool:
+    def __neq__(self, other: object) -> bool:
         if isinstance((is_equal := (self == other)), bool):
             return not is_equal
         return NotImplemented

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -20,14 +18,15 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
 import xml.etree.ElementTree as ET
-
-from typing import Self
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
+from typing import Self
 
 from .display.bdvideo import Format, Framerate
-from .internals import GfxCompositor, TC
 from .geometry import Box
+from .internals import TC, GfxCompositor
+
 
 @dataclass(frozen=True)
 class BDNVideoFormat:
@@ -157,7 +156,7 @@ class BDNXML:
             events.append(BDNEvent.from_element(ev, vfmt, bdn_ref_directory))
 
         events = sorted(events, key=lambda e: e.inTC.frames)
-        for ev0, ev1 in zip(events, events[1:]):
+        for ev0, ev1 in pairwise(events):
             if ev0.outTC > ev1.inTC:
                 raise RuntimeError("BDN has overlapped events. SUPer only supports monotonic timelines.")
         return events

@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -19,21 +17,22 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from warnings import filterwarnings
+
 filterwarnings("ignore", message=r"Non-empty compiler", module="pyopencl")
 filterwarnings("ignore", message=r"Kernel", module="SSIM_PIL")
 
-import numpy as np
-
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Any
+
+import numpy as np
+from brule import HexTree as _HexTree
+from brule import QtzrUTC as _Qtzr
 from PIL import Image
 from SSIM_PIL import compare_ssim
-from typing import TypeAlias, Any
 
-from brule import HexTree as _HexTree, QtzrUTC as _Qtzr
-
-from ..internals import _classproperty, LogFacility
-from ..display.palette import Palette, Matrix, PaletteEntry
+from ..display.palette import Matrix, Palette, PaletteEntry
+from ..internals import LogFacility, _classproperty
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -44,12 +43,12 @@ class SSIMPW:
     def compare(cls, img1: Image.Image, img2: Image.Image) -> float:
         return compare_ssim(img1, img2, GPU=cls.use_gpu)
 
-_PaletteT: TypeAlias = np.ndarray[tuple[int, int], np.uint8]
-_BitmapT: TypeAlias = np.ndarray[tuple[int, int], np.uint8]
+_Palette: type = np.ndarray[tuple[int, int], np.uint8]
+_Bitmap: type = np.ndarray[tuple[int, int], np.uint8]
 
 class QuantizerWrap(ABC):
     @classmethod
-    def quantize(cls, image: Image.Image, colors: int, **kwargs) -> tuple[_PaletteT, _BitmapT]:
+    def quantize(cls, image: Image.Image, colors: int, **kwargs) -> tuple[_Palette, _Bitmap]:
         assert 2 <= colors <= 256
         return cls._postprocess(*cls._palettize(*cls._preprocess(image, colors, **kwargs)))
 
@@ -58,12 +57,12 @@ class QuantizerWrap(ABC):
         return image, colors, *args, kwargs
 
     @classmethod
-    def _postprocess(cls, palette: _PaletteT, bitmap: _BitmapT, *args, **kwargs) -> tuple[_PaletteT, _BitmapT]:
+    def _postprocess(cls, palette: _Palette, bitmap: _Bitmap, *args, **kwargs) -> tuple[_Palette, _Bitmap]:
         return palette, bitmap
 
     @classmethod
     @abstractmethod
-    def _palettize(cls, image: Image.Image, colors: int, *args, **kwargs) -> tuple[_PaletteT, _BitmapT, ...]:
+    def _palettize(cls, image: Image.Image, colors: int, *args, **kwargs) -> tuple[_Palette, _Bitmap, ...]:
         ...
 
     @_classproperty
@@ -84,7 +83,7 @@ class QuantizerWrap(ABC):
 
 class HexTreeWrap(QuantizerWrap):
     @classmethod
-    def _palettize(cls, image: Image.Image, colors: int) -> tuple[_PaletteT, _BitmapT, ...]:
+    def _palettize(cls, image: Image.Image, colors: int) -> tuple[_Palette, _Bitmap, ...]:
         bitmap, palette = _HexTree.quantize(np.asarray(image, dtype=np.uint8), colors)
         return palette, bitmap
 
@@ -110,7 +109,7 @@ class QtzrWrap(QuantizerWrap):
         return image, n_clusters
 
     @classmethod
-    def _palettize(cls, image: Image.Image, colors: int) -> tuple[_PaletteT, _BitmapT]:
+    def _palettize(cls, image: Image.Image, colors: int) -> tuple[_Palette, _Bitmap]:
         return _Qtzr.quantize(np.asarray(image, dtype=np.uint8), colors)[::-1]
 
     @classmethod
@@ -128,14 +127,14 @@ class PillowWrap(QuantizerWrap):
         return img_padded, colors, {'_pil_input_img': image, '_colors': colors}
 
     @classmethod
-    def _palettize(cls, image: Image.Image, colors: int, ctx: dict[str, Image.Image]) -> tuple[_PaletteT, _BitmapT, dict[str, Any]]:
+    def _palettize(cls, image: Image.Image, colors: int, ctx: dict[str, Image.Image]) -> tuple[_Palette, _Bitmap, dict[str, Any]]:
         img_out = image.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
         bitmap = np.asarray(img_out, dtype=np.uint8)
         palette = np.asarray(list(img_out.palette.colors.keys()), dtype=np.uint8)
         return palette, bitmap, ctx | {'_pil_output_img': img_out}
 
     @classmethod
-    def _postprocess(cls, palette: _PaletteT, bitmap: _BitmapT, ctx: dict[str, Image.Image]) -> tuple[_PaletteT, _BitmapT]:
+    def _postprocess(cls, palette: _Palette, bitmap: _Bitmap, ctx: dict[str, Image.Image]) -> tuple[_Palette, _Bitmap]:
         img_in, img_out, colors = ctx['_pil_input_img'], ctx['_pil_output_img'], ctx['_colors']
         #bug workaround: sometime pillow may sometimes not return all palette entries
         pil_failed = len(img_out.palette.colors) != 1+max(img_out.palette.colors.values())
@@ -164,12 +163,12 @@ class ImageQuantWrap(QuantizerWrap):
         return image, colors, kwargs
 
     @classmethod
-    def _palettize(cls, image: Image.Image, colors: int, settings: dict[str, Any]) -> tuple[_PaletteT, _BitmapT, dict[str, Any]]:
+    def _palettize(cls, image: Image.Image, colors: int, settings: dict[str, Any]) -> tuple[_Palette, _Bitmap, dict[str, Any]]:
         palette, bitmap = cls.__piq.quantize(image, colors)
         return palette, bitmap, settings
 
     @classmethod
-    def _postprocess(cls, palette: _PaletteT, bitmap: _BitmapT, settings: dict[str, Any]) -> tuple[_PaletteT, _BitmapT]:
+    def _postprocess(cls, palette: _Palette, bitmap: _Bitmap, settings: dict[str, Any]) -> tuple[_Palette, _Bitmap]:
         if settings.get('__orig_dither', None) is not None:
             cls.__piq.set_dithering_level(settings['__orig_dither'])
         if settings.get('__orig_quality', None) is not None:
@@ -185,7 +184,9 @@ class ImageQuantWrap(QuantizerWrap):
         return False if cls.__piq is None else cls.__piq.is_ready()
 
     @classmethod
-    def configure(cls, settings: dict[Any, Any] = {}) -> bool:
+    def configure(cls, settings: dict[Any, Any] | None = None) -> bool:
+        if settings is None:
+            settings = {}
         from piliq import PILIQ
         piq = None
         try: piq = PILIQ(settings.get('qpath', None), False)
@@ -212,9 +213,9 @@ class BuiltinQuantizer(Enum):
 
     @classmethod
     def configure_all(cls, settings: dict[Any, Any]) -> list[bool]:
-        return list(map(lambda q: q.configure(settings), cls))
+        return [q.configure(settings) for q in cls]
 
-    def __call__(self, image: Image.Image, colors: int, **kwargs) -> tuple[_PaletteT, _BitmapT]:
+    def __call__(self, image: Image.Image, colors: int, **kwargs) -> tuple[_Palette, _Bitmap]:
         palette, bitmap = self.value.quantize(image, colors, **kwargs)
         # Pillow can miserably fail (internal bug), so evaluate the input again with Qtzr which
         # is the only other builtin quantizer always supported (C+Python implementations)
@@ -222,7 +223,7 @@ class BuiltinQuantizer(Enum):
             return __class__(__class__.Qtzr)(image, colors, **kwargs)
         return palette, bitmap
 
-    def quantize(self, image: Image.Image, colors: int, **kwargs) -> tuple[_PaletteT, _BitmapT]:
+    def quantize(self, image: Image.Image, colors: int, **kwargs) -> tuple[_Palette, _Bitmap]:
         return self(image, colors, **kwargs)
 
     @classmethod

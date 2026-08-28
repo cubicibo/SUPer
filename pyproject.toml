@@ -11,7 +11,7 @@ license = "GPL-3.0-or-later"
 license-files = [
     "LICENSE",
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 authors = [{ name = "cubicibo", email = "cubicibo@outlook.com" }]
 maintainers = [
     { name = "cubicibo", email = "cubicibo@outlook.com" },
@@ -113,4 +113,9 @@ line-length = 130
 extend-exclude = ["tests"]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.*" = ["F401", "F403"]
+"__init__.*" = ["F401", "F403", "N999"]
+"supergui.py" = ["BLE001", "S110", "I001"]
+"SUPer/interface.py" = ["BLE001"]
+"SUPer/bytestream/pgstreams.py" = ["SIM115"]
+"SUPer/bytestream/segments.py" = ["RUF023"]
+"SUPer/encoder/epochctx.py" = ["I001"]

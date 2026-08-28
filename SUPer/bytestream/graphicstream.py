@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,8 +16,10 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import Sequence
-from .segments import GraphicSegment, PCS, WDS, ODS, PDS, END, PGSegmentType
+from collections.abc import Sequence
+
+from .segments import END, ODS, PCS, PDS, WDS, GraphicSegment, PGSegmentType
+
 
 class DisplaySet:
     def __init__(self, segments: Sequence[GraphicSegment]):
@@ -62,7 +62,7 @@ class DisplaySet:
         if isinstance(pds, PDS):
             pds = [pds]
         else:
-            assert all(map(lambda p: isinstance(p, PDS), pds))
+            assert all(isinstance(p, PDS) for p in pds)
         self._pds = pds
 
     @property
@@ -74,7 +74,7 @@ class DisplaySet:
         if isinstance(ods, ODS):
             ods = [ods]
         else:
-            assert all(map(lambda p: isinstance(p, ODS), ods))
+            assert all(isinstance(o, ODS) for o in ods)
         self._ods = ods
 
     @property

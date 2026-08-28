@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2023-26 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,7 +16,7 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from .segments import PCS, WDS, PDS, ODS, END, CompositionObject, SegmentParser, PGSegmentType
 from .graphicstream import DisplaySet, Epoch
-from .verifier import is_compliant, debug_stats, test_diplayset, test_rx_bitrate, check_pts_dts_sanity
-from .pgstreams import SUPReader, SUPWriter, PesMuiWriter 
+from .pgstreams import PesMuiWriter, SUPReader, SUPWriter
+from .segments import END, ODS, PCS, PDS, WDS, CompositionObject, PGSegmentType, SegmentParser
+from .verifier import check_pts_dts_sanity, debug_stats, is_compliant, test_diplayset, test_rx_bitrate

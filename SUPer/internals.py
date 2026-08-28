@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,22 +16,23 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 import logging
-import numpy as np
-
 from abc import ABC
-from enum import IntEnum
-from PIL import Image
 from contextlib import nullcontext
-from timecode import Timecode
-from typing import TypeAlias, TypeVar
+from enum import IntEnum
+from typing import ClassVar, Self
 
-from .geometry import Box
+import numpy as np
+from PIL import Image
+from timecode import Timecode
+
 from .display.bdvideo import Framerate, FramerateInputT
+from .geometry import Box
 
 try:
     from tqdm import tqdm
 except ModuleNotFoundError:
     tqdm = nullcontext
+
 
 #%%
 class GraphicsDecoder:
@@ -50,9 +49,6 @@ class GraphicsDecoder:
         return int(np.ceil(window_area * cls.FREQ / cls.RC))
 
 #%%
-TimecodeInputT: TypeAlias = TypeVar('TimecodeT', 'TC', str, int)
-MPEGTick: TypeAlias = int
-
 class TC(Timecode):
     def __init__(self, fps, *args, **kwargs) -> None:
         if not isinstance(fps, Framerate):
@@ -70,14 +66,14 @@ class TC(Timecode):
         r_tc.drop_frame = drop_frame
         return r_tc
 
-    def to_pts(self) -> MPEGTick:
+    def to_pts(self) -> int:
         tpts = ((self.frames - 1)/self.fractional_fps.value)*GraphicsDecoder.FREQ
         return int(tpts)
 
     def to_seconds(self) -> float:
         return self.to_pts()/GraphicsDecoder.FREQ
 
-    def __add__(self, other: TimecodeInputT) -> 'TC':
+    def __add__(self, other: Self | int) -> Self:
         if isinstance(other, __class__):
             assert other.fractional_fps == self.fractional_fps and self.drop_frame == other.drop_frame == False
             frames = other.frames
@@ -105,7 +101,7 @@ class _classproperty(property):
 
 class GfxCompositor(ABC):
     def get_bbox(self) -> Box:
-        return Box.union(*list(map(lambda e: e.box, self.graphics)))
+        return Box.union(*[g.box for g in self.graphics])
 
     def _combine_graphics(self) -> Image.Image:
         container = self.get_bbox()
@@ -126,10 +122,10 @@ class GfxCompositor(ABC):
         return img
 
 class LogFacility:
-    _logger = dict()
-    _logpbar = dict()
-    _logrep = None
-    _tqdm_off = False
+    _logger: ClassVar[dict[str, logging.Logger]] = {}
+    _logpbar: ClassVar[dict[str, tqdm]] = {}
+    _logrep: logging.Handler = None
+    _tqdm_off: ClassVar[bool] = False
 
     @classmethod
     def set_file_log(cls, logger: logging.Logger, fp: str, level: int | None = None, simple_format: bool = False) -> None:
@@ -150,7 +146,7 @@ class LogFacility:
 
         if not logger.hasHandlers() and with_handler:
             handler = logging.StreamHandler()
-            formatter = logging.Formatter(' %(name)s %(levelname).4s : %(message)s'.format(name))
+            formatter = logging.Formatter(' %(name)s %(levelname).4s : %(message)s')
             handler.setFormatter(formatter)
             logger.addHandler(handler)
 

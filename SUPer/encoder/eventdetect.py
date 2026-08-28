@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -18,22 +16,22 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import cv2
-import numpy as np
 
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass, field
 from itertools import chain, count
-from PIL import Image
-from typing import Sequence, Generator, Self
+from typing import Self
 
+import cv2
+import numpy as np
 from brule import LayoutEngine
-
-from .epochctx import EpochEvent, PaddingEngine
-from .imgproc import SSIMPW
+from PIL import Image
 
 from ..display.bdvideo import Format
 from ..geometry import Box
 from ..internals import LogFacility
+from .epochctx import EpochEvent, PaddingEngine
+from .imgproc import SSIMPW
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -137,7 +135,7 @@ class TreeAnalyzer:
         cbox, reg1, reg2, is_vertical = leng.get_layout()
         leng.destroy()
         box_factory = lambda x: Box.from_coords(x[1], x[3], x[0], x[2])
-        cbox, reg1, reg2 = tuple(map(lambda b: box_factory(b), (cbox, reg1, reg2)))
+        cbox, reg1, reg2 = tuple([box_factory(b) for b in (cbox, reg1, reg2)])
         return self._validate_layout(cbox, is_vertical, reg1, reg2)
 
     def _validate_layout(self, cbox: Box, is_vertical: int, reg1: Box, reg2: Box) -> ...:
@@ -159,8 +157,8 @@ class TreeAnalyzer:
         #perform recursion up to depth
         if split_valid:
             nd = self.depth+1
-            costs = map(lambda r: __class__(r, _depth=nd)._get_score(composite.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2)),
-                                                                     frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))), split_layout)
+            costs = [__class__(r, _depth=nd)._get_score(composite.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2)),
+                                                        frame.crop((cbox.x+r.x, cbox.y+r.y, cbox.x+r.x2, cbox.y+r.y2))) for r in split_layout]
             #recursion happens here
             return list(costs)
         else:
@@ -182,7 +180,7 @@ class TreeAnalyzer:
     def get_region_cost(self, composite: Image.Image, frame: Image.Image) -> tuple[float, float]:
         cropbbox = (self.region.x, self.region.y, self.region.x2, self.region.y2)
         scores = __class__._compare_f(composite.crop(cropbbox), frame.crop(cropbbox))
-        area_coeff = 0.325 if all(map(lambda s: s == 1.0, scores)) else 1.0
+        area_coeff = 0.325 if all((s == 1.0) for s in scores) else 1.0
         return scores, self.region.area*area_coeff
 
     @classmethod
@@ -277,7 +275,7 @@ class ObjectDetector:
             containers = containers[:-unseen]
         return ProspectiveObject(f_start, mask, containers, Box.from_coords(y, y2, x, x2))
 
-    def analyze(self) -> Generator[ProspectiveObject, None, None]:
+    def analyze(self) -> Generator[ProspectiveObject | None, tuple[EpochEvent | None, Image.Image | None], None]:
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
         unseen = f_start = event_cnt = 0

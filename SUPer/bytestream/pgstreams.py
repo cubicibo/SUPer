@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2026 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -19,18 +17,17 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import struct
-
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Generator
 from contextlib import nullcontext
 from io import BytesIO
 from pathlib import Path
-from typing import Generator, TypeAlias, Type, Callable
 
 from ..internals import _Masks
-from .segments import GraphicSegment, SegmentParser, PCS
 from .graphicstream import DisplaySet, Epoch
+from .segments import PCS, GraphicSegment, SegmentParser
 
-_FileStreamT: TypeAlias = str | Path | BytesIO
+_FileStreamT: type = str | Path | BytesIO
 
 class SUPReader:
     def __init__(self, fp: _FileStreamT):
@@ -67,7 +64,7 @@ class SUPReader:
     @staticmethod
     def _gen_group(elements: Generator[..., None, None],
                    condition: Callable[[...], bool],
-                   group_class: Type[object]) -> Generator[..., None, None]:
+                   group_class: type[object]) -> Generator[..., None, None]:
         """
         Generate groups (of type group_class) from elements w.r.t. condition.
 

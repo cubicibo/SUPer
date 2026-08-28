@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Copyright (C) 2023-26 cibo
 This file is part of SUPer <https://github.com/cubicibo/SUPer>.
@@ -19,12 +17,10 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 from .__metadata__ import __name__, __version__
-
-from .interface import BDNEncoder
 from .bdnxml import BDNXML
-
-from .display import BDVideo, Framerate, Format, Matrix, Palette, PaletteEntry
+from .bytestream.graphicstream import DisplaySet, Epoch
+from .bytestream.pgstreams import PesMuiWriter, SUPReader, SUPWriter
+from .bytestream.segments import END, ODS, PCS, PDS, WDS, CompositionObject, SegmentParser
+from .display import BDVideo, Format, Framerate, Matrix, Palette, PaletteEntry
 from .encoder import EpochFinder, EventsPreprocessor, LayoutMode, QuantizerWrap
-from .bytestream.graphicstream import Epoch, DisplaySet
-from .bytestream.pgstreams import SUPReader, SUPWriter, PesMuiWriter
-from .bytestream.segments import PCS, WDS, ODS, PDS, END, CompositionObject, SegmentParser
+from .interface import BDNEncoder
