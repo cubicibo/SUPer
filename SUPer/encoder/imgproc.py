@@ -90,10 +90,12 @@ class HexTreeWrap(QuantizerWrap):
 
     @classmethod
     def _preprocess(cls, image: Image.Image, colors: int, **kwargs) -> tuple[Image.Image, int, ...]:
-        if kwargs.get('single_bitmap', False):
-            colors = len(image.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
-        colors = max(16, min(colors, int(np.ceil(20 + colors*235/255))))
-        return image, colors
+        if not kwargs.get('single_bitmap', False):
+            nc = len(image.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
+        else:
+            nc = colors
+        nc = max(16, min(colors, int(np.ceil(20 + nc*235/255))))
+        return image, nc
 
     @classmethod
     def is_optimized(cls) -> bool:
@@ -150,7 +152,7 @@ class ImageQuantWrap(QuantizerWrap):
     @classmethod
     def _preprocess(cls, image: Image.Image, colors: int, **kwargs) -> tuple[Image.Image, int, dict[str, Any]]:
         assert cls.__piq is not None, "PIQ wrapper not configured."
-        if kwargs.get('single_bitmap', False):
+        if not kwargs.get('single_bitmap', False):
             nc = len(image.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE).palette.colors)
         else:
             nc = colors
@@ -158,11 +160,12 @@ class ImageQuantWrap(QuantizerWrap):
                        '__orig_quality': cls.__piq.get_quality()}
             cls.__piq.set_dithering_level(kwargs['__orig_dither']*0.9)
             cls.__piq.set_quality(max(1, int(np.ceil(kwargs['__orig_quality']*0.975))))
-        return image, max(2, nc), kwargs
+        colors = max(2, min(colors, int(np.ceil(20 + nc*235/255))))
+        return image, colors, kwargs
 
     @classmethod
     def _palettize(cls, image: Image.Image, colors: int, settings: dict[str, Any]) -> tuple[_PaletteT, _BitmapT, dict[str, Any]]:
-        palette, bitmap = cls.__piq.quantize(image, min(colors, int(np.ceil(20+colors*235/255))))
+        palette, bitmap = cls.__piq.quantize(image, colors)
         return palette, bitmap, settings
 
     @classmethod
@@ -329,6 +332,7 @@ class PaletteSequenceEffect:
         assert 0 < first_index + colors <= 256, "8-bit ID out of range."
         assert first_index > 0, "Usage of palette ID zero."
 
+        # bitmap is (H x W), cluts is (N_c x len(events) x 4)
         bitmap, cluts = cls.solve_sequence_fast(events, colors, quantizer, **kwargs)
         transparent_id = np.nonzero(np.all(cluts[:,:,-1] == 0, axis=1))[0]
 

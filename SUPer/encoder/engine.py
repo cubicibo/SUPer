@@ -783,8 +783,7 @@ class EpochEncoderEngine:
             # must work with separate palette for each object (127+1 colors per window by default)
             n_colors = 255
             bias = 0
-            if has_two_objs:
-                assert normal_case_refresh
+            if has_two_objs and normal_case_refresh:
                 assert all(filter(lambda x: x.h in range(0, self._codec.bd_video.fmt.height) and x.w in range(0, self._codec.bd_video.fmt.width), node.slots))
                 assert sum(map(lambda x: x is not None, node.slots)) == 2
                 ratio_area = (node.slots[0].area - node.slots[1].area)/sum(map(lambda s: s.area, node.slots))
