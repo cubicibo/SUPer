@@ -364,17 +364,18 @@ class EpochEncode:
         self.kwargs = kwargs
         self.epoch_data = epoch_data
 
-    def preprocess(self, remove_dupes: bool = True, add_refreshes: float = 0) -> Self:
+    def preprocess(self, remove_dupes: bool = True, refresh_interval: float | None = None) -> Self:
+        if refresh_interval is None:
+            refresh_interval = self.kwargs.get('redraw_period', 0.0)
         if remove_dupes:
             self.epoch_data.events = EventsPreprocessor.remove_duplicates(self.epoch_data.events)
 
-        if add_refreshes >= 1.0:
+        if refresh_interval >= 1.0:
             for event in self.epoch_data.events:
-                if (count := EventsPreprocessor.get_refresh_count(event)) > 0:
-                    durTC = TC(event.fractional_fps, (event.outTC - event.inTC).frames)
-                    step = int(durTC.frames / (count + 1))
-                    for offset in range(step, durTC.frames, step):
-                        event.repeated_inTC.append(TC(self.video_fmt.fps, frames=event.inTC.frames + offset))
+                if (count := EventsPreprocessor.get_refresh_count(event, refresh_interval)) > 0:
+                    for repeat_ix in range(1, count+1):
+                        event.repeated_inTC.append(TC(self.pg_stream_ctx.bd_video.fps, frames=event.inTC.frames + int(repeat_ix*refresh_interval*self.pg_stream_ctx.bd_video.fps)))
+                    logger.debug(f"Event at {event.inTC} repeated {count}, {len(event.repeated_inTC)} at {event.repeated_inTC}")
         return self
 
     def encode(self) -> Epoch:

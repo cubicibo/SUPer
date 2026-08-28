@@ -375,12 +375,12 @@ class EventsPreprocessor:
     Class to handle basic event(s) pre-processing or to compute side metadata.
     """
     @staticmethod
-    def get_refresh_count(event: BDNEvent | EpochEvent, period: float = -1) -> int:
+    def get_refresh_count(event: BDNEvent | EpochEvent, period: float) -> int:
         """
         Compute the number of time this event shall be redrawn onto the display
         given the period.
         """
-        if period < 1:
+        if period < 1.0:
             return 0
         n_refreshes = int(((event.outTC - event.inTC).to_realtime(as_float=True) - period) // period)
         return max(0, n_refreshes)
