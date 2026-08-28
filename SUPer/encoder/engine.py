@@ -373,15 +373,15 @@ class EpochEncoderEngine:
                 last_possible_dts = np.inf
                 current_dts = node.dts()
                 if current_dts < first_possible_dts < node.pts():
-                    for ckf, future_node in enumerate(nodes[ck+1:], ck+1):
+                    for future_node in nodes[ck+1:]:
                         if future_node.flag >= 0:
                             last_possible_dts = (future_node.dts())
                             break
                     if first_possible_dts < last_possible_dts:
                         node.set_dts(min((first_possible_dts+1), last_possible_dts))
-                        logger.debug(f"Shifted DTS of PU at {node.tc_pts}={node.pts():.03f} from {current_dts:.04f} to {node.dts():.04f}.")
+                        logger.debug(f"Shifted DTS of PU at {node.tc_pts}={node.pts()} from {current_dts:.04f} to {node.dts()}.")
                     else:
-                        logger.error(f"Required to drop a PU at {node.tc_pts}={node.pts():.03f} to ensure a monotonic DTS.")
+                        logger.error(f"Required to drop a PU at {node.tc_pts}={node.pts()} to ensure a monotonic DTS.")
                         node.discard = True
                         continue
             first_possible_dts = (node.dts_end())
@@ -650,7 +650,8 @@ class EpochEncoderEngine:
                     if composition_count == 2:
                         logger.info(f"Downgraded event at {nodes[l].tc_pts} to a palette update to perform a mendatory acquisition.")
                     else:
-                        logger.info(f"Discarded event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
+                        logger.info(f"Ignored event at {nodes[l].tc_pts} to perform a mendatory acquisition.")
+                        # to avoid blinking, the lone object may get extended visibility as well
                 nodes[l].state = PCS.CompositionState.NORMAL_CASE
                 #Update object mask on which PUs are performed.
                 # evaluated at the end since the above could be a valid wipe

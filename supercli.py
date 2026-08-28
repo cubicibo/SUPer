@@ -12,7 +12,7 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
+You should have received a copy of the GNU General Public  layout mode specified
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
@@ -190,11 +190,10 @@ def main():
 
     if args.layout not in range(3):
         if parameters['ini_opts']['super_cfg'].get('layout_mode', None) is not None:
-            args.layout = parameters['ini_opts']['super_cfg']['layout_mode']
+            args.layout = int(parameters['ini_opts']['super_cfg']['layout_mode'])
         if args.layout not in range(3):
             logger.warning("Invalid layout mode specified, falling back to default: greedy.")
             args.layout = 2
-
     ###
     parameters |= {
         'quality_factor': int(args.compression)/100,

@@ -181,22 +181,22 @@ class Box:
     def to_absolute(self, parent: Self) -> Self:
         return self.__class__(parent.y + self.y, self.dy, parent.x + self.x, self.dx)
 
-    def __eq__(self, other: Self) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, __class__):
             return self.coords == other.coords
         return NotImplemented
 
-    def __and__(self, other: Self) -> Self:
+    def __and__(self, other: object) -> Self:
         if isinstance(other, __class__):
             return self.intersect(other)
         return NotImplemented
 
-    def __or__(self, other: Self) -> Self:
+    def __or__(self, other: object) -> Self:
         if isinstance(other, __class__):
             return self.union(other)
         return NotImplemented
 
-    def __neq__(self, other: Self) -> bool:
+    def __neq__(self, other: object) -> bool:
         if isinstance((is_equal := (self == other)), bool):
             return not is_equal
         return NotImplemented

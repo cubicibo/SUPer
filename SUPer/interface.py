@@ -326,33 +326,32 @@ class BDNEncoder:
     ####
 
     def write_output(self, output_file: Path | str, encode_result: EncodeResult) -> None:
-        fp = output_file
+        fp = Path(output_file)
         if not encode_result.epochs:
             raise RuntimeError("No data to write.")
 
         if self.kwargs.get('output_all_formats', False):
             is_pes = is_sup = True
         else:
-            is_pes = fp.lower().endswith('pes')
-            is_sup = fp.lower().endswith('sup')
+            extension = fp.suffix.lower()
+            is_pes = extension.endswith('pes')
+            is_sup = extension.endswith('sup')
 
         if not (is_pes or is_sup):
             logger.warning("Unknown extension, assuming a .SUP file...")
             is_sup = True
-        if len(filepath := fp.split('.')) > 1:
-            fp_pes = '.'.join(filepath[:-1]) + '.pes'
-            fp_sup = '.'.join(filepath[:-1]) + '.sup'
-        else:
-            fp_pes = filepath[0] + '.pes'
-            fp_sup = filepath[0] + '.sup'
 
         if is_pes:
+            fp_pes = fp.parent.joinpath(fp.stem + '.pes')
+
             if encode_result.valid:
                 logger.info(f"Writing output file {fp_pes}.")
                 PesMuiWriter(fp_pes).write_epochs(encode_result.epochs)
             else:
                 logger.warning("PES+MUI not generated as the stream is not compliant.")
         if is_sup:
+            fp_sup = fp.parent.joinpath(fp.stem + '.sup')
+
             logger.info(f"Writing output file {fp_sup}")
             SUPWriter(fp_sup).write_epochs(encode_result.epochs)
     ####def

@@ -275,7 +275,7 @@ class ObjectDetector:
             containers = containers[:-unseen]
         return ProspectiveObject(f_start, mask, containers, Box.from_coords(y, y2, x, x2))
 
-    def analyze(self) -> Generator[ProspectiveObject, None, None]:
+    def analyze(self) -> Generator[ProspectiveObject | None, tuple[EpochEvent | None, Image.Image | None], None]:
         alpha_compo = Image.new('RGBA', (self.window.dx, self.window.dy), (0, 0, 0, 0))
 
         unseen = f_start = event_cnt = 0

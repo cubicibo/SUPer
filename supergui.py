@@ -50,9 +50,10 @@ def from_bdnxml(queue: ...) -> None:
     logger.info(f"Finished in {timedelta(seconds=round(time.monotonic() - ts_start, 3))}, exiting...")
 ####
 
+import multiprocessing as mp
+mp.freeze_support()
+
 if __name__ == '__main__':
-    import multiprocessing as mp
-    mp.freeze_support()
     print("Loading...")
 
 from functools import partial
@@ -69,6 +70,7 @@ from SUPer.internals import LogFacility
 
 #### Functions, main at the end of the file
 def get_kwargs() -> dict[str, Any]:
+    ini_params = init_extra_libs(application_path, verbose=False)
     return {
         'quality_factor': int(compression_txt.value)/100,
         'refresh_rate': int(refresh_txt.value)/100,
@@ -80,14 +82,14 @@ def get_kwargs() -> dict[str, Any]:
         'allow_normal_case': bool(normal_case_ok.value),
         'prefer_normal_case': bool(prefer_normal_case.value),
         'insert_acquisitions': int(biacqs_val.value),
-        'ini_opts': init_extra_libs(application_path, verbose=False),
+        'ini_opts': ini_params,
         'max_kbps': int(max_kbps.value),
         'log_to_file': opts_log[logcombo.value],
         'ssim_tol': int(ssim_tolb.value)/100,
         'redraw_period': float(acqinttb.value),
         'threads': int(threadscombo.value) if threadscombo.value.lower() != 'auto' else 'auto',
         'daemonize': False,
-        'layout_mode': 2,
+        'layout_mode': int(ini_params['super_cfg'].get('layout_mode', 2)),
         'log_filename': supout.value,
     }
 
@@ -108,6 +110,7 @@ def wrapper_mp() -> None:
         invalid = invalid or not (kwargs[evkey := 'threads'] == 'auto' or 1 <= kwargs['threads'] <= 8)
         invalid = invalid or not (0 <= kwargs[evkey := 'max_kbps'] <= 48000)
         invalid = invalid or not (kwargs[evkey := 'redraw_period'] == 0 or (kwargs['redraw_period'] >= 1.0 and kwargs['redraw_period'] <= 3600.0))
+        invalid = invalid or not (0 <= kwargs[evkey := 'layout_mode'] <= 2)
         if invalid:
             logger.error(f"Invalid parameter range found for '{evkey}', aborting.")
             return
@@ -131,9 +134,9 @@ def wrapper_mp() -> None:
 
 def _tryfunc(f: Callable[[Any], None]) -> None:
     try: f()
-    except Exception: pass
+    except Exception as e: print(e)
 
-def _win_nt_abort(proc) -> None:
+def _win_nt_abort(proc: mp.Process) -> None:
     import psutil
     procs = psutil.Process().children(recursive=True)
     for child in procs:
@@ -151,7 +154,7 @@ def _win_nt_abort(proc) -> None:
             _tryfunc(partial(child.wait, 0.1))
 ####
 
-def _posix_abort(proc, hard: bool = True) -> None:
+def _posix_abort(proc: mp.Process, hard: bool = True) -> None:
     _tryfunc(proc.terminate)
     if hard:
         time.sleep(0.5)
@@ -181,12 +184,12 @@ def monitor_mp() -> None:
                 do_super.queue.get_nowait()
             except Empty:
                 break
-            abort(do_super.proc, False)
-            do_super.proc = None
-            logger.info("Closed gracefully encoder process.")
-            do_super.ts = time.time()
-            do_reset = True
-            do_abort.enabled = False
+        abort(do_super.proc, False)
+        do_super.proc = None
+        logger.info("Closed gracefully encoder process.")
+        do_super.ts = time.time()
+        do_reset = True
+        do_abort.enabled = False
     if do_reset and bdnname.value and supout.value:
         do_super.enabled = True
         do_super.text = SUPER_STRING
@@ -243,7 +246,7 @@ def init_extra_libs(CWD: Path, verbose: bool = True):
         try: return config[key]
         except KeyError: return None
     ####
-    params = {}
+    params = {'quant': {}, 'super_cfg': {}}
     ini_file = CWD.joinpath('config.ini')
 
     exepath = None
@@ -261,7 +264,7 @@ def init_extra_libs(CWD: Path, verbose: bool = True):
             params['super_cfg'] = dict(sup_params)
     elif verbose:
         logger.error("config.ini not found!")
-    if BuiltinQuantizer.LIQ.value.configure({'library':exepath}):
+    if BuiltinQuantizer.LIQ.value.configure({'qpath': exepath}):
         if verbose:
             logger.info(f"Advanced image quantizer armed: {BuiltinQuantizer.LIQ.name}")
         params['quant'] = {'qpath': exepath} | piq_values
