@@ -227,7 +227,7 @@ class DSNode:
         decode_duration = max(decode_duration, self.write_duration() + 1)
 
         dts = int(ds.pcs.pts - decode_duration)
-        assert self.pts() == ds.pcs.pts
+        assert self.pts() == ds.pcs.pts, f"{self.pts()}, {ds.pcs.pts}, {self.idx}, {self.tc_pts}"
 
         if self.is_custom_dts():
             new_dts = self.dts()
@@ -313,7 +313,10 @@ class EpochEncoderEngine:
 
         positions = cboxes[0].copy()
         k = last_acq = 0
+        prev_event_id = 0
         for k, (forced, margin, node) in enumerate(zip(absolutes[1:], margins[1:], nodes[1:]), 1):
+            frame_step = node.idx - prev_event_id
+            prev_event_id = node.idx
             if not node.is_palette_update:
                 for oix in range(len(node.objects)):
                     box_assets = list(filter(lambda x: x is not None, [positions[oix], cboxes[k][oix]]))
@@ -334,7 +337,7 @@ class EpochEncoderEngine:
                 node.state = PCS.CompositionState.ACQUISITION
                 absolutes[k] = True
             if node.state != PCS.CompositionState.ACQUISITION:
-                if (forced or (margin > 0 and margin > max(thresh-dthresh*drought, 0))) and not node.is_palette_update:
+                if (frame_step == 0 or forced or (margin > 0 and margin > max(thresh-dthresh*drought, 0))) and not node.is_palette_update:
                     node.state = PCS.CompositionState.ACQUISITION
                     drought = 0
                 else:
@@ -379,7 +382,7 @@ class EpochEncoderEngine:
                             break
                     if first_possible_dts < last_possible_dts:
                         node.set_dts(min((first_possible_dts+1), last_possible_dts))
-                        logger.debug(f"Shifted DTS of PU at {node.tc_pts}={node.pts()} from {current_dts:.04f} to {node.dts()}.")
+                        logger.debug(f"Shifted DTS of PU at {node.tc_pts}={node.pts()} from {current_dts} to {node.dts()}.")
                     else:
                         logger.error(f"Required to drop a PU at {node.tc_pts}={node.pts()} to ensure a monotonic DTS.")
                         node.discard = True
@@ -711,7 +714,9 @@ class EpochEncoderEngine:
         assert len(nodes) >= len(pgo.mask)
         for node in nodes[sl]:
             v = pgo.mask[node.idx-pgo.f:node.idx+1-pgo.f]
-            if len(v) > 0 and v[0] and node.flag >= 0:
+            if len(v) == 0:
+                break
+            if v[0] and node.flag >= 0:
                 return True
         return False
 
@@ -756,9 +761,9 @@ class EpochEncoderEngine:
                     if len(pgo.mask[nodes[j].idx-pgo.f:nodes[j].idx+1-pgo.f]) == 1:
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
                         crop_coords = (pgo.box.x, pgo.box.y, pgo.box.x2, pgo.box.y2)
-                        last_imgs[oix] = (self.mask_event(pgo.wid, j), paste_box, crop_coords)
+                        last_imgs[oix] = (self.mask_event(pgo.wid, nodes[j].idx), paste_box, crop_coords)
                     else:
-                        multiplier &= pgo.is_visible_extended(j)
+                        multiplier &= pgo.is_visible_extended(nodes[j].idx)
                     a_img.paste(Image.fromarray(multiplier*last_imgs[oix][0], 'RGBA').crop(last_imgs[oix][2]), last_imgs[oix][1])
                     coords += offset
                 imgs_chain.append(a_img)
@@ -840,10 +845,10 @@ class EpochEncoderEngine:
                 imgs_chain = []
                 for j in range(i, k):
                     multiplier = np.uint8(nodes[j].flag >= 0)
-                    if pgo.is_active(j):
-                        last_img = self.mask_event(pgo.wid, j)
+                    if pgo.is_active(nodes[j].idx):
+                        last_img = self.mask_event(pgo.wid, nodes[j].idx)
                     else:
-                        multiplier &= pgo.is_visible_extended(j)
+                        multiplier &= pgo.is_visible_extended(nodes[j].idx)
                     crop_coords = (pgo.box.x, pgo.box.y, pgo.box.x2, pgo.box.y2)
                     imgs_chain.append(Image.fromarray(multiplier*last_img, 'RGBA').crop(crop_coords))
 
@@ -914,7 +919,9 @@ class EpochEncoderEngine:
         while i < n_actions:
             if nodes[i].parent is not None:
                 assert i > 0
-                w_pts = self.ectx.events[i-1].outTC.to_pts()
+                w_pts = self.ectx.events[nodes[i].idx-1].outTC.to_pts()
+                assert nodes[i].parent.pts() == w_pts
+
                 wds_doable = (nodes[i].parent.write_duration() + 5) < int(GraphicsDecoder.FREQ/self._codec.bd_video.fps)
                 if wds_doable and not nodes[i].parent.is_custom_dts():
                     uds = self._codec.get_undisplay_wds_ds(w_pts, nodes[i].parent.dts(), displaysets[-1].pcs.palette_id)
@@ -964,7 +971,7 @@ class EpochEncoderEngine:
             DSNode.apply_pts_dts(nds, nodes[i].set_pts_dts_sc(nds, self._codec.buffer))
             displaysets.append(nds)
 
-            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(len(bytes(x)) for x in o_ods)}, L(ODS)={len(o_ods)}, f: {i}->{k}")
+            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(len(bytes(x)) for x in o_ods)}, L(ODS)={len(o_ods)}, n_id: {i}->{k}, e_id: {nodes[i].idx}->{nodes[k].idx}")
 
             if len(pals[0]) > 1:
                 # Pad palette chains
@@ -991,7 +998,7 @@ class EpochEncoderEngine:
                         displaysets.append(uds)
 
                     if nodes[z].flag == -1:
-                        logger.debug(f"Skipped discarded event at PTS={self.ectx.events[z].inTC}={c_pts}.")
+                        logger.debug(f"Skipped discarded event at PTS={nodes[z].tc_pts}={c_pts}.")
                         continue
 
                     has_new_ods = nodes[z].flag == 1
@@ -1042,7 +1049,7 @@ class EpochEncoderEngine:
         #We can't undraw the screen due to delta PTS constraint, we clear it with a palette update and will undraw optionally at +N frames
         if not perform_wds_end:
             logger.debug(f"Performing palette wipe (delta PTS too short) at {self.ectx.events[-1].outTC} (end of epoch).")
-            uds = self._codec.get_undisplay_pds_ds(self.ectx.events[-1].outTC.to_pts(), final_node.dts(), [x[1] for x in prev_cobjs_refs], 255)
+            uds = self._codec.get_undisplay_pds_ds(final_node.pts(), final_node.dts(), [x[1] for x in prev_cobjs_refs], 255)
             DSNode.apply_pts_dts(uds, final_node.set_pts_dts_sc(uds, self._codec.buffer))
             displaysets.append(uds)
 
@@ -1119,38 +1126,40 @@ class EpochEncoderEngine:
             if (event.inTC.frames - top) > 0:
                 nodes.append(DSNode([], self.ectx.windows, self.ectx.events[ne-1].outTC, is_palette_update=True))
                 nodes[-1].idx = nodes[-2].idx
+
+            is_new = [False] * len(self.ectx.windows)
+            for wid, _ in enumerate(self.ectx.windows):
+                is_new[wid] = False
+                if objs[wid] is not None and not objs[wid].is_active(ne):
+                    objs[wid] = None
+                if len(pgobjs_proc[wid]) and not objs[wid] and pgobjs_proc[wid][0].is_active(ne):
+                    objs[wid] = pgobjs_proc[wid].pop(0)
+                    is_new[wid] = True
+
             for inTC, outTC in zip(chain([event.inTC], event.repeated_inTC), chain(event.repeated_inTC, [event.outTC])):
                 toc = outTC.frames
-
-                is_new = [False] * len(self.ectx.windows)
-                for wid, _ in enumerate(self.ectx.windows):
-                    is_new[wid] = False
-                    if objs[wid] is not None and not objs[wid].is_active(ne):
-                        objs[wid] = None
-                    if len(pgobjs_proc[wid]) and not objs[wid] and pgobjs_proc[wid][0].is_active(ne):
-                        objs[wid] = pgobjs_proc[wid].pop(0)
-                        is_new[wid] = True
-
-                nodes.append(DSNode(objs.copy(), self.ectx.windows, inTC, new_mask=is_new))
+                nodes.append(DSNode(objs.copy(), self.ectx.windows, inTC, new_mask=is_new.copy()))
                 nodes[-1].idx = ne
             top = toc
         return nodes
     ####
 
     def roll_nodes(self, nodes) -> tuple[list, list, list, list]:
-        k = 0
         r_nodes = []
-        for ne, event in enumerate(self.ectx.events):
+        prev_idx = -1
+        parent = None
+        for nid, node in enumerate(nodes):
+            if len(node.objects) == 0:
+                assert parent is None
+                if node.flag >= 0:
+                    parent = node
+                continue
+            node.parent = parent
             parent = None
-            if len(nodes[k].objects) == 0:
-                if nodes[k].flag >= 0:
-                    parent = nodes[k]
-                assert nodes[k].tc_pts == self.ectx.events[ne-1].outTC
-                k += 1
-            nodes[k].parent = parent
-            r_nodes.append(nodes[k])
-            k += 1
-        assert k == len(nodes)
+            r_nodes.append(node)
+            assert r_nodes[-1].idx >= prev_idx
+            prev_idx = r_nodes[-1].idx
+        assert nodes[-1].idx == r_nodes[-1].idx == len(self.ectx.events) - 1
         return r_nodes
     ####
 ####

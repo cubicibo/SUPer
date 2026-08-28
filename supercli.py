@@ -137,7 +137,7 @@ def main():
         exit_msg("Incorrect number of threads, aborting.")
 
     if 0 < args.redraw_period < 1.0:
-        logger.warning("Meaningless redraw_period, setting to zero.")
+        logger.warning("Meaningless redraw_period, setting to zero (disabled).")
         args.redraw_period = 0
 
     if args.prefer_normal and not args.allow_normal:

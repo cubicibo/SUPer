@@ -53,6 +53,8 @@ class TC(Timecode):
     def __init__(self, fps, *args, **kwargs) -> None:
         if not isinstance(fps, Framerate):
             fps = Framerate(fps)
+        if kwargs.get('force_non_drop_frame', None) is None:
+            kwargs['force_non_drop_frame'] = True
         super().__init__(fps.value, *args, **kwargs)
         self.fractional_fps = fps
 
