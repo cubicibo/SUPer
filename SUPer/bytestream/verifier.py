@@ -244,8 +244,8 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                 if not different:
                     is_dupe = ds.pcs.composition_state == PCS.CompositionState.ACQUISITION
                     is_dupe = is_dupe and last_ds.pcs.composition_state in [PCS.CompositionState.ACQUISITION, PCS.CompositionState.EPOCH_START]
-                    is_dupe = is_dupe and ds.pcs.get_payload()[:10] == last_ds.pcs.get_payload()[:10]
-                    is_dupe = is_dupe and ds.pcs.get_payload()[11:] == last_ds.pcs.get_payload()[11:]
+                    is_dupe = is_dupe and ds.pcs.get_payload()[:7] == last_ds.pcs.get_payload()[:7]
+                    is_dupe = is_dupe and ds.pcs.get_payload()[8:] == last_ds.pcs.get_payload()[8:]
             last_ds = ds
 
             current_ods_processed = None

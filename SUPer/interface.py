@@ -260,14 +260,14 @@ class BDNEncoder:
     def encode(self) -> tuple[bool, list[Epoch]]:
         bd_video = self._prepare()
 
-        if (threaded := self._threads > 1):
+        if (self._threads > 1):
             epochs = self._convert_mt(bd_video)
         else:
             epochs = self._convert_single(bd_video)
 
         # with multithreading we have non deterministic generation order of DisplaySets
         # so fix the composition number here
-        self.fix_composition_id(epochs, replace=threaded)
+        self.assert_composition_number_across_epochs(epochs)
 
         is_valid = self.test_output(bd_video, epochs)
         return EncodeResult(epochs, is_valid)
@@ -304,25 +304,53 @@ class BDNEncoder:
         return compliant
     ####
 
-    def fix_composition_id(self, epochs: list[Epoch], replace: bool = False) -> None:
-        composition_num = 0
-        for epoch in epochs:
-            last_composition_num = epoch[0].pcs.composition_number-1
-            composition_num_in_epoch = 0
-            for kd, ds in enumerate(epoch):
-                if not replace or kd > 0:
-                    diff = (ds.pcs.composition_number - last_composition_num) & 0xFFFF
-                    assert 0 <= diff <= 1
-                else:
-                    diff = 1 # always true for epoch start
-                last_composition_num = ds.pcs.composition_number
-                if replace:
-                    ds.pcs.composition_number = (composition_num + composition_num_in_epoch) & 0xFFFF
-                else:
-                    assert ds.pcs.composition_number == (composition_num + composition_num_in_epoch) & 0xFFFF
+    @staticmethod
+    def _assert_composition_number_in_epoch(epoch: Epoch, prev_composition_number: int | None) -> int:
+        if prev_composition_number is None:
+            prev_composition_number = (epoch[0].pcs.composition_number - 1) & 0xFFFF
+        prev_hashes = None
+        for ds in epoch:
+            hashes_ds = [hash(seg) for seg in ds[1:]]
+            new_pcs = ds.pcs.copy()
+            new_pcs.composition_state = new_pcs.CompositionState.ACQUISITION
+            hashes_ds.append(hash(new_pcs))
+            single_increment = (prev_composition_number + 1) & 0xFFFF == ds.pcs.composition_number
+            if hashes_ds != prev_hashes:
+                assert single_increment, f"{prev_composition_number}, {ds.pcs.composition_number}, {hashes_ds != prev_hashes}"
+            else:
+                assert single_increment or prev_composition_number == ds.pcs.composition_number
+            prev_composition_number = ds.pcs.composition_number
+            prev_hashes = hashes_ds
+        return prev_composition_number
 
-                composition_num_in_epoch += diff
-            composition_num += composition_num_in_epoch
+    @staticmethod
+    def _correct_composition_number_in_epoch(epoch: Epoch, absolute_composition_number: int) -> int:
+        prev_composition_number = (epoch[0].pcs.composition_number - 1) & 0xFFFF
+        for k, ds in enumerate(epoch):
+            diff = (ds.pcs.composition_number - prev_composition_number) & 0xFFFF
+            if diff == 0:
+                assert k > 0 and tuple(hash(s) for s in ds[1:]) == tuple(hash(s) for s in epoch[k-1][1:])
+                prev_pcs = epoch[k-1].pcs.copy()
+                prev_pcs.composition_state = prev_pcs.CompositionState.ACQUISITION
+                assert hash(prev_pcs) == hash(ds.pcs)
+            prev_composition_number = ds.pcs.composition_number
+            absolute_composition_number = (absolute_composition_number + diff) & 0xFFFF
+            ds.pcs.composition_number = absolute_composition_number
+        return absolute_composition_number
+
+    def assert_composition_number_across_epochs(self, epochs: list[Epoch], prev_composition_number: int | None = None):
+        if prev_composition_number is None:
+            prev_composition_number = -1
+
+        if self._threads == 1:
+            f_check_composition_num = self.__class__._assert_composition_number_in_epoch
+        else:
+            # the composition number is fixed by the parent of the workers, as threads do not generate the stream
+            # in a deterministic order
+            f_check_composition_num = self.__class__._correct_composition_number_in_epoch
+        for epoch in epochs:
+            prev_composition_number = f_check_composition_num(epoch, prev_composition_number)
+        ####
     ####
 
     def write_output(self, output_file: Path | str, encode_result: EncodeResult) -> None:

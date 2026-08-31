@@ -195,8 +195,11 @@ class DSNode:
                 else:
                     # Allocate a buffer slot for this object
                     assert buffer.allocate_indexed(object_shape, ods.object_id) is True, "Critical error: object buffer overflow."
-                ddurs[ods.object_id] = int(np.ceil(ods.height*ods.width*GraphicsDecoder.FREQ/GraphicsDecoder.RD))
+                    slot = buffer.get_indexed(ods.object_id)
+                # make sure the encoder has reserved this object ID up to PTS.
+                assert not slot.is_available_at(ds.pcs.pts)
 
+                ddurs[ods.object_id] = int(np.ceil(ods.height*ods.width*GraphicsDecoder.FREQ/GraphicsDecoder.RD))
         t_decoding = 0
         decode_duration = 0
         wipe_duration = self.wipe_duration()
@@ -362,8 +365,86 @@ class EpochEncoderEngine:
         cls = __class__
         if allow_overlaps:
             cls.align_palette_updates(nodes)
+        self.insert_acquisition_after_palette_effects(nodes, pts_delta)
         cls.verify_palette_usage(nodes, allow_overlaps)
         return cboxes
+
+    def insert_acquisition_after_palette_effects(self, nodes: list[DSNode], pts_delta: int) -> None:
+        insert_acqs = self.kwargs.get('insert_acquisitions', 0)
+        if insert_acqs == 0:
+            return
+
+        insert_points: list[tuple[DSNode, DSNode]] = []
+        zn = next(idx for idx, node in enumerate(nodes) if node.state == PCS.CompositionState.EPOCH_START)
+
+        while zn < len(nodes):
+            node = nodes[zn]
+            assert node.state > 0
+            palette_effect_length = 0
+
+            ix_next_acq_node = zn + 1
+            last_node, last_node_with_objects = None, None
+            do_count = True
+            while ix_next_acq_node < len(nodes):
+                node_ahead = nodes[ix_next_acq_node]
+                if node_ahead.state > 0:
+                    if node_ahead.flag >= 0:
+                        break
+                    do_count = False
+                elif node_ahead.flag >= 0 and do_count:
+                    if len(node_ahead.objects) > 0:
+                        palette_effect_length += 1
+                        last_node_with_objects = node_ahead
+                    last_node = node_ahead
+                ix_next_acq_node += 1
+            ####
+
+            zn = ix_next_acq_node
+            if palette_effect_length < insert_acqs:
+                continue
+
+            min_frame_pts = last_node_with_objects.tc_pts.frames
+            if last_node_with_objects != last_node:
+                max_dts = last_node.dts()
+                max_frame_pts = last_node.tc_pts.frames
+            elif ix_next_acq_node < len(nodes):
+                max_dts = nodes[ix_next_acq_node].dts()
+                max_frame_pts = nodes[ix_next_acq_node].tc_pts.frames
+            else:
+                dummy_final_node = DSNode([], self.ectx.windows, self.ectx.events[-1].outTC, is_palette_update=True)
+                max_dts = dummy_final_node.dts() - 1
+                max_frame_pts = dummy_final_node.tc_pts.frames
+
+            new_node = last_node_with_objects.copy()
+            new_node.partial = False
+            new_node.is_palette_update = False
+            new_node.state = PCS.CompositionState.ACQUISITION
+
+            min_dts = last_node_with_objects.dts_end() + 1
+            min_dts_delta = new_node.dts() - min_dts
+            if min_dts_delta <= 0:
+                min_frames_count_for_decoding = int(np.ceil(new_node.tc_pts.fractional_fps * (1 + abs(min_dts_delta))/(GraphicsDecoder.FREQ)))
+            else:
+                min_frames_count_for_decoding = 0
+            min_frame_count_for_composition = int(np.ceil(new_node.tc_pts.fractional_fps * (2 + pts_delta)/(GraphicsDecoder.FREQ)))
+
+            min_frame_pts += max(min_frame_count_for_composition, min_frames_count_for_decoding)
+            max_frame_pts -= min_frame_count_for_composition
+
+            new_node.tc_pts = TC(new_node.tc_pts.fractional_fps, frames=min_frame_pts)
+
+            if new_node.dts_end() < max_dts and min_frame_pts <= max_frame_pts and new_node.dts() > min_dts:
+                duration_frac = (max_frame_pts + min_frame_count_for_composition - new_node.tc_pts.frames)
+                duration_frac /= new_node.tc_pts.fractional_fps
+                if duration_frac*10 >= 1:
+                    logger.debug(f"Injecting an acquisition at {new_node.tc_pts} after a palette effect.")
+                    insert_points.append((last_node_with_objects, new_node))
+        ####
+        for reference, new_node in insert_points:
+            new_node.idx = reference.idx
+            ix = nodes.index(reference) + 1
+            nodes[ix:ix] = [new_node]
+    ####
 
     def align_palette_updates(
         nodes: list[DSNode],
@@ -915,6 +996,8 @@ class EpochEncoderEngine:
         perform_wds_end = (self.ectx.events[-1].outTC.frames - self.ectx.events[-1].inTC.frames)
         perform_wds_end = (perform_wds_end*GraphicsDecoder.FREQ / self._codec.bd_video.fps) >= np.ceil(final_node.write_duration() + 10)
 
+        last_acquisition_displayset = None
+
         #Generate datastream according to all assets
         while i < n_actions:
             if nodes[i].parent is not None:
@@ -948,32 +1031,52 @@ class EpochEncoderEngine:
             assert k > i
 
             c_pts = nodes[i].tc_pts.to_pts()
+            c_dts = nodes[i].dts()
+
             pgobs_items = get_obj(nodes[i].idx, pgobjs).items()
             has_two_objs = 0
             for _, pgo in pgobs_items:
                 if __class__._object_is_relevant(pgo, nodes, slice(i, k)):
                     has_two_objs += 1
 
+            # A Normal Case display update conveys the difference, so there are two objects at some point in the chain
+            has_two_objs = has_two_objs > 1 or normal_case_refresh
+
             # Acquisition: palettes are flushed
             self._codec.flush()
 
-            #Normal case refresh implies we are refreshing one object out of two displayed.
-            has_two_objs = has_two_objs > 1 or normal_case_refresh
-            r = self._encode_composition_objects(i, k, pgobs_items, nodes, has_two_objs, c_pts, normal_case_refresh)
-            cobjs, pals, o_ods, cobjs_ref = r
+            if last_acquisition_displayset is not None and nodes[i].idx == nodes[i-1].idx and k-i == 1:
+                # overwrite the state because we could have copied the epoch start PCS.
+                # the shifting done with c_pts is not sufficient, so we recompute the PTS and DTS unconditionally.
+                nds = last_acquisition_displayset.copy(c_pts)
+                nds.pcs.composition_state = nodes[i].state
 
-            cumulated_palette = pals[0][0] | pals[1][0]
-            pds = self._codec.register_palette(c_pts, nodes[i].dts(), cumulated_palette)
-            pcs = self._codec.register_composition(c_pts, nodes[i].dts(), nodes[i].state, pds.palette_id, False, cobjs)
-            wds = self._codec.get_window_definition_segment(c_pts, nodes[i].dts())
+                for ods in filter(lambda o: o.flag & o.DataFlag.FIRST, nds.ods):
+                    assert self._codec.update_object_reservation(ods.object_id, c_pts, c_dts)
+                assert self._codec.update_palette_reservation(nds.pcs.palette_id, c_pts, c_dts)
+                pals = [[None]]
+                logger.debug(f"Repeated acquisiton: PTS={nodes[i].tc_pts}={c_pts}, comp_num={nds.pcs.composition_number}")
+            else:
+                r = self._encode_composition_objects(i, k, pgobs_items, nodes, has_two_objs, c_pts, normal_case_refresh)
+                cobjs, pals, o_ods, cobjs_ref = r
 
-            nds = DisplaySet([pcs, wds, pds] + o_ods + [END(dts=c_pts, pts=c_pts)])
+                cumulated_palette = pals[0][0] | pals[1][0]
+                pds = self._codec.register_palette(c_pts, c_dts, cumulated_palette)
+                pcs = self._codec.register_composition(c_pts, c_dts, nodes[i].state, pds.palette_id, False, cobjs)
+                wds = self._codec.get_window_definition_segment(c_pts, c_dts)
+
+                nds = DisplaySet([pcs, wds, pds] + o_ods + [END(dts=c_pts, pts=c_pts)])
+
             DSNode.apply_pts_dts(nds, nodes[i].set_pts_dts_sc(nds, self._codec.buffer))
             displaysets.append(nds)
 
-            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(len(bytes(x)) for x in o_ods)}, L(ODS)={len(o_ods)}, n_id: {i}->{k}, e_id: {nodes[i].idx}->{nodes[k].idx}")
+            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(len(bytes(x)) for x in o_ods)}, L(ODS)={len(o_ods)}, n={i}->{k}, e={nodes[i].idx}->{nodes[k].idx}")
 
-            if len(pals[0]) > 1:
+            # This Display Set is followed by another acquisition
+            if len(pals[0]) == 1:
+                last_acquisition_displayset = nds
+            else:
+                last_acquisition_displayset = None
                 # Pad palette chains
                 if not normal_case_refresh:
                     zip_length = max(map(len, pals))
@@ -986,6 +1089,7 @@ class EpochEncoderEngine:
 
                 for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
                     c_pts = nodes[z].tc_pts.to_pts()
+                    c_dts = nodes[z].dts()
                     assert nodes[z].state == PCS.CompositionState.NORMAL_CASE
 
                     cumulated_palette |= (p1 | p2)
@@ -1025,15 +1129,15 @@ class EpochEncoderEngine:
                     pds = self._codec.register_palette(c_pts, nodes[z].dts(), p_write, force=True)
                     if has_new_ods:
                         pcs = self._codec.register_composition(c_pts, nodes[z].dts(), nodes[z].state, pds.palette_id, False, cobjs)
-                        wds_upd = [self._codec.get_window_definition_segment(c_pts, nodes[z].dts())]
+                        wds_upd = [self._codec.get_window_definition_segment(c_pts, c_dts)]
                         ods_upd = o_ods
                     else:
-                        pcs = self._codec.register_composition(c_pts, nodes[z].dts(), nodes[z].state, pds.palette_id, True, cobjs)
+                        pcs = self._codec.register_composition(c_pts, c_dts, nodes[z].state, pds.palette_id, True, cobjs)
                         wds_upd, ods_upd = [], []
                         for cobj in cobjs:
                             self._codec.update_object_reservation(cobj.object_id, c_pts)
                     pds = [] if pds is None else [pds]
-                    nds = DisplaySet([pcs] + wds_upd + pds + ods_upd +[END(dts=c_pts, pts=c_pts)])
+                    nds = DisplaySet([pcs] + wds_upd + pds + ods_upd +[END(dts=c_dts, pts=c_pts)])
                     DSNode.apply_pts_dts(nds, nodes[z].set_pts_dts_sc(nds, self._codec.buffer))
                     displaysets.append(nds)
 

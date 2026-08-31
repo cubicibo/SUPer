@@ -92,6 +92,9 @@ class PaletteEntry:
     def __bytes__(self) -> bytes:
         return bytes([self.Y, self.Cr, self.Cb, self.A])
 
+    def copy(self):
+        return self.__class__(self.Y, self.Cr, self.Cb, self.A)
+
 class Palette(dict):
     def __bytes__(self) -> bytes:
         bs = bytearray()
@@ -103,7 +106,10 @@ class Palette(dict):
     def offset(self, offset: int) -> Self:
         if len(self):
             assert min(self) + offset >= 0 and max(self) + offset < 256
-        return __class__((k+offset, v) for k, v in self.items())
+        return self.__class__((k+offset, v) for k, v in self.items())
+
+    def copy(self):
+        return self.__class__((k, v.copy()) for k, v in self.items())
 
     def to_rgba_array(self, matrix: Matrix) -> np.ndarray[tuple[int, int], np.uint8]:
         ycbcra = np.zeros((256, 4), np.int32)
