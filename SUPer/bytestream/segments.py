@@ -19,11 +19,11 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 import struct
 from abc import ABC, abstractmethod
 from enum import IntEnum, IntFlag
-from typing import Self
+from typing import Self, Any
 
 from ..display.palette import Palette, PaletteEntry
 from ..internals import _classproperty, _Masks
-
+#%%
 
 class PGSegmentType(IntEnum):
     PDS = 0x14
@@ -32,10 +32,32 @@ class PGSegmentType(IntEnum):
     WDS = 0x17
     END = 0x80
 
-class GraphicSegment(ABC):
+class _SlotSegmentData:
+    def _get_slots_and_vals(self) -> dict[str, Any]:
+        slots = {}
+        for cls in reversed(self.__class__.__mro__):
+            if (fields := getattr(cls, '__slots__', ())):
+                slots.update({k: getattr(self, k) for k in fields})
+        return slots
+
+    def __repr__(self) -> str:
+        slot_str = ''
+        for k, v in self._get_slots_and_vals().items():
+            slot_str += f"{k}={v}, "
+        return f"{self.__class__.__name__}({slot_str[:-2]})"        
+
+    def copy(self) -> object:
+        data = self._get_slots_and_vals()
+        for k, v in data.items():
+            if (f_copy := getattr(v, 'copy', None)) and callable(f_copy):
+                data[k] = f_copy()
+        return self.__class__(**data)
+
+class GraphicSegment(ABC, _SlotSegmentData):
     __slots__ = 'pts', 'dts'
 
     def __init__(self, pts: int, dts: int):
+        assert pts >= dts, f"DTS cannot exceed the PTS, got pts={pts} <  dts={dts}"
         self.pts = pts
         self.dts = dts
 
@@ -52,17 +74,14 @@ class GraphicSegment(ABC):
     def get_payload(self) -> bytes:
         ...
 
+    def __hash__(self) -> int:
+        return hash(bytes(self))
+
     def __bytes__(self) -> bytes:
         payload = self.get_payload()
         return struct.pack(">BH",self.type, len(payload) & _Masks.W16) + payload
 
-    def __repr__(self) -> str:
-        slot_str = ''
-        for slot in self.__slots__:
-            slot_str += slot + "=" + str(object.__getattribute__(self, slot)) + ", "
-        return f"{self.__class__.__name__}(" + slot_str[:-2] + ")"
-
-class CompositionObject:
+class CompositionObject(_SlotSegmentData):
     __slots__ = ('object_id', 'window_id', 'cropped_flag', 'forced_flag', 'h_pos', 'v_pos', 'crop_obj_x', 'crop_obj_y', 'crop_obj_w', 'crop_obj_h')
 
     def __init__(self, object_id: int, window_id: int, h_pos: int, v_pos: int,
@@ -106,12 +125,6 @@ class CompositionObject:
             cls(object_id, window_id, h_pos, v_pos, cropped_flag, forced_flag,
                 crop_obj_x, crop_obj_y, crop_obj_w, crop_obj_h)
         return cls(object_id, window_id, h_pos, v_pos, forced_flag=forced_flag)
-
-    def __repr__(self) -> str:
-        slot_str = ''
-        for slot in self.__slots__:
-            slot_str += slot + "=" + str(object.__getattribute__(self, slot)) + ", "
-        return f"{self.__class__.__name__}(" + slot_str[:-2] + ")"
 
 class PCS(GraphicSegment):
     __slots__ = ('width', 'height', 'framerate_value', 'composition_number',
@@ -180,6 +193,7 @@ class PCS(GraphicSegment):
         return cls(pts, dts, width, height, framerate_value, composition_number,
                    composition_state, palette_update, palette_id, composition_objects)
 
+#%%
 class PDS(GraphicSegment):
     __slots__ = ('palette_id', 'palette_version', 'palette')
 
@@ -210,6 +224,7 @@ class PDS(GraphicSegment):
     def n_entries(self) -> int:
         return len(self.palette)
 
+#%%
 class ODS(GraphicSegment):
     __slots__ = ('object_id', 'object_version', 'flag', 'width', 'height', 'data_len', 'data')
 
@@ -264,15 +279,21 @@ class ODS(GraphicSegment):
 
     def __repr__(self) -> str:
         slot_str = ''
-        for slot in self.__slots__:
-            if slot == 'data': continue
-            slot_str += slot + "=" + str(object.__getattribute__(self, slot)) + ", "
-        return f"{self.__class__.__name__}(" + slot_str[:-2] + ")"
+        for k, v in self._get_slots_and_vals().items():
+            slot_str += f"{k}={v}, "
+        return f"{self.__class__.__name__}({slot_str[:-2]})"
+
+    def __str__(self) -> str:
+        slot_str = ''
+        for k, v in self._get_slots_and_vals().items():
+            if k == 'data': continue
+            slot_str += f"{k}={v}, "
+        return f"{self.__class__.__name__}({slot_str[:-2]})"
 
 class WDS(GraphicSegment):
     __slots__ = ('windows', )
 
-    class WindowDefinition:
+    class WindowDefinition(_SlotSegmentData):
         __slots__ = ('window_id', 'h_pos', 'v_pos', 'width', 'height')
 
         def __init__(self, window_id: int, h_pos: int, v_pos: int, width: int, height: int) -> None:
@@ -288,6 +309,16 @@ class WDS(GraphicSegment):
         @classmethod
         def decode(cls, bs: bytes) -> Self:
             return cls(*struct.unpack(">BHHHH", bs))
+
+        def copy(self):
+            new_wd = {}
+            for slot in self.__slots__:
+                value = object.__getattribute__(self, slot)
+                if (f_copy := value.__getattribute__('copy') is not None) and callable(f_copy):
+                    new_wd[slot] = f_copy()
+                else:
+                    new_wd[slot] = value
+            return self.__class__(**new_wd)
 
         def __repr__(self) -> str:
             slot_str = ''
@@ -334,11 +365,17 @@ class END(GraphicSegment):
 
 class SegmentParser:
     @classmethod
-    def from_pg_segment(cls, bs: bytes) -> GraphicSegment:
+    def from_pg_segment(cls, bs: bytes, *, fix_dts_at_start: bool = True) -> GraphicSegment:
         assert len(bs) >= 13
         assert b'PG' == bs[:2]
 
         pts, dts, type_, length = struct.unpack(">IIBH", bs[2:13])
+        if fix_dts_at_start:
+            if type_ != PGSegmentType.PCS and pts > _Masks.W32 - 90000:
+                pts -= _Masks.W32
+            if (dts > pts*4e4):
+                dts -= _Masks.W32
+
         assert length + 13 >= len(bs)
         # caller can deduce
         bs = bs[:length+13]

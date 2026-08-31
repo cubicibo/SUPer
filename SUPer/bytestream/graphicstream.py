@@ -35,6 +35,20 @@ class DisplaySet:
     def __len__(self) -> int:
         return len(self.segments)
 
+    def copy(self, new_pcs_pts: int | None):
+        segments = [self._pcs.copy()]
+        if self._wds:
+            segments.append(self._wds.copy())
+        segments.extend(p.copy() for p in self._pds)
+        segments.extend(o.copy() for o in self._ods)
+        segments.append(self._end.copy())
+        if new_pcs_pts is not None:
+            delta = new_pcs_pts - segments[0].pts
+            for segment in segments:
+                segment.pts += delta
+                segment.dts += delta
+        return self.__class__(segments)
+
     @property
     def pcs(self) -> PCS:
         return self._pcs

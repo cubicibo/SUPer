@@ -41,6 +41,7 @@ class SUPReader:
         with open_stream() as f:
             buff = bytearray()
             can_parse = True
+            cnt = 0
             while True:
                 if len(buff) < 13 or not can_parse:
                     # no new data, nothing we can do
@@ -51,11 +52,8 @@ class SUPReader:
                 assert b'PG' == buff[:2]
                 segment_length = (buff[12] | (buff[11] << 8)) + 13
                 if len(buff) >= segment_length:
-                    segment = SegmentParser.from_pg_segment(buff[:segment_length])
-                    #handle wrap around
-                    if segment.dts > segment.pts * 4e4:
-                        segment.dts -= _Masks.W32
-                    yield segment
+                    yield SegmentParser.from_pg_segment(buff[:segment_length], fix_dts_at_start=cnt < 10)
+                    cnt += 1
                     buff = buff[segment_length:]
                 else:
                     can_parse = False
