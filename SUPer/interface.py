@@ -310,7 +310,7 @@ class BDNEncoder:
             prev_composition_number = (epoch[0].pcs.composition_number - 1) & 0xFFFF
         prev_hashes = None
         for ds in epoch:
-            hashes_ds = list(hash(seg) for seg in ds[1:])
+            hashes_ds = [hash(seg) for seg in ds[1:]]
             new_pcs = ds.pcs.copy()
             new_pcs.composition_state = new_pcs.CompositionState.ACQUISITION
             hashes_ds.append(hash(new_pcs))

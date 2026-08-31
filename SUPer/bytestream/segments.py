@@ -19,10 +19,11 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 import struct
 from abc import ABC, abstractmethod
 from enum import IntEnum, IntFlag
-from typing import Self, Any
+from typing import Any, Self
 
 from ..display.palette import Palette, PaletteEntry
 from ..internals import _classproperty, _Masks
+
 #%%
 
 class PGSegmentType(IntEnum):

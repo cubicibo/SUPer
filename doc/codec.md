@@ -5,68 +5,69 @@ The encoding engine is designed based on the decoder model constraints. To under
 
 Here is a scheme of the HDMV PGS decoder model:
 ```
-                                                                                                    Video plane                    
-                                                                                                    ─────────────────────┐         
-                                                                                                                         │         
-                                                                                                                         │         
-                                                                                                                         │         
-                │                                                                                                        │         
-                │ Decoder                                                       ┌───────────────┐                        │         
-                │                                                               │ Shadow plane  │                        │         
-                │                                                            ┌──┴────────────┐  │                        │         
-                │                                                            │ Graphic plane │  │                        │         
-┌─────────────┐ │    ┌────────────┐   ┌──────────────┐Rd ┌───────────────┐Rc │               │  │      ┌───────┐         ▼         
-│  Transport  ├─────►│  RX Buffer ├──►│   Graphics   │──►│ Object buffer ├──►│               │  │      │       │                Output   
-│Packet buffer│ │    │   1  MiB   │   │    Decoder   │   │    4  MiB     │   │               │  │─────►│ 8-bit ├────► Blend  ─────►
-└─────────────┘ │    └────────────┘   └───────┬──────┘   └───────▲───────┘   │               │  │      │ CLUT  │       planes      
-                │                             │                  │           │               ├──┘      │       │                   
-                │                      ┌──────▼───────┐   ┌──────┴──────┐    │               │         └───▲───┘         ▲         
-                │                      │ Composition  │   │ Composition │    └───────▲───────┘             │             │         
-                │                      │    Buffer    ├──►│ Controller  │────────────┴─────────────────────┘             │         
-                                       └──────────────┘   └─────────────┘                                                │         
-                                                                                                                         │         
-                                                                                                                         │         
-                                                                                                    Interactive plane    │         
-                                                                                                   ──────────────────────┘         
+                                                                                                    Video plane
+                                                                                                    ─────────────────────┐
+                │ Decoder                                                       ┌────────────────┐                       │
+                │                                                               │  Shadow plane  │                       │
+                │                                                            ┌──┴─────────────┐  │                       │
+                │                                                            │ Graphics plane │  │                       │
+┌─────────────┐ │    ┌────────────┐   ┌──────────────┐Rd ┌───────────────┐Rc │                │  │      ┌───────┐        ▼
+│  Transport  ├─────►│  RX Buffer ├──►│   Graphics   │──►│ Object buffer ├──►│                │  │      │       │                Output
+│Packet buffer│ │    │   1  MiB   │   │    Decoder   │   │    4  MiB     │   │                │  │─────►│ 8-bit ├────► Blend  ─────►
+└─────────────┘ │    └────────────┘   └───────┬──────┘   └───────▲───────┘   │                │  │      │ CLUT  │       planes
+                │                             │                  │           │                ├──┘      │       │
+                │                      ┌──────▼───────┐   ┌──────┴──────┐    │                │         └───▲───┘        ▲
+                │                      │ Composition  │   │ Composition │    └───────▲────────┘             │            │
+                │                      │    Buffer    ├──►│ Controller  │────────────┴──────────────────────┘            │
+                                       └──────────────┘   └─────────────┘                                                │
+                                                                                                    Interactive plane    │
+                                                                                                   ──────────────────────┘
 ```
 
-MPEG-TS Transport Packet carry chHDMV Graphics segments are encapsulated in PES packets and carried in one or numerous MPEG-TS Transport Packet. The PES payload of a graphic segment is obtained by combining the MPEG transport packets in the "RX Buffer" (coded data buffer). The Graphics Decoder removes a full segment at once from the RX buffer on its decoding timestamp.
+MPEG-TS Transport Packet carry HDMV Graphics segments are encapsulated in PES packets and carried in one or numerous MPEG-TS Transport Packet. The PES payload of a graphic segment is obtained by combining the MPEG transport packets in the "RX Buffer" (coded data buffer). The Graphics Decoder removes a full segment at once from the RX buffer on its decoding timestamp.
 - Object data are processed by the graphics decoder itself. The decoder decodes the bitmap at the pixel output rate Rd of 16e6 pixels per second.
 - Palette, composition and overlaying informations are conveyed to the composition buffer, and processed by the composition controller.
 
-The composition controller, based on the composition informations (windows, object references) composes each window onto the shadowed graphic plane. Object data is copied from the buffer at the composition rate Rc of 32e6 pixels per second. Whenever the composition is done, and on the presentation timestamp, the controller swaps the graphic and shadow planes and sets the target palette in the Color Look-up Table (CLUT).
+The composition controller, based on the composition informations (windows, object references) composes each window onto the shadowed graphics plane. Object data is copied from the buffer at the composition rate Rc of 32e6 pixels per second. Whenever the composition is done, and on the presentation timestamp, the controller swaps the graphic and shadow planes and sets the target palette in the Color Look-up Table (CLUT).
 
 If the current composition merely specifies a palette update, only the CLUT is updated with the specified palette data: the planes are not swapped.
 
 ### Definition of a Window
-A window is a rectangular area of the graphic plane where objects may be composited to. At most two windows can be defined concurrently.
+A window is a rectangular area of the graphics plane where objects may be composited to. At most two windows can be defined concurrently.
 
 ```
-                                                               
-      ┌───────────────────────────────────────────────────┐    
-      │  Graphic plane                     ┌───────────┐  │    
-      │                                    │ window 1  │  │    
-      │                                    │           │  │    
-      │                                    └───────────┘  │    
-      │                                                   │    
-      │                                                   │    
-      │                                                   │    
-      │                                                   │    
-      │     ┌───────────────────────────────────────┐     │    
-      │     │ window 0                              │     │    
-      │     └───────────────────────────────────────┘     │    
-      └───────────────────────────────────────────────────┘    
-                                                               
+      ┌───────────────────────────────────────────────────┐
+      │  Graphics plane                    ┌───────────┐  │
+      │                                    │ window 1  │  │
+      │                                    │           │  │
+      │                                    └───────────┘  │
+      │                                                   │
+      │                                                   │
+      │                                                   │
+      │                                                   │
+      │     ┌───────────────────────────────────────┐     │
+      │     │ window 0                              │     │
+      │     └───────────────────────────────────────┘     │
+      └───────────────────────────────────────────────────┘
 ```
 Presentation graphics can only be displayed within a given window. Any pixel outside of the windows is not addressable. 
 
 ### Definition of a Display Set
 A display set is a group of graphic segments that defines a single update of the display.
 
+A display set carries up to five different type of segment. Only the first and the last are mandatory. The others are optional and may, or not, be carried in a display set.
+- Exactly one Presentation Composition Segment (PCS): introduces the display context and instructions to the decoder.
+- One Window Definition Segment (WDS): a segment that specifies the window to compose.
+- One or more Object Definition Segment (ODS): carries the RLE bitmap data for decoding.
+- Exactly one END segment, that signals the decoder it has all of the data to achieve the target display update.
+
 ### Definition of an Epoch
 An epoch is a continuous set of graphic segments where presentation of different objects data may be seamless, without visible disruption.
-Within an epoch, the window(s) shall never change, and the buffer allocations must be managed to never exceed a total of 4 MiB.
-An epoch contains one or more display sets.
+Within an epoch, the window(s) shall never change, and the buffer allocations must be managed..
+
+- An epoch contains one or more display sets.
+- The payload of the WDS segment shall never change.
+- The sum of the area of every unique `object_id` introduced in the epoch shall never exceed 4 MiB, and the count of objects 64.
 
 ### Object Buffer
 The Object Buffer operates with a sticky allocation scheme. Incoming data specifies a buffer ID and a target size (bitmap shape). Once a slot is allocated, the allocation remains until the next epoch start. Identically sized bitmaps can re-use prior allocations.
@@ -96,10 +97,10 @@ Up to 64 uniquely identified allocations may exist.
 A 1 MiB buffer to store incoming PES segments. The sum of segments decoded at a given DTS shall never exceed 1 MiB.
 
 ### Graphics Decoder
-An independant processing unit that decodes the Run-Length-Encoded bitmaps and store the output directly in the object data buffer. The Graphics decoder outputs the data to the specified memory slot, based on the "object identifier".
+An independant processing unit that decodes the Run-Length-Encoded bitmaps and stores the output directly in the object data buffer. The Graphics decoder outputs the data to the specified memory slot, based on the "object identifier".
 
 ### Composition Object
-A composition object specifies what to render and how to overlay it onto the graphic plane. It thereby holds references to both the object to display (the object ID), and the target window. The composition object also carries the coordinates of the object.
+A composition object specifies what to render and how to overlay it onto the graphics plane. It thereby holds references to both the object to display (the object ID), and the target window. The composition object also carries the coordinates of the object.
 
 Up to 2 composition objects can be specified per display update.
 - Both composition object can target the same window.
@@ -114,26 +115,26 @@ The Composition Controller operates independently from the Graphics Decoder. How
 At most 8 unique display updates can be buffered in advance.
 
 ```
-                                                                                  ┌─────────────────────────────────────┐  
-                                                                                  │             Graphic Plane           │  
-                                                                                  │                                     │  
-                                 ┌────────────────────────────────┐               │                                     │  
-                     Writing     │                                │               │                                     │  
-                        ┌───────►│ object 0                       │               │                                     │  
- ┌──────────────┐       │        │                                │               │    ┌───────────────────────┐        │  
- │  Graphics    │       │        ┌──────────────┬─────────────────┤   Copying     │    │ window                │        │  
- │     Decoder  ├───────┘        │              │                 │               │    │                       │        │  
- └──────────────┘                │ object 1     │ object 2     ───┼─────┬─────────┼────┼───►                   │        │  
-                                 │              │                 │     │         │    │                       │        │  
-                                 ┌──────────────┴─────────────────┤     │         │    │                       │        │  
-                                 │                                │     │         │    └───────────────────────┘        │  
-                                 │       4 MiB object buffer      │     │         │                                     │  
-                                 └────────────────────────────────┘     │         └─────────────────────────────────────┘  
-                                                                        │                                                    
-                                                             ┌──────────┴─────────┐                                          
-                                                             │  Composition       │                                          
-                                                             │       Controller   │                                          
-                                                             └────────────────────┘                                          
+                                                                                  ┌─────────────────────────────────────┐
+                                                                                  │            Graphics Plane           │
+                                                                                  │                                     │
+                                 ┌────────────────────────────────┐               │                                     │
+                     Writing     │                                │               │                                     │
+                        ┌───────►│ object 0                       │               │                                     │
+ ┌──────────────┐       │        │                                │               │    ┌───────────────────────┐        │
+ │  Graphics    │       │        ┌──────────────┬─────────────────┤   Copying     │    │ window                │        │
+ │     Decoder  ├───────┘        │              │                 │               │    │                       │        │
+ └──────────────┘                │ object 1     │ object 2     ───┼─────┬─────────┼────┼───►                   │        │
+                                 │              │                 │     │         │    │                       │        │
+                                 ┌──────────────┴─────────────────┤     │         │    │                       │        │
+                                 │                                │     │         │    └───────────────────────┘        │
+                                 │       4 MiB object buffer      │     │         │                                     │
+                                 └────────────────────────────────┘     │         └─────────────────────────────────────┘
+                                                                        │
+                                                             ┌──────────┴─────────┐
+                                                             │  Composition       │
+                                                             │       Controller   │
+                                                             └────────────────────┘
 ```
 
 ### Decoder states
@@ -158,6 +159,26 @@ A standard display update that generally only defines the difference from prior 
 ### Decoder timing
 The decoder times its operations on the MPEG-TS 90 kHz clock. A single decoding or composition operation, in MPEG-TS 90 kHz ticks, is the ratio between the number of pixels times the said clock, to the respective rate (Rd or Rc). Any fractional remainder is rounded up. As the decoder and composition controller are independent, their operation are parallelized. The total decoding and overlaying time, whenever dealing with two windows, is thereby not always the sum of all durations.
 
+#### MPEG-TS Memo
+The HDMV PGS decoder consumes PES (Packetized Elementary Streams) packets based on the timestamps carried in the PES header. Each segment type (PCS, WDS, PDS, ODS, END) burden the decoder with a task. The decoding of that task may burden the decoder: the DTS of the new segment shall be larger than some amount. Other segments may merely register an action that shall be triggered at their specified PTS.
+
+##### PTS
+The Presentation Timestamp is not monotonic in a HDMV PG stream, as each segment's PTS carries a different meaning. The PTS timeline of a given segment type is guaranteed to be monotonic nonetheless.
+
+- PCS: gives the presentation timestamp of a change in the display.
+- WDS: gives the deadline at which the decoder must start to compose the graphics plane.
+- PDS: indicates when a palette shall be stored in the decoder.
+- ODS: indicates the time when an object is ready to be accessed in the object buffer.
+- END: merely signals the availability of the decoder.
+
+##### DTS
+The Decoding Timestamp is strictly monotonic in a HDMV PG stream, much like
+- PCS, WDS: gives the time at which a display set starts to enter the decoder.
+- ODS: gives the timestamp at which decoding may start.
+- PDS, END: N/A, instantaneously decoded.
+
+#### General principle
+
 For every incoming display set, the decoder must first clear the display area. This depends on its current state, and the flags in the said display set. The duration to clear the display is denoted $W_d$, and defined as follow:
 
 $$
@@ -166,7 +187,7 @@ $$
 where $N_{pixels}$ is defined as the number of pixels that requires to be erased.
 $$
 N_{pixels} = \begin{cases}
- \text{The graphic plane size} &\text{at the Epoch Start}\\
+ \text{The graphics plane size} &\text{at the Epoch Start}\\
  \sum_{k=0}^{n_{windows}} E(window_k)= \sum_{k=0}^{n_{windows}}\begin{cases}Area(window_{k})&\text{if }window_k\text{ is empty}\\
 0 &\text{else}\end{cases}&\text{else}\\
 \end{cases}
@@ -184,7 +205,7 @@ The composition of a window starts whenever:
 - Decoding of all objects referenced by all of the composition objects targeting the said window has been completed.
 
 $$
-Composition(window_k) = C_i = \begin{cases}
+Composition(window_k) = C_k = \begin{cases}
 \left \lceil{\frac{90000\cdot Area(window_k)}{R_c}}\right \rceil
 &\text{if }window_k\text{ is assigned}\\
 0 &\text{else}\\
@@ -238,9 +259,10 @@ $$
 
 
 ## Encoder
+The encoder is a chain closed-loop units. Each unit performs at least a single pass on the events that compose the epoch. Some blocks may perform numerous passes for optimality.
 
 ### Epochs Definitions
-SUPer performs a two-pass analysis. The process always tries to identify the smallest possible composition area. The code aggressively searches for epochs, as long epochs have drawbacks.
+Two-pass analysis process to identify groups of contiguous events that compose an epoch, given the codec constraints. The purpose is to find the smallest possible composition area, for every epoch. The code aggressively searches for epochs, as long epochs have drawbacks.
 
 The first pass is high-level single-threaded and merely uses the XML metadata. The end goal is to identify groups of events close together. The second pass is refined and multi-threaded. Each thread is assigned a group:
 - The algorithm combines the alpha layer of every event (in reverse order)
@@ -251,27 +273,31 @@ The first pass is high-level single-threaded and merely uses the XML metadata. T
 All epochs definitions are ready when all of the groups have been processed by the threads.
 
 At the end of this process, we have a list of epochs with:
-- A set of events that makes up the epoch
-- One or two windows, which are fixed for the entire epoch (the composition layout)
-- Hard minimum decoding and maximum presentation timestamps that may be used by the encoder to arrange the datastream. 
+- A set of events that makes up the epoch.
+- One or two windows, which are fixed for the entire epoch (the composition layout).
+- Hard minimum decoding and maximum presentation timestamps that may be used by the encoder to further optimise the datastream.
 
 From there on, the encoding process will be epoch to epoch.
 
 ### Object detection
-To detect continuous display of a graphic, or sensibly similar graphics across numerous display updates, the encoder first stacks the displayed content of each window. Based on two SSIM measure of prior presentations grayscale to the current display, the object detector may decide if the new display is a new object, or a continuation of the current one.
+To detect continuous display of a graphic, or sensibly similar graphics across numerous display updates, the object detection logic stacks the displayed content of each window. Based on two SSIM measure of prior grayscale presentations to the current display, the object detector may decide if the new display is a new object, or a continuation of the current one. This process is done in a single pass for all of the windows of the epoch. The output is a minimum list of objects (prospective objects) that should be carried in the datastream to achieve a somewhat sensible output given the input. Each prospective object is associated to a given window.
 
-This process is done for all of the windows of the epoch. The output is a minimum list of objects (prospective objects) that should be carried in the datastream to achieve a somewhat sensible output given the input. Each prospective object is associated to a given window.
+As a future improvement, the process shall be performed a second time for sections of the stream where only one Window is in use, to use two composition objects within the same window.
 
 ### Stream shaping
-Based on the events, a list of display updates ("DSNode") is created. These nodes gets references to the prospective objects that they should have in display.  A node has sufficient datastream context to provide an approximate, or an exact decoding and presentation timestamps.
+Based on the events, a list of display updates ("DSNode") is created. These nodes gets references to the prospective objects that they should have in display. A node has sufficient datastream context to provide an approximate, or an exact decoding and presentation timestamps.
 To avoid buffer management complexities, SUPer sizes every object displayed within a given window to the maximum rectangle in display in that window within the epoch. Given that fixed sized, the best object placement is determined to minimize the number of forced display refreshes. The rest of the shaping depends on the user settings.
 By that point, each node returns exact timestamps:
 - Time at which the decoding starts.
 - Time at which the decoding ends.
 - Time at which the node shall be displayed.
 
+Stream shaping is a multi-pass process, where the datastream is iteratively built given the detected objects, the "buffer slots" and the events timing:
+- Find all key display updates.
+- Amend the list of display updates based on the specified user settings and the events timeline.
+
 #### Events filtering
-Given the exact decoding timestamps (start & end), short-duration nodes that prevents the display of long-standing ones are dropped to achieve a strictly monotonic decoding timeline. Concurrently, the encoder tries to see if a node may comply with the decoding timeline if it is defined as a difference from the prior displays.
+Given the exact decoding timestamps (start & end), short-duration nodes that prevents the display of long-standing ones are dropped to achieve a strictly monotonic decoding timeline. Concurrently, the encoder tries to see if a node may comply with the decoding timeline if it is defined as a difference from the prior displays. Filtering the timeline is done via backtracking and a variable sized window that does both lookahead and retrospection. The last step is to perform psychovisual optimisations based on the encoded timeline of events.
 
 To meet the decoding constraints, the encoder may shift the decoding timestamps of a few display set
 - Display sets with compressed bitmaps can only be decoded earlier than intended.
@@ -281,7 +307,7 @@ Each node has definitive timestamps, composition state, and objects at the end o
 
 #### Encoding
 The bytestream of an epoch is generated in two nested for loop:
-- The primary loop generates the Acquisition Point display sets.
+- The primary loop generates the Acquisition Point display sets (or Epoch Start for the first Display Set)
 - The inner loop generates the Normal Case display sets that follows, those that define the difference from a base display.
 
 While encoding, a dummy decoder with resources is simulated. Each referenced element (buffer slots, palettes) that shall be reserved for a period of time is obtained through that dummy model. If the preceeding steps were done incorrectly, the encoder would run out of resources and the bytestream generation would fail. The encoding step is thereby self-verifying. 
