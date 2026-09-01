@@ -366,7 +366,7 @@ class EpochEncoderEngine:
         if allow_overlaps:
             cls.align_palette_updates(nodes)
         self.insert_acquisition_after_palette_effects(nodes, pts_delta)
-        cls.verify_palette_usage(nodes, allow_overlaps)
+        cls.assert_planned_stream(nodes, allow_overlaps)
         return cboxes
 
     def insert_acquisition_after_palette_effects(self, nodes: list[DSNode], pts_delta: int) -> None:
@@ -419,7 +419,9 @@ class EpochEncoderEngine:
             new_node.partial = False
             new_node.is_palette_update = False
             new_node.state = PCS.CompositionState.ACQUISITION
-
+            new_node.objects = [o if (o is not None and o.is_visible(new_node.idx)) else None for o in last_node_with_objects.objects]
+            if len(new_node.objects) == 0:
+                continue
             min_dts = last_node_with_objects.dts_end() + 1
             min_dts_delta = new_node.dts() - min_dts
             if min_dts_delta <= 0:
@@ -441,7 +443,6 @@ class EpochEncoderEngine:
                     insert_points.append((last_node_with_objects, new_node))
         ####
         for reference, new_node in insert_points:
-            new_node.idx = reference.idx
             ix = nodes.index(reference) + 1
             nodes[ix:ix] = [new_node]
     ####
@@ -754,7 +755,7 @@ class EpochEncoderEngine:
     ####filter_events
 
     @staticmethod
-    def verify_palette_usage(
+    def assert_planned_stream(
          nodes: list[DSNode],
          allow_overlaps: bool = False
     ) -> None:
@@ -1017,7 +1018,7 @@ class EpochEncoderEngine:
                 displaysets.append(uds)
 
             if nodes[i].flag == -1:
-                logger.debug(f"Skipping discarded event at PTS={self.events[nodes[i].idx].inTC}")
+                logger.debug(f"Skipping discarded event at PTS={nodes[i].tc_pts}")
                 i+=1
                 continue
 
@@ -1054,8 +1055,7 @@ class EpochEncoderEngine:
                 for ods in filter(lambda o: o.flag & o.DataFlag.FIRST, nds.ods):
                     assert self._codec.update_object_reservation(ods.object_id, c_pts, c_dts)
                 assert self._codec.update_palette_reservation(nds.pcs.palette_id, c_pts, c_dts)
-                pals = [[None]]
-                logger.debug(f"Repeated acquisiton: PTS={nodes[i].tc_pts}={c_pts}, comp_num={nds.pcs.composition_number}")
+                pals = ((),)
             else:
                 r = self._encode_composition_objects(i, k, pgobs_items, nodes, has_two_objs, c_pts, normal_case_refresh)
                 cobjs, pals, o_ods, cobjs_ref = r
@@ -1066,16 +1066,15 @@ class EpochEncoderEngine:
                 wds = self._codec.get_window_definition_segment(c_pts, c_dts)
 
                 nds = DisplaySet([pcs, wds, pds] + o_ods + [END(dts=c_pts, pts=c_pts)])
+                last_acquisition_displayset = nds
 
             DSNode.apply_pts_dts(nds, nodes[i].set_pts_dts_sc(nds, self._codec.buffer))
             displaysets.append(nds)
 
-            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(len(bytes(x)) for x in o_ods)}, L(ODS)={len(o_ods)}, n={i}->{k}, e={nodes[i].idx}->{nodes[k].idx}")
+            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={has_two_objs}, NC={normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(len(bytes(x)) for x in o_ods)}, L(ODS)={len(o_ods)}, n={i}->{k}, e={nodes[i].idx}->{nodes[k].idx}, comp_num={nds.pcs.composition_number}")
 
-            # This Display Set is followed by another acquisition
-            if len(pals[0]) == 1:
-                last_acquisition_displayset = nds
-            else:
+            # This Display Set is followed by normal cases
+            if len(pals[0]) > 1:
                 last_acquisition_displayset = None
                 # Pad palette chains
                 if not normal_case_refresh:
