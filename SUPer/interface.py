@@ -326,13 +326,14 @@ class BDNEncoder:
     @staticmethod
     def _correct_composition_number_in_epoch(epoch: Epoch, absolute_composition_number: int) -> int:
         prev_composition_number = (epoch[0].pcs.composition_number - 1) & 0xFFFF
+        prev_pcs = None
         for k, ds in enumerate(epoch):
             diff = (ds.pcs.composition_number - prev_composition_number) & 0xFFFF
             if diff == 0:
                 assert k > 0 and tuple(hash(s) for s in ds[1:]) == tuple(hash(s) for s in epoch[k-1][1:])
-                prev_pcs = epoch[k-1].pcs.copy()
                 prev_pcs.composition_state = prev_pcs.CompositionState.ACQUISITION
-                assert hash(prev_pcs) == hash(ds.pcs)
+                assert hash(prev_pcs) == hash(ds.pcs), f"{prev_pcs}, {ds.pcs}"
+            prev_pcs = ds.pcs.copy()
             prev_composition_number = ds.pcs.composition_number
             absolute_composition_number = (absolute_composition_number + diff) & 0xFFFF
             ds.pcs.composition_number = absolute_composition_number
