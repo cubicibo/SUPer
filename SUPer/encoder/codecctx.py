@@ -219,22 +219,25 @@ class PGEpochContext:
             flag = 0
         return ods_list
 
-    def register_palette(self, pts: int, dts: int, palette: Palette, force: bool = False) -> PDS | None:
+    def register_palette(self, pts: int, dts: int, palette: Palette, force: bool = False) -> tuple[PDS | None, int | None]:
         """
-        Return a palette definition segment based on the hypothetical decoder state
+        Return a palette definition segment based on the decoder state.
         """
         palette_id, decoder_palette = self.get_palette_at(dts)
         if self.differentiate_palette:
             palette_diff = decoder_palette.get_difference(palette)
         else:
             palette_diff = palette.copy()
+        # reserve anyway, even if there's no PDS to return
+        decoder_palette.reserve(pts)
         if len(palette_diff) > 0 or force:
-            decoder_palette.reserve(pts)
             decoder_palette.palette |= palette_diff
-            return PDS(pts=pts, dts=dts, palette_id=palette_id,
+            pds = PDS(pts=pts, dts=dts, palette_id=palette_id,
                        palette_version=decoder_palette.get_cast_version(),
                        palette=palette_diff)
-        return None
+        else:
+            pds = None
+        return pds, palette_id
 
     def get_window_definition_segment(self, pts: int, dts: int) -> WDS:
         """
@@ -266,9 +269,10 @@ class PGEpochContext:
 
     def get_undisplay_pds_ds(self, c_pts: int, dts: int, cobjs: list[CompositionObject], n_colors: int) -> DisplaySet:
         palette = Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(n_colors)})
-        pds = self.register_palette(c_pts, dts, palette)
-        pcs = self.register_composition(c_pts, dts, PCS.CompositionState.NORMAL_CASE, pds.palette_id, True, cobjs)
-        uds = DisplaySet([pcs, pds, END(pts=c_pts, dts=c_pts)])
+        pds, palette_id = self.register_palette(c_pts, dts, palette)
+        pcs = self.register_composition(c_pts, dts, PCS.CompositionState.NORMAL_CASE, palette_id, True, cobjs)
+        pds = [pds] if pds is not None else []
+        uds = DisplaySet([pcs] + pds + [END(pts=c_pts, dts=c_pts)])
         for cobj in cobjs:
             self.update_object_reservation(cobj.object_id, c_pts)
         return uds
