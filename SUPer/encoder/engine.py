@@ -794,13 +794,7 @@ class EpochEncoderEngine:
         if pgo is None:
              return False
         assert len(nodes) >= len(pgo.mask)
-        for node in nodes[sl]:
-            v = pgo.mask[node.idx-pgo.f:node.idx+1-pgo.f]
-            if len(v) == 0:
-                break
-            if v[0] and node.flag >= 0:
-                return True
-        return False
+        return next((True for node in nodes[sl] if (node.flag >= 0 and pgo.is_visible(node.idx))), False)
 
     def mask_event(self, wid: int, event_id: int) -> np.ndarray[tuple[int, int, int], np.uint8]:
         event = self.ectx.events[event_id]
@@ -1061,8 +1055,8 @@ class EpochEncoderEngine:
                 cobjs, pals, o_ods, cobjs_ref = r
 
                 cumulated_palette = pals[0][0] | pals[1][0]
-                pds = self._codec.register_palette(c_pts, c_dts, cumulated_palette)
-                pcs = self._codec.register_composition(c_pts, c_dts, nodes[i].state, pds.palette_id, False, cobjs)
+                pds, palette_id = self._codec.register_palette(c_pts, c_dts, cumulated_palette)
+                pcs = self._codec.register_composition(c_pts, c_dts, nodes[i].state, palette_id, False, cobjs)
                 wds = self._codec.get_window_definition_segment(c_pts, c_dts)
 
                 nds = DisplaySet([pcs, wds, pds] + o_ods + [END(dts=c_pts, pts=c_pts)])
@@ -1125,13 +1119,13 @@ class EpochEncoderEngine:
                         logger.debug(f"Skipped empty palette update at PTS={nodes[z].tc_pts}={c_pts}.")
                         continue
 
-                    pds = self._codec.register_palette(c_pts, nodes[z].dts(), p_write, force=True)
+                    pds, palette_id = self._codec.register_palette(c_pts, nodes[z].dts(), p_write, force=True)
                     if has_new_ods:
                         pcs = self._codec.register_composition(c_pts, nodes[z].dts(), nodes[z].state, pds.palette_id, False, cobjs)
                         wds_upd = [self._codec.get_window_definition_segment(c_pts, c_dts)]
                         ods_upd = o_ods
                     else:
-                        pcs = self._codec.register_composition(c_pts, c_dts, nodes[z].state, pds.palette_id, True, cobjs)
+                        pcs = self._codec.register_composition(c_pts, c_dts, nodes[z].state, palette_id, True, cobjs)
                         wds_upd, ods_upd = [], []
                         for cobj in cobjs:
                             self._codec.update_object_reservation(cobj.object_id, c_pts)

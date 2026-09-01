@@ -124,7 +124,7 @@ class PillowWrap(QuantizerWrap):
             img_padded.paste(image, (0, 0))
         else:
             img_padded = image
-        return img_padded, colors, {'_pil_input_img': image, '_colors': colors}
+        return img_padded, colors, {'_pil_input_img': img_padded, '_colors': colors, '_shape': image.size}
 
     @classmethod
     def _palettize(cls, image: Image.Image, colors: int, ctx: dict[str, Image.Image]) -> tuple[_Palette, _Bitmap, dict[str, Any]]:
@@ -144,7 +144,8 @@ class PillowWrap(QuantizerWrap):
             # Out of the builtin quantizer, qtzr is always the best fallback.
             return QtzrWrap.quantize(img_in, colors)
         #no-op crop if the image was not padded
-        return palette, bitmap[:img_in.size[1], :img_in.size[0]]
+        w, h = ctx['_shape']
+        return palette, bitmap[:h, :w]
 
 class ImageQuantWrap(QuantizerWrap):
     __piq = None
@@ -367,6 +368,12 @@ class PaletteSequenceEffect:
 
         for kp, pal in enumerate(palettes):
             palettes[kp] = pal.offset(first_index)
+            # It's possible that the image that made it there is transparent at t0. Rather than output a displayset
+            # without any palette attached, just add a dummy entry at index 0.
+            # we add a dummy entry at palette index zero.
+            if len(palettes[kp]) == 0:
+                palettes[kp][0] = PaletteEntry(99, 105, 98, 111)
+
         assert len(palettes[0]) < colors
         return bitmap, palettes
     ####
