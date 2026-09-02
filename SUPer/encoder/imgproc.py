@@ -368,11 +368,12 @@ class PaletteSequenceEffect:
 
         for kp, pal in enumerate(palettes):
             palettes[kp] = pal.offset(first_index)
-            # It's possible that the image that made it there is transparent at t0. Rather than output a displayset
-            # without any palette attached, just add a dummy entry at index 0.
-            # we add a dummy entry at palette index zero.
-            if len(palettes[kp]) == 0:
-                palettes[kp][0] = PaletteEntry(99, 105, 98, 111)
+        # It's possible that the image that made it there is transparent at t0. Rather than output a displayset
+        # without any palette attached, just add a dummy entry at index 0.
+        # we add a dummy entry at palette index zero.
+        if len(palettes[0]) == 0:
+            logger.debug("Empty bitmap, adding a dummy palette entry.")
+            palettes[0][0] = PaletteEntry(99, 105, 98, 111)
 
         assert len(palettes[0]) < colors
         return bitmap, palettes
