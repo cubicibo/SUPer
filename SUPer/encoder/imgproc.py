@@ -288,24 +288,21 @@ class PaletteSequenceEffect:
 
         #Sort sequences by commonness
         seq_sorted = {k: x[1] for k, x in sorted(seq_occ.items(), key=lambda item: item[1][0], reverse=True)}
-        seq_ids = {k: z for z, k in enumerate(seq_sorted.keys())}
 
         #Fill a new array with kept sequences to perform fast norm calculations
         norm_mat = np.ndarray((colors, *sequences[i,j,:,:].shape[0:2]))
 
         #Match sequences to the most common ones (N[colors] kept)
-        remap: dict[int, int] = {}
-        for cnt, v in enumerate(seq_sorted.values()):
-            if cnt < colors:
-                norm_mat[cnt, :, :] = v
+        remap: dict[int, int] = {} #unfitted sequences: index to closest match
+        seq_ids: dict[int, int] = {} #sequence index to its hash
+        for ix, (k, v) in enumerate(seq_sorted.items()):
+            seq_ids[k] = ix
+            if ix < colors:
+                norm_mat[ix, :, :] = v
             else:
                 nm = np.linalg.norm(norm_mat - v[None, :], 2, axis=2)
-
-                id1 = np.argsort(np.sum(nm, axis=1))
-                id2 = np.argsort(np.sum(nm, axis=1)/np.sum(nm != 0, axis=1))
-
-                best_fit = np.abs(id1 - id2[:, None])
-                remap[cnt] = id1[best_fit.argmin() % id1.size]
+                error_sum = np.sum(nm, axis=1)
+                remap[ix] = np.argmin(error_sum * (1 + 1/np.sum(nm != 0, axis=1)))
         del norm_mat
 
         bitmap = np.zeros(sequences.shape[0:2], dtype=np.uint8)
