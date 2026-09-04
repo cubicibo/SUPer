@@ -302,7 +302,8 @@ class PaletteSequenceEffect:
             else:
                 nm = np.linalg.norm(norm_mat - v[None, :], 2, axis=2)
                 error_sum = np.sum(nm, axis=1)
-                remap[ix] = np.argmin(error_sum * (1 + 1/np.sum(nm != 0, axis=1)))
+                zero_cnt = 1 + np.sum(nm == 0, axis=1)
+                remap[ix] = np.argmin(error_sum * (1 + 1/zero_cnt))
         del norm_mat
 
         bitmap = np.zeros(sequences.shape[0:2], dtype=np.uint8)
