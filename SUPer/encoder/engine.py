@@ -286,7 +286,7 @@ class EpochEncoderEngine:
         pgobjs, nodes = ctx
         #Plan datastream
         _ = self.shape_stream(nodes)
-        
+
         #Set-up datastructures for bytestream generation
         self.set_pgobjects_extended_visibilities(nodes)
         r_nodes = self.roll_nodes(nodes)

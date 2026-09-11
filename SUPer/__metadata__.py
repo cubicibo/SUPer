@@ -16,10 +16,8 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-__MAJOR = 0
-__MINOR = 2
-__REVISION = 8
+import importlib.metadata
 
 __name__    = "SUPer"
-__version__ = '.'.join(map(str, [__MAJOR, __MINOR, __REVISION]))
 __author__  = 'cubicibo'
+__version__ = importlib.metadata.version(__name__)

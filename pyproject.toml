@@ -1,10 +1,12 @@
 [build-system]
-requires = ["hatchling>=1.29.0", "versioningit", "hatch-sbom[uv]>=0.3.0"]
+# "versioningit"
+requires = ["hatchling>=1.29.0", "hatch-sbom[uv]>=0.3.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "SUPer"
-dynamic = ["version"]
+version = "0.2.8"
+#dynamic = ["version"]
 description = "HDMV PGS Encoder"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -18,19 +20,21 @@ maintainers = [
 ]
 keywords = [
     "subtitles",
-    "encoding",
-    "parser",
     "encoder",
+    "decoder",
+    "codec",
+    "sup",
     "hdmv",
     "blu-ray",
 ]
 classifiers = [
-    "Topic :: Multimedia :: Graphics",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Development Status :: 6 - Mature",
     "Operating System :: OS Independent",
 ]
 dependencies = [
@@ -47,10 +51,6 @@ dependencies = [
     "guizero",
     "tqdm",
 ]
-
-#[project.scripts]
-#SUPer_cli = "_supercli:main"
-#SUPer_gui = "_supergui:main"
 
 [dependency-groups]
 dev = [
@@ -90,20 +90,26 @@ source = "uv"
 [tool.hatch.build.targets.wheel.hooks.sbom.uv]
 no-dev = true
 
-[tool.hatch.version]
-source = "versioningit"
+# As the tag names of v0.2.x are polluted, versioningit seem to not want to
+# increment the patch number, just the minor. So set the version in toml for now.
 
-[tool.versioningit.vcs]
-match = ["SUPer/v*"]
-default-tag = "SUPer/v0.0.0"
+#[tool.hatch.version]
+#source = "versioningit"
 
-[tool.versioningit.tag2version]
-rmprefix = "SUPer/v"
+#[tool.versioningit.vcs]
+#match = ["v*"]
+#default-tag = "v0.0.0"
 
-[tool.versioningit.format]
-distance = "{next_version}.dev{distance}+{vcs}{rev}"
-dirty = "{next_version}+dirty"
-distance-dirty = "{next_version}.dev{distance}+{vcs}{rev}.dirty"
+#[tool.versioningit.tag2version]
+#rmprefix = "v"
+
+#[tool.versioningit.format]
+#distance = "{next_version}.dev{distance}+{vcs}{rev}"
+#dirty = "{next_version}+dirty"
+#distance-dirty = "{next_version}.dev{distance}+{vcs}{rev}.dirty"
+
+#[tool.versioningit.write]
+#file = "SUPer/__dyn_version__.py"
 
 [tool.pytest]
 testpaths = ["tests"]
