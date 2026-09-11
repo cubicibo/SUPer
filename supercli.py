@@ -82,7 +82,7 @@ def main():
     parser.add_argument('-q', '--quantizer', help="Set image quantizer. [0: QtzrUTC, 1: Pillow, 2: HexTree, 3: PNGQ/LIQ] (def:  %(default)s)", type=int, default=3, required=False)
     parser.add_argument('-k', '--prefer-normal', help="Flag to prefer normal case over acquisitions.", action='store_true', default=False, required=False)
     parser.add_argument('-n', '--allow-normal', help="Flag to allow normal case object refreshes.", action='store_true', default=False, required=False)
-    parser.add_argument('-b', '--bt', help="Set target Rec. BT matrix [601, 709, 2020] (def:  %(default)s)", type=int, default=709, required=False)
+    parser.add_argument('-b', '--bt', help="Set target Rec. BT matrix [601, 709, 2020] (default: inferred from video height)", type=int, default=None, required=False)
     parser.add_argument('-p', '--palette', help="Flag to always write the full palette.", action='store_true', default=False, required=False)
     parser.add_argument('-d', '--ahead', help="Flag to enable flexible palette update buffering.", action='store_true', default=False, required=False)
     parser.add_argument('-y', '--yes', help="Flag to overwrite an existing file with the same name.", action='store_true', default=False, required=False)
@@ -96,6 +96,7 @@ def main():
 
     parser.add_argument('--redraw-period', help="Add redraws every X >= 1.0 seconds [0: Disabled] - also known as 'acquisition point interval'. (def:  %(default)s)", type=float, default=0.0, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
+    parser.add_argument('--uhd-bd', help="Flag UHD BD format (def:  %(default)s)", action='store_true', default=False, required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
     parser.add_argument("output", type=str)
@@ -114,9 +115,11 @@ def main():
     if args.quantizer not in range(5):
         logger.warning("Unknown quantization mode, attempting to use pngquant/libimagequant.")
         args.quantizer = 3
-    if args.bt not in [601, 709, 2020]:
-        logger.warning("Unknown transfer matrix, using bt709.")
-        args.bt = 709
+    if args.uhd_bd and args.bt is None:
+        exit_msg("Must specify the colorspace matrix with UHD BD.")
+
+    if args.bt is not None and args.bt not in [601, 709, 2020]:
+        exit_msg(f"Unknown colorspace matrix specified: '{args.bt}'.")
 
     if args.extra_acq < 0:
         logger.warning("Got invalid extra-acq, disabling option.")
@@ -199,7 +202,7 @@ def main():
         'quality_factor': int(args.compression)/100,
         'refresh_rate': int(args.acqrate)/100,
         'quantize_lib': args.quantizer,
-        'bt_colorspace': f"bt{args.bt}",
+        'bt_colorspace': args.bt,
         'allow_overlaps': args.ahead,
         'full_palette': args.palette,
         'output_all_formats': args.withsup,
@@ -213,6 +216,7 @@ def main():
         'threads': 'auto' if args.threads == 0 else args.threads,
         'layout_mode': args.layout,
         'log_filename': args.output,
+        'uhd_bd': args.uhd_bd,
     }
     ts_start = time.monotonic()
     bdnr = BDNEncoder(args.input, parameters)

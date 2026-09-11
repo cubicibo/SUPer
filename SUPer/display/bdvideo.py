@@ -167,17 +167,20 @@ class BDVideo:
     fmt: Format | FormatInputT
     fps: Framerate | FramerateInputT
     uhd_bd: bool = False
-    matrix: Matrix | None = None
+    matrix: Matrix | str | int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.fmt, Format):    object.__setattr__(self, 'fmt', Format(self.fmt))
         if not isinstance(self.fps, Framerate): object.__setattr__(self, 'fps', Framerate(self.fps))
         if self.fmt.height < 1080 and self.uhd_bd:
             raise ValueError("UHD BD requires a 1920x1080 video format.")
+        print(self.matrix, self.uhd_bd)
         if self.matrix is None:
             if self.uhd_bd is True:
                 raise ValueError("UHD BD requires a colour-space conversion matrix.")
             object.__setattr__(self, 'matrix', Matrix('BT709') if self.fmt.height >= 720 else Matrix('BT601'))
+        elif not isinstance(self.matrix, Matrix):
+            object.__setattr__(self, 'matrix', Matrix(self.matrix))
 
     def validate(self) -> bool:
         match self.fmt.height:

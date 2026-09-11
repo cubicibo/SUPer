@@ -255,23 +255,27 @@ class BuiltinQuantizer(Enum):
 ####
 
 class PaletteSequenceEffect:
-    @staticmethod
-    def solve_sequence_fast(events: list[Image.Image], colors: int, quantizer: QuantizerWrap, **kwargs):
+    def __init__(self, quantizer: QuantizerWrap, matrix: Matrix) -> None:
+        self.quantizer = quantizer
+        self.matrix = matrix
+
+    def solve_sequence_fast(self, events: list[Image.Image], colors: int, **kwargs):
         """
         This functions finds a solution for the provided subtitle animation.
         :param events: PIL images, stacked one after the other
         :param colors: max number of sequences usable
+        :param kwargs: encoder settings
 
         :return: bitmap, sequence of palette update to obtain the said input animation.
         """
 
         if 1 == len(events):
-            clut, img = quantizer.quantize(events[0], colors, single_bitmap=True, **kwargs)
+            clut, img = self.quantizer.quantize(events[0], colors, single_bitmap=True, **kwargs)
             return img.copy(), np.expand_dims(clut, 1).copy()
 
         sequences = np.zeros((len(events), *events[0].size[::-1], 4), np.uint8)
         for ke, event in enumerate(events):
-            clut, img = quantizer.quantize(event, colors, single_bitmap=False, **kwargs)
+            clut, img = self.quantizer.quantize(event, colors, single_bitmap=False, **kwargs)
             sequences[ke, :, :, :] = clut[img]
         sequences = np.moveaxis(sequences, 0, 2)
 
@@ -318,9 +322,7 @@ class PaletteSequenceEffect:
         #retun bitmap and the color sequence (copy only the kept sequences)
         return bitmap, np.asarray([seq for seq, _ in zip(seq_sorted.values(), range(colors))], dtype=np.uint8)
 
-
-    @classmethod
-    def solve_and_remap(cls, events: list[Image.Image], quantizer: QuantizerWrap, colors: int = 255, first_index: int = 1, **kwargs):
+    def solve_and_remap(self, events: list[Image.Image], colors: int = 255, first_index: int = 1, **kwargs):
         """
         This function solves the input event sequence and perform ID remapping
         to optimise the distribution of colour indices wrt PGS constraints
@@ -333,18 +335,16 @@ class PaletteSequenceEffect:
         assert first_index > 0, "Usage of palette ID zero."
 
         # bitmap is (H x W), cluts is (N_c x len(events) x 4)
-        bitmap, cluts = cls.solve_sequence_fast(events, colors, quantizer, **kwargs)
+        bitmap, cluts = self.solve_sequence_fast(events, colors, **kwargs)
         transparent_id = np.nonzero(np.all(cluts[:,:,-1] == 0, axis=1))[0]
-
-        kwargs_diff = {'matrix': kwargs.get('bt_colorspace', 'bt709')}
 
         #No transparency at all in this bitmap
         if 0 == len(transparent_id):
             #All colours used incl reserved transparent index. This is incorrect, requantize with colors-1
             if np.max(bitmap) + first_index == 0xFF:
                 logger.ldebug("Too many colours used, lowering count.")
-                bitmap, cluts = cls.solve_sequence_fast(events, colors-1, quantizer, **kwargs)
-            palettes = cls.to_ycc_palettes(cluts, **kwargs_diff)
+                bitmap, cluts = self.solve_sequence_fast(events, colors-1, **kwargs)
+            palettes = self.to_ycc_palettes(cluts, entry_offset=first_index)
             bitmap += first_index
         else:
             # Transparent ID is the last one and will be mapped to 0xFF by the first_index shift.
@@ -362,10 +362,8 @@ class PaletteSequenceEffect:
                 bitmap[tsp_mask] = 0xFF
             #logger.ldebug(f"Remapped fully transparent ID {transparent_id:02X} to FF.")
             cluts = np.delete(cluts, [transparent_id], axis=0)
-            palettes = cls.to_ycc_palettes(cluts, **kwargs_diff)
+            palettes = self.to_ycc_palettes(cluts, entry_offset=first_index)
 
-        for kp, pal in enumerate(palettes):
-            palettes[kp] = pal.offset(first_index)
         # It's possible that the image that made it there is transparent at t0. Rather than output a displayset
         # without any palette attached, just add a dummy entry at index 0.
         # we add a dummy entry at palette index zero.
@@ -376,17 +374,16 @@ class PaletteSequenceEffect:
         assert len(palettes[0]) < colors
         return bitmap, palettes
     ####
-    @staticmethod
-    def to_ycc_palettes(cluts, /, *, matrix: str = 'bt709') -> list[Palette]:
+
+    def to_ycc_palettes(self, cluts: np.ndarray, entry_offset: int = 0) -> list[Palette]:
         """
-        :param cluts: RGBA Color look-up tables of the sequence, stacked one after the other.
-        :param matrix: colorspace matrix name
-    
-        :return: N palette objects defining palette that can be converted to PDSes.
+        :param cluts: RGBA full range palettes, stacked one after the other
+
+        :return: N YCC palette objects in limited range.
         """
         stacked_cluts = np.swapaxes(cluts, 1, 0).astype(np.int32)
-        matrix = Matrix(matrix).forward()
-    
+        matrix = self.matrix.forward()
+
         shape = stacked_cluts.shape
         stacked_cluts = np.round(np.matmul(stacked_cluts.reshape((-1, 4)), matrix.T))
         stacked_cluts += np.asarray([[16, 128, 128, 0]])
@@ -394,12 +391,12 @@ class PaletteSequenceEffect:
         stacked_cluts = np.clip(stacked_cluts, *clip_vals).astype(np.uint8).reshape(shape)
         #YCbCrA -> YCrCbA
         stacked_cluts = stacked_cluts[:, :, [0, 2, 1, 3]]
-        
+
         palettes = []
         for palette_array in stacked_cluts:
             new_palette = Palette()
             for ke, entry in enumerate(palette_array):
-                new_palette[ke] = PaletteEntry(*entry)
+                new_palette[ke + entry_offset] = PaletteEntry(*entry)
             palettes.append(new_palette)
         return palettes
 ####

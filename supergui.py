@@ -91,6 +91,7 @@ def get_kwargs() -> dict[str, Any]:
         'daemonize': False,
         'layout_mode': int(ini_params['super_cfg'].get('layout_mode', 2)),
         'log_filename': supout.value,
+        'uhd_bd': True,
     }
 
 def wrapper_mp() -> None:
@@ -294,13 +295,13 @@ if __name__ == '__main__':
     if is_win32:
         signal.signal(signal.SIGBREAK, terminate)
     else:
-        signal.signal(signal.SIGQUIT, terminate)        
+        signal.signal(signal.SIGQUIT, terminate)
 
     app = App(title=f"SUPer {SUPVERS}", layout='grid')
     meipass = getattr(sys, '_MEIPASS', None)
     ico_paths = Path(Path.cwd() if meipass is None else meipass)
     ico_paths = next(filter(lambda x: x.exists(), [Path.joinpath(ico_paths, fl, 'icon.ico') for fl in ['misc', 'lib', '.']]), None)
-    if ico_paths is not None:#and not (is_win32 and meipass is not None):
+    if ico_paths is not None:
         from PIL import Image
         app.icon = Image.open(ico_paths)
 

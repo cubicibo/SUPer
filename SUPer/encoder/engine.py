@@ -845,7 +845,8 @@ class EpochEncoderEngine:
                 imgs_chain.append(a_img)
             ####
             #We have the "packed" object, the entire palette is usable
-            bitmap, palettes = PaletteSequenceEffect.solve_and_remap(imgs_chain, self.kwargs['quantize_lib'], 255, 1, **self.kwargs)
+            palette_effect = PaletteSequenceEffect(self.kwargs['quantize_lib'], self._codec.bd_video.matrix)
+            bitmap, palettes = palette_effect.solve_and_remap(imgs_chain, 255, 1, **self.kwargs)
             pals.append(palettes)
 
             coords = np.zeros((2,), np.int32)
@@ -928,7 +929,8 @@ class EpochEncoderEngine:
                     crop_coords = (pgo.box.x, pgo.box.y, pgo.box.x2, pgo.box.y2)
                     imgs_chain.append(Image.fromarray(multiplier*last_img, 'RGBA').crop(crop_coords))
 
-                wd_bitmap, wd_pal = PaletteSequenceEffect.solve_and_remap(imgs_chain, self.kwargs['quantize_lib'], n_colors_qtz, clut_offset, **self.kwargs)
+                palette_effect = PaletteSequenceEffect(self.kwargs['quantize_lib'], self._codec.bd_video.matrix)
+                wd_bitmap, wd_pal = palette_effect.solve_and_remap(imgs_chain, n_colors_qtz, clut_offset, **self.kwargs)
 
                 window_bitmap = 0xFF*np.ones((self.ectx.windows[pgo.wid].dy, self.ectx.windows[pgo.wid].dx), np.uint8)
                 window_bitmap[pgo.box.slice] = wd_bitmap

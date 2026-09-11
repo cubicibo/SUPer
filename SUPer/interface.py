@@ -81,12 +81,15 @@ class BDNEncoder:
         bdvideo = BDVideo(self.bdn.description.fmt,
                           self.bdn.description.fps,
                           self.kwargs.get('uhd_bd', False),
-                          self.kwargs.get('matrix', None))
+                          self.kwargs.get('bt_colorspace', None))
+        if self.kwargs.get('bt_colorspace', None) is None:
+            logger.info(f"Inferred colorspace matrix from video height: {bdvideo.matrix.name}.")
+
         if not bdvideo.validate():
             if bdvideo.fmt != (1920, 1080):
                 logger.error("Non-compliant VideoFormat & Framerate combination.")
-            else:
-                logger.warning("This VideoFormat & Framerate combination is exclusive to the UHD BD format.")
+            elif not self.kwargs.get('uhd_bd', False):
+                logger.error("This VideoFormat & Framerate combination is exclusive to the UHD BD format.")
 
         if len(self.bdn.events) == 0:
             raise RuntimeError("No BDN event found, exiting.")
