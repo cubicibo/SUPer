@@ -110,7 +110,7 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
     is_ok = True
     leaky = LeakyBuffer(prev_ts, bitrate)
 
-    f_print_tc = lambda pts: str(TC.s2tc(pts/GraphicsDecoder.FREQ, fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.s2tc(pts/GraphicsDecoder.FREQ, fps, True))))
+    f_print_tc = lambda pts: str(TC.pts2tc(max(0, pts), fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.pts2tc(max(0, pts), fps, True))))
 
     leaky.set_tc_func(f_print_tc)
 
@@ -187,7 +187,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
     cumulated_ods_size = 0
     prev_pcs_id = 0xFFFF
 
-    to_tc = lambda pts: str(TC.s2tc(pts/GraphicsDecoder.FREQ, fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.s2tc(pts/GraphicsDecoder.FREQ, fps, True))))
+    to_tc = lambda pts: str(TC.pts2tc(max(0, pts), fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.pts2tc(max(0, pts), fps, True))))
 
     for ke, epoch in enumerate(epochs):
         windows = {}
@@ -418,7 +418,7 @@ def check_pts_dts_sanity(epochs: list[Epoch], fps: float) -> bool:
     is_compliant = True
     prev_pts = prev_dts = epochs[0][0].pcs.pts - GraphicsDecoder.FREQ
 
-    to_tc = lambda pts: str(TC.s2tc(pts, fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.s2tc(pts, fps, True))))
+    to_tc = lambda pts: str(TC.pts2tc(pts, fps)) + ('' if (float(fps).is_integer() or fps < 25) else (', DF=' + str(TC.s2tc(pts, fps, True))))
     frame_duration = np.floor(GraphicsDecoder.FREQ/fps)
 
     for k, epoch in enumerate(epochs):

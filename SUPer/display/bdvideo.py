@@ -174,7 +174,6 @@ class BDVideo:
         if not isinstance(self.fps, Framerate): object.__setattr__(self, 'fps', Framerate(self.fps))
         if self.fmt.height < 1080 and self.uhd_bd:
             raise ValueError("UHD BD requires a 1920x1080 video format.")
-        print(self.matrix, self.uhd_bd)
         if self.matrix is None:
             if self.uhd_bd is True:
                 raise ValueError("UHD BD requires a colour-space conversion matrix.")

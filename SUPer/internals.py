@@ -59,12 +59,11 @@ class TC(Timecode):
         self.fractional_fps = fps
 
     @classmethod
-    def s2tc(cls, s: float, fps: FramerateInputT, drop_frame: bool = False) -> 'TC':
-        #Add 1e-8 to avoid wrong rounding
-        s = s/(1 if float(fps).is_integer() else 1.001)
-        if isinstance(fps, float):
-            fps = round(fps, 2)
-        r_tc = cls(fps, start_seconds=s+1/fps+1e-8, force_non_drop_frame=True)
+    def pts2tc(cls, pts: int, fps: FramerateInputT, drop_frame: bool = False) -> 'TC':
+        if not isinstance(fps, Framerate):
+            fps = Framerate(fps)
+        num_frames_tc = 1 + (fps * pts / GraphicsDecoder.FREQ)
+        r_tc = cls(fps, frames=int(num_frames_tc), force_non_drop_frame=True)
         r_tc.drop_frame = drop_frame
         return r_tc
 
