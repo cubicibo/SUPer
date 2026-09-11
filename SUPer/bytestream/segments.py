@@ -265,14 +265,15 @@ class ODS(GraphicSegment):
     def decode(cls, bs: bytes, pts: int = 0, dts: int = 0) -> Self:
         object_id, object_version, flag = struct.unpack(">HBB", bs[:4])
         flag = cls.DataFlag(flag >> 6)
-        data_len = None
         if flag & cls.DataFlag.FIRST:
+            data_len = (bs[4] << 16) | (bs[5] << 8) | bs[6]
             width, height = struct.unpack(">HH", bs[7:11])
             data = bs[11:]
             if flag & cls.DataFlag.LAST:
-                data_len = 4 + len(data)
-                assert data_len == (bs[4] << 16) | (bs[5] << 8) | bs[6]
+                data_len_check = 4 + len(data)
+                assert data_len == data_len_check
         else:
+            data_len = None
             width = height = None
             data = bs[4:]
 

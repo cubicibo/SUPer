@@ -220,15 +220,15 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
         last_ds = []
         for kd, ds in enumerate(epoch.ds):
             if not test_diplayset(ds):
-                logger.error(f"DS {kd} of Epoch {ke} failed basic test.")
+                logger.error(f"Display set {kd} of Epoch {ke} failed basic test.")
                 compliant = False
                 return 0, 0
             current_pts = ds.pcs.pts
 
-            if epoch.ds[kd-1].pcs.pts != prev_pts and current_pts != epoch.ds[kd-1].pcs.pts:
+            if epoch.ds[kd-1].pcs.pts != prev_pts and (current_pts != epoch.ds[kd-1].pcs.pts or len(epoch.ds) == 1):
                 prev_pts = epoch.ds[kd-1].pcs.pts
             else:
-                logger.warning(f"Two display sets at {to_tc(current_pts)}.")
+                logger.warning(f"Two display sets at {to_tc(current_pts)} ({current_pts}).")
             if kd > 0 and ds.pcs.composition_state == PCS.CompositionState.EPOCH_START:
                 logger.error(f"Found an Epoch Start at {to_tc(current_pts)} in the middle of an epoch.")
                 compliant = False
@@ -252,7 +252,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
             for ks, seg in enumerate(ds.segments):
                 if seg.type == PGSegmentType.PCS:
                     if not is_dupe and seg.composition_number != (prev_pcs_id + 1) & 0xFFFF and seg.composition_state != PCS.CompositionState.EPOCH_START:
-                        logger.warning(f"Displayset does not increment composition number normally at {to_tc(current_pts)}.")
+                        logger.warning(f"Displayset does not increment composition number normally at {to_tc(current_pts)}: {seg.composition_number}, expected: {(prev_pcs_id + 1) & 0xFFFF}")
                     prev_pcs_id = seg.composition_number
                     if int(seg.composition_state) != 0:
                         # On acquisition, past palettes and objects should not be accessed
@@ -268,12 +268,12 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                 elif seg.type == PGSegmentType.WDS:
                     for w in seg.windows:
                         if windows[w.window_id] != (w.h_pos, w.v_pos, w.width, w.height):
-                            logger.error(f"Window change mid-epoch at {to_tc(current_pts)}, this is strictly prohibited.")
+                            logger.error(f"Window change mid-epoch at {to_tc(current_pts)}, this is strictly prohibited. New: {(w.h_pos, w.v_pos, w.width, w.height)}, Prior: {windows[w.window_id]}")
                             compliant = False
 
                 elif seg.type == PGSegmentType.PDS:
                     if pds_vn[seg.palette_id] != -1 and (pds_vn[seg.palette_id] + 1) & 0xFF != seg.palette_version and not is_dupe:
-                        logger.warning(f"Palette version not incremented by one, may be discarded by decoder. Palette {seg.p_id} at DTS {to_tc(seg.pts)}.")
+                        logger.warning(f"Palette version not incremented by one, may be discarded by decoder. Palette {seg.palette_id} at DTS {to_tc(seg.pts)}.")
                     pds_vn[seg.palette_id] = seg.palette_version
                     new_pal = seg.palette
                     pals[seg.palette_id] |= new_pal
