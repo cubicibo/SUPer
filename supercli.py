@@ -97,6 +97,7 @@ def main():
     parser.add_argument('--redraw-period', help="Add redraws every X >= 1.0 seconds [0: Disabled] - also known as 'acquisition point interval'. (def:  %(default)s)", type=float, default=0.0, required=False)
     parser.add_argument('--ssim-tol', help="Set a SSIM analysis offset (positive: higher sensitivity) [int, -100-100] (def:  %(default)s)", type=int, default=0, required=False)
     parser.add_argument('--uhd-bd', help="Flag UHD BD format (def:  %(default)s)", action='store_true', default=False, required=False)
+    parser.add_argument('--pes-mux-offset', help="Specify a NDF Timecode muxing offset for PES+MUI output. (def:  %(default)s). This offsets the default of 10 minutes.", type=str, default='00:00:00:00', required=False)
 
     parser.add_argument('-v', '--version', action='version', version=f"(c) {__author__}, v{LIB_VERSION}")
     parser.add_argument("output", type=str)
@@ -155,6 +156,10 @@ def main():
         if not args.palette:
             logger.warning("PES output requires --palette, forcefully enabling this flag.")
             args.palette = True
+        if args.pes_mux_offset.count(':') != 3 or not all(x.is_numeric() for x in args.pes_mux_offset.split(':')):
+            exit_msg(f"PES mux offset is not a valid timecode, got '{args.pes_mux_offset}'.")
+    elif args.pes_mux_offset != '00:00:00:00':
+        logger.warning("PES mux offset provided but PES output is not specified. Ignored.")
     parameters = {'ini_opts': {'super_cfg': {}}}
 
     try:
@@ -217,6 +222,7 @@ def main():
         'layout_mode': args.layout,
         'log_filename': args.output,
         'uhd_bd': args.uhd_bd,
+        'pes_mux_offset': args.pes_mux_offset,
     }
     ts_start = time.monotonic()
     bdnr = BDNEncoder(args.input, parameters)
