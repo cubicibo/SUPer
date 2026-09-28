@@ -73,6 +73,11 @@ class ProspectiveObject:
             return self.mask[frame-self.f]
         return False
 
+    def shift_time(self, offset: int) -> None:
+        assert self.f + offset >= 0
+        self.f += offset
+        self.ext_range += offset
+
     def get_bbox_at(self, frame: int) -> Box | None:
         """
         Return the bounding box at the given event frame.
@@ -425,18 +430,18 @@ class WindowsObjectDetector:
         return self.identify_primary_objects(events, ssim_threshold, ssim_score)
 ####
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class NestableRange:
     wid: int
     range_: range
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class NestedLayout:
     nestable_range: NestableRange
     subwindows: tuple[Box, Box]
     ratio: float
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class DualComposition:
     pgobjs: list[list[ProspectiveObject]]
     subwindows: tuple[Box, Box]
@@ -444,7 +449,8 @@ class DualComposition:
 
     def __post_init__(self) -> None:
         assert len(self.pgobjs) == len(self.subwindows) == 2
-        assert self.nestable_range.wid == self.pgobjs[0].wid == self.pgobjs[1].wid
+        wid = self.nestable_range.wid
+        assert all(o.wid == wid for o in self.pgobjs[0]) and all(o.wid == wid for o in self.pgobjs[1])
 
 class NestedAnalyzer:
     def __init__(self, windows: Sequence[Box], events: list[EpochEvent], video_fmt: Format, params: dict[str, Any] | None = None) -> None:
@@ -455,29 +461,43 @@ class NestedAnalyzer:
         self.ranges: list[NestableRange] | None = None
 
     @staticmethod
-    def merge_contiguous_alikes_nested(layouts: list[NestedLayout], tr1: float = 0.85, tr2: float = 0.975) -> list[NestedLayout]:
-        o = [layouts[0]]
-        for l in layouts[1:]:
-            if l.nestable_range.wid != o[-1].nestable_range.wid or o[-1].nestable_range.range_.stop != l.nestable_range.range_.start:
-                if l.ratio < tr1:
-                    o.append(l)
-                else:
-                    logger.debug(f"Dropped nested layout {l.subwindows} at {l.nestable_range.range_} due to ratio={l.ratio}.")
-                continue
-            cwd = []
-            ovr = []
-            for k in range(2):
-                usw = Box.union(l.subwindows[k], o[-1].subwindows[k])
-                isw = Box.intersect(usw, l.subwindows[k], o[-1].subwindows[k])
-                ovr.append(isw.overlap_with(usw))
-                if ovr[-1] > tr2:
-                    cwd.append(usw)
-            if len(cwd) == 2:
-                new_nr = NestableRange(l.nestable_range.wid, range(o[-1].nestable_range.range_.start, l.nestable_range.range_.stop))
-                # re-estimate ratio based on the amount of overlap
-                new_nl = NestedLayout(new_nr, tuple(cwd), (o[-1].ratio + l.ratio)/sum(ovr))
-                o[-1] = new_nl
-        return o
+    def _merge_subwindows(a: tuple[Box, Box], b: tuple[Box, Box], tr2: float) -> tuple[Box, Box] | None:
+        """
+        Subwindows covering both layouts, if each subwindow of `b` nearly matches one of `a`.
+        Returns them in the order of `a`, or None if the layouts are not alike.
+        """
+        for pairing in ((0, 1), (1, 0)): # the layout engine may return the two regions in either order
+            unions = []
+            for sw_a, sw_b in zip(a, (b[pairing[0]], b[pairing[1]])):
+                union, inter = Box.union(sw_a, sw_b), Box.intersect(sw_a, sw_b)
+                # share of the union the two regions have in common
+                if inter.area == 0 or inter.area / union.area <= tr2:
+                    break
+                unions.append(union)
+            # must not overlap
+            if len(unions) == 2 and Box.intersect(*unions).area == 0:
+                return tuple(unions)
+        return None
+
+    def merge_contiguous_alikes_nested(self, layouts: list[NestedLayout], tr1: float = 0.85, tr2: float = 0.975) -> list[NestedLayout]:
+        merged: list[NestedLayout] = []
+        for layout in layouts:
+            nr = layout.nestable_range
+            if merged:
+                prev = merged[-1]
+                pnr = prev.nestable_range
+                if nr.wid == pnr.wid and pnr.range_.stop == nr.range_.start and \
+                   (subwindows := self.__class__._merge_subwindows(prev.subwindows, layout.subwindows, tr2)) is not None:
+                    ratio = sum(sw.area for sw in subwindows)/self.windows[nr.wid].area
+                    if ratio < tr1:
+                        merged[-1] = NestedLayout(NestableRange(nr.wid, range(pnr.range_.start, nr.range_.stop)), subwindows, ratio)
+                        continue
+                    #else: not worth it to merge
+            if layout.ratio < tr1:
+                merged.append(layout)
+            else:
+                logger.debug(f"Dropped nested layout {layout.subwindows} at {nr.range_} due to ratio={layout.ratio:.3f}.")
+        return merged
 
     def find_ranges_with_one_primary(self, pgobjs: list[list[ProspectiveObject]]) -> list[NestableRange]:
         n_windows = len(pgobjs)
@@ -487,7 +507,8 @@ class NestedAnalyzer:
             # With a single window, we do the split object-wise. and try to
             # find splits for the duration usable throughout the object lifetime
             # we could do an optimal layout search every frame but it's overkill
-            return [(0, range(pgo.f, pgo.f + len(pgo.mask))) for pgo in pgobjs[0]]
+            self.ranges = [NestableRange(0, range(pgo.f, pgo.f + len(pgo.mask))) for pgo in pgobjs[0]]
+            return self.ranges
 
         ranges = []
         raw_ranges = [[range(pgo.f, pgo.f + len(pgo.mask)) for pgo in pgobjs[wid]] for wid in range(n_windows)]
@@ -521,16 +542,12 @@ class NestedAnalyzer:
         events = self.events
         secondary_regions = []
         for wid, wd in enumerate(windows):
-            wid_ranges = [wr for wr in self.ranges if wr.wid == wid]
-            if len(wid_ranges) == 0:
-                continue
-
-            for wr in wid_ranges:
+            for wr in filter(lambda r: r.wid == wid, self.ranges):
                 analysis_range = wr.range_
-                layout = LayoutEngine((wd.dx, wd.dy))
 
                 # we could find a layout for every frame, but this would lead to excessive ACQs
                 # within an epoch, which we don't want. So find a split for the current range.
+                layout = LayoutEngine((wd.dx, wd.dy))
                 for event in events[analysis_range.start:analysis_range.stop]:
                     rgba, is_empty = _get_windowed_image(wd, event, event.image)
                     if not is_empty:
@@ -539,44 +556,56 @@ class NestedAnalyzer:
                     data = layout.get_layout()
                 except Exception:
                     data = None
+
                 layout.destroy()
+                # if d1 == d2 there's no worthwile split
                 if data is None or data[1] == data[2]:
                     continue
 
                 cbox, reg1, reg2 = tuple([Box.from_layout(w) for w in data[:3]])
                 regions = PaddingEngine(cbox, Box(0, wd.dy, 0, wd.dx)).directional_pad((reg1, reg2), data[-1])
+                # regions got merged, give up
+                if len(regions) == 1:
+                    continue
                 regions = tuple([w.to_absolute(cbox).to_absolute(wd) for w in regions])
 
                 ratio = sum(r.area for r in regions)/wd.area
                 secondary_regions.append(NestedLayout(wr, regions, ratio))
+        ####
         return secondary_regions
 
     def analyze(self, primary_objects: list[list[ProspectiveObject]]) -> list[DualComposition]:
         ranges = self.find_ranges_with_one_primary(primary_objects)
+
         nested_layouts = self.find_secondary_layouts(ranges)
+        # fast exit
+        if len(nested_layouts) == 0:
+            return nested_layouts
+        nested_layouts = self.merge_contiguous_alikes_nested(nested_layouts)
 
-        nested_layouts = self.__class__.merge_contiguous_alikes_nested(nested_layouts)
+        if logger.level < 20:
+            for nest in nested_layouts:
+                analysis_range = nest.nestable_range.range_
+                regions = nest.subwindows
+                logger.debug(f"wid={nest.nestable_range.wid} range={analysis_range}, ratio2wd={nest.ratio}, regions={regions}.")
 
-        for nest in nested_layouts:
-            analysis_range = nest.nestable_range.range_
-            regions = nest.subwindows
-            logger.debug(f"wid={nest.nestable_range.wid} range={analysis_range}, ratio2wd={nest.ratio}, regions={regions}.")
-
-        # be lax, the subregions tend to be small so the SSIM threshold sensitivity increases
+        # be lax, the subregions tend to be small
         ssim_tol = self.kwargs.get('ssim_tol_nested', -0.5)
+
+        # This is still organized per Window. The parent is responsible for taking
+        # what it wants, and to override lone primary objects by a nested split.
 
         nested = []
         for nl in nested_layouts:
             range_, subwindows = nl.nestable_range.range_, nl.subwindows
             wid = nl.nestable_range.wid
             detector = WindowsObjectDetector(self.video_fmt, subwindows, ssim_tol)
-            logger.debug(f"Nested analysis in wid={nest.nestable_range.wid}, r={range_.start}:{range_.stop} r2w={nl.ratio}: {subwindows}.")
+            logger.debug(f"Nested analysis in wid={nl.nestable_range.wid}, r={range_.start}:{range_.stop} r2w={nl.ratio}: {subwindows}.")
             nested_objects = detector.get_objects(self.events[range_.start:range_.stop])
-
             # offset frame active marker by range start index
             for region_nested_obj_list in nested_objects:
                 for obj in region_nested_obj_list:
-                    obj.f += range_.start
+                    obj.shift_time(range_.start)
                     obj.wid = wid
             nested.append(DualComposition(nested_objects, subwindows, nl.nestable_range))
         return nested
