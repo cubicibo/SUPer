@@ -71,6 +71,9 @@ class Shape:
     def height(self) -> int:
         return self.h
 
+    def hides(self, other: 'Shape') -> bool:
+        return self.h >= other.h and self.w >= other.w
+
     def __or__(self, other) -> Self:
         if isinstance(other, __class__):
             return __class__(max(self.h, other.h), max(self.w, other.w))
@@ -123,7 +126,7 @@ class Box:
 
     @property
     def shape(self) -> Shape:
-        return Shape(self.dy, self.dx)
+        return Shape(h=self.dy, w=self.dx)
 
     @property
     def anchors(self) -> Point:

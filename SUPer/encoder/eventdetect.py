@@ -19,8 +19,8 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass, field
-from itertools import chain, count
-from typing import Self
+from itertools import chain, count, pairwise
+from typing import Any, Self
 
 import cv2
 import numpy as np
@@ -335,11 +335,10 @@ class ObjectDetector:
 ####
 
 class WindowsObjectDetector:
-    def __init__(self, fmt: Format, windows: Sequence[Box], ssim_tol: float = 0, nested_analysis: bool = False):
+    def __init__(self, fmt: Format, windows: Sequence[Box], ssim_tol: float = 0):
         self.windows = windows
         self.fmt = fmt
         self.ssim_tol = ssim_tol
-        self.nested_analysis = nested_analysis
 
     def identify_primary_objects(self,
         events: list[EpochEvent],
@@ -383,9 +382,154 @@ class WindowsObjectDetector:
         #Adjust slightly SSIM threshold depending of res
         ssim_score = min(0.9999, 0.9608 + self.fmt.value[1]*(0.986-0.972)/(1080-480))
 
-        pgobjs = self.identify_primary_objects(events, ssim_threshold, ssim_score)
+        return self.identify_primary_objects(events, ssim_threshold, ssim_score)
+####
 
-        if self.nested_analysis:
-            raise NotImplementedError("Nested analysis currently not implemented.")
-        return pgobjs
+@dataclass(frozen=True)
+class NestableRange:
+    wid: int
+    range_: range
+
+@dataclass(frozen=True)
+class NestedLayout:
+    nestable_range: NestableRange
+    subwindows: tuple[Box, Box]
+    ratio: float
+
+class NestedAnalyzer:
+    def __init__(self, windows: Sequence[Box], events: list[EpochEvent], video_fmt: Format, params: dict[str, Any] = {}) -> None:
+        self.video_fmt = video_fmt
+        self.kwargs = params
+        self.windows = windows
+        self.events = events
+        self.ranges: list[NestableRange] | None = None
+
+    @staticmethod
+    def merge_contiguous_alikes_nested(layouts: list[NestedLayout], tr1: float = 0.85, tr2: float = 0.975) -> list[NestedLayout]:
+        o = [layouts[0]]
+        for l in layouts[1:]:
+            if l.nestable_range.wid != o[-1].nestable_range.wid or o[-1].nestable_range.range_.stop != l.nestable_range.range_.start:
+                if l.ratio < tr1:
+                    o.append(l)
+                else:
+                    logger.debug(f"Dropped nested layout {l.subwindows} at {l.nestable_range.range_} due to ratio={l.ratio}.")
+                continue
+            cwd = []
+            ovr = []
+            for k in range(2):
+                usw = Box.union(l.subwindows[k], o[-1].subwindows[k])
+                isw = Box.intersect(usw, l.subwindows[k], o[-1].subwindows[k])
+                ovr.append(isw.overlap_with(usw))
+                if ovr[-1] > tr2:
+                    cwd.append(usw)
+            if len(cwd) == 2:
+                new_nr = NestableRange(l.nestable_range.wid, range(o[-1].nestable_range.range_.start, l.nestable_range.range_.stop))
+                # re-estimate ratio based on the amount of overlap
+                new_nl = NestedLayout(new_nr, tuple(cwd), (o[-1].ratio + l.ratio)/sum(ovr))
+                o[-1] = new_nl
+        return o
+
+    def find_ranges_with_one_primary(self, pgobjs: list[list[ProspectiveObject]]) -> list[NestableRange]:
+        n_windows = len(pgobjs)
+        assert n_windows == len(self.windows)
+
+        if n_windows == 1:
+            # With a single window, we do the split object-wise. and try to
+            # find splits for the duration usable throughout the object lifetime
+            # we could do an optimal layout search every frame but it's overkill
+            return [(0, range(pgo.f, pgo.f + len(pgo.mask))) for pgo in pgobjs[0]]
+
+        ranges = []
+        raw_ranges = [[range(pgo.f, pgo.f + len(pgo.mask)) for pgo in pgobjs[wid]] for wid in range(n_windows)]
+        indexes = [0] * n_windows
+        pos = 0
+        start = range_hits = None
+        max_ranges = max(rwr[-1].stop for rwr in raw_ranges)
+
+        while pos <= max_ranges:
+            hits = [(pos in raw_ranges[wid][indexes[wid]]) if indexes[wid] < len(raw_ranges[wid]) else False for wid in range(n_windows)]
+            for wid in filter(lambda wid: indexes[wid] < len(raw_ranges[wid]), range(n_windows)):
+                if start is not None and (sum(hits) != 1 or hits != range_hits):
+                    ranges.append(NestableRange(range_hits.index(True), range(start, pos)))
+                    start = range_hits = None
+                # step, if needed
+                if pos >= raw_ranges[wid][indexes[wid]].stop and len(raw_ranges[wid]) > (indexes[wid] + 1):
+                    indexes[wid] += 1
+                    hits[wid] = pos in raw_ranges[wid][indexes[wid]]
+            #check for a start
+            if sum(hits) == 1 and start is None:
+                start = pos
+                range_hits = hits
+            pos += 1
+        self.ranges = ranges
+        return self.ranges
+
+    def find_secondary_layouts(self, ranges: list[NestableRange] | None = None) -> list[NestedLayout]:
+        if self.ranges is None:
+            raise RuntimeError("No range to analyze.")
+        windows = self.windows
+        events = self.events
+        secondary_regions = []
+        for wid, wd in enumerate(windows):
+            wid_ranges = [wr for wr in self.ranges if wr.wid == wid]
+            if len(wid_ranges) == 0:
+                continue
+
+            for wr in wid_ranges:
+                analysis_range = wr.range_
+                layout = LayoutEngine((wd.dx, wd.dy))
+
+                # we could find a layout for every frame, but this would lead to excessive ACQs
+                # within an epoch, which we don't want. So find a split for the current range.
+                for event in events[analysis_range.start:analysis_range.stop]:
+                    rgba, is_empty = _get_windowed_image(wd, event, event.image)
+                    if not is_empty:
+                        layout.add_to_layout(0, 0, np.ascontiguousarray(rgba[:,:,3]))
+                try:
+                    data = layout.get_layout()
+                except Exception:
+                    data = None
+                layout.destroy()
+                if data is None or data[1] == data[2]:
+                    continue
+
+                cbox, reg1, reg2 = tuple([Box.from_layout(w) for w in data[:3]])
+                regions = PaddingEngine(cbox, Box(0, wd.dy, 0, wd.dx)).directional_pad((reg1, reg2), data[-1])
+                regions = tuple([w.to_absolute(cbox).to_absolute(wd) for w in regions])
+
+                ratio = sum(r.area for r in regions)/wd.area
+                secondary_regions.append(NestedLayout(wr, regions, ratio))
+        return secondary_regions
+
+    def analyze(self, primary_objects: list[list[list[ProspectiveObject]]]):
+        ranges = self.find_ranges_with_one_primary(primary_objects)
+        nested_layouts = self.find_secondary_layouts(ranges)
+
+        nested_layouts = self.__class__.merge_contiguous_alikes_nested(nested_layouts)
+
+        for nest in nested_layouts:
+            analysis_range = nest.nestable_range.range_
+            regions = nest.subwindows
+            logger.debug(f"wid={nest.nestable_range.wid} range={analysis_range}, ratio2wd={nest.ratio}, regions={regions}.")
+
+        # be lax, the subregions tend to be small
+        ssim_tol = self.kwargs.get('ssim_tol_nested', -0.5)
+
+        # This is still organized per Window. The parent is responsible for taking
+        # what it wants, and to override lone primary objects by a nested split.
+
+        windows_nested_objects = [[], []]
+        for nl in nested_layouts:
+            range_, subwindows = nl.nestable_range.range_, nl.subwindows
+            wid = nl.nestable_range.wid
+            detector = WindowsObjectDetector(self.video_fmt, subwindows, ssim_tol)
+            logger.debug(f"Nested analysis in wid={nest.nestable_range.wid}, r={range_.start}:{range_.stop} r2w={nl.ratio}: {subwindows}.")
+            nested_objects = detector.get_objects(self.events[range_.start:range_.stop])
+            windows_nested_objects[wid].append(nested_objects)
+            # offset frame active marker by range start index
+            for region_nested_obj_list in nested_objects:
+                for obj in region_nested_obj_list:
+                    obj.f += range_.start
+                    obj.wid = wid
+        return windows_nested_objects
 ####
