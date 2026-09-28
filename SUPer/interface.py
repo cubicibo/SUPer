@@ -45,6 +45,7 @@ logger = LogFacility.get_logger('SUPer')
 class EncodeResult:
     epochs: list[Epoch]
     valid: bool
+    bd_video: BDVideo
 
 #%%
 class BDNEncoder:
@@ -273,7 +274,7 @@ class BDNEncoder:
         self.assert_composition_number_across_epochs(epochs)
 
         is_valid = self.test_output(bd_video, epochs)
-        return EncodeResult(epochs, is_valid)
+        return EncodeResult(epochs, is_valid, bd_video)
     ####
 
     def test_output(self, bd_video: BDVideo, epochs: list[Epoch]) -> bool:
@@ -377,8 +378,10 @@ class BDNEncoder:
             fp_pes = fp.parent.joinpath(fp.stem + '.pes')
 
             if encode_result.valid:
-                logger.info(f"Writing output file {fp_pes}.")
-                PesMuiWriter(fp_pes).write_epochs(encode_result.epochs)
+                pes_mux_offset_tc_str = self.kwargs.get('pes_mux_offset', '00:00:00:00')
+                pes_mux_offset_pts = TC(encode_result.bd_video.fps.value, pes_mux_offset_tc_str).to_pts()
+                logger.info(f"Writing output file {fp_pes}, mux offset={pes_mux_offset_pts}.")
+                PesMuiWriter(fp_pes, mux_offset=54000000 + pes_mux_offset_pts).write_epochs(encode_result.epochs)
             else:
                 logger.warning("PES+MUI not generated as the stream is not compliant.")
         if is_sup:
