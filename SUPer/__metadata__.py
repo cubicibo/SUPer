@@ -20,4 +20,4 @@ import importlib.metadata
 
 __name__    = "SUPer"
 __author__  = 'cubicibo'
-__version__ = importlib.metadata.version(__name__)
+__version__ = importlib.metadata.version("SUPer")
