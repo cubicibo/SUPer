@@ -1,5 +1,5 @@
 # Architecture
-The encoding engine is designed based on the decoder model constraints. To understand the underlying architecture and design choice, the HDMV PGS decoder model shall be introduced presented.
+The encoder is designed according to the decoder constraints. To document properly the architecture, the HDMV PGS decoder model shall be introduced.
 
 ## Decoder
 
@@ -24,7 +24,7 @@ Here is a scheme of the HDMV PGS decoder model:
                                                                                                    ──────────────────────┘
 ```
 
-MPEG-TS Transport Packet carry HDMV Graphics segments are encapsulated in PES packets and carried in one or numerous MPEG-TS Transport Packet. The PES payload of a graphic segment is obtained by combining the MPEG transport packets in the "RX Buffer" (coded data buffer). The Graphics Decoder removes a full segment at once from the RX buffer on its decoding timestamp.
+HDMV Graphics segments are encapsulated in PES packets and carried in one or numerous MPEG-TS Transport Packet. The PES payload of a graphic segment is obtained by combining the MPEG transport packets in the "RX Buffer" (coded data buffer). The Graphics Decoder removes a full segment at once at its specified decoding timestamp.
 - Object data are processed by the graphics decoder itself. The decoder decodes the bitmap at the pixel output rate Rd of 16e6 pixels per second.
 - Palette, composition and overlaying informations are conveyed to the composition buffer, and processed by the composition controller.
 
@@ -138,29 +138,29 @@ At most 8 unique display updates can be buffered in advance.
 ```
 
 ### Decoder states
-The decoder is entirely controlled by the datastream. The encoder is thereby fully responsible for its proper management. The composition state, carried in each display set, defines what a decoder may do, or be able to do given its state.
+The decoder is entirely controlled by the datastream. The encoder is thereby fully responsible for its proper management. The composition state, carried in each display set, defines what a decoder may do, or be able to do, given its state.
 
 #### Reset (Epoch Start)
-The decoder is reset every epoch start:
+The decoder is reset at every epoch start:
 - Both planes are cleared (made fully transparent).
-- The object buffer loses all of the prior allocations.
+- The object buffer loses all prior allocations.
 - Palettes are erased.
 
-#### On-going epoch
-- Buffer allocations are made whenever a new slot is introduced in the epoch, and these allocations remains.
+#### Ongoing epoch
+- Buffer allocations are made whenever a new slot is introduced in the epoch, and these allocations remain.
 - The palettes accumulate the defined entries. New palette information only needs to specify the difference.
 
-#### Acquisiton Point
-A marker in the stream: a decoder can start to decode the graphic stream from that point onward. The stream shalln't refer to data provided prior to the said Acquisition Point. A decoder is free to flush the palettes and the bitmaps whenever it sees the flag as that data shall no longer be accessed. Buffer allocations are not erased.
+#### Acquisition Point
+A marker in the stream: a decoder can start to decode the graphic stream from that point onward. The stream shall not refer to data provided prior to the said Acquisition Point. A decoder is free to flush the palettes and the bitmaps whenever it sees the flag, as that data shall no longer be accessed. Buffer allocations are not erased.
 
 #### Normal Case
-A standard display update that generally only defines the difference from prior display sets. A decoder looking to catch up on an on-going datastream cannot start decoding from such a display set.
+A standard display update that generally only defines the difference from prior display sets. A decoder looking to catch up on an ongoing datastream cannot start decoding from such a display set.
 
 ### Decoder timing
-The decoder times its operations on the MPEG-TS 90 kHz clock. A single decoding or composition operation, in MPEG-TS 90 kHz ticks, is the ratio between the number of pixels times the said clock, to the respective rate (Rd or Rc). Any fractional remainder is rounded up. As the decoder and composition controller are independent, their operation are parallelized. The total decoding and overlaying time, whenever dealing with two windows, is thereby not always the sum of all durations.
+The decoder times its operations on the MPEG-TS 90 kHz clock. A single decoding or composition operation, in MPEG-TS 90 kHz ticks, is the ratio between the number of pixels times the said clock, to the respective rate ($R_d$ or $R_c$). Any fractional remainder is rounded up. As the decoder and composition controller are independent, their operations are parallelized. The total decoding and overlaying time, whenever dealing with two windows, is thereby not always the sum of all durations.
 
 #### MPEG-TS Memo
-The HDMV PGS decoder consumes PES (Packetized Elementary Streams) packets based on the timestamps carried in the PES header. Each segment type (PCS, WDS, PDS, ODS, END) burden the decoder with a task. The decoding of that task may burden the decoder: the DTS of the new segment shall be larger than some amount. Other segments may merely register an action that shall be triggered at their specified PTS.
+The HDMV PGS decoder consumes PES (Packetized Elementary Streams) packets based on the timestamps carried in the PES header. Each segment type (PCS, WDS, PDS, ODS, END) burdens the decoder with a task. The execution of that task may burden the decoder: the DTS of the new segment shall be larger than a certain amount. Other segments may merely register an action that shall be triggered at their specified PTS.
 
 ##### PTS
 The Presentation Timestamp is not monotonic in a HDMV PG stream, as each segment's PTS carries a different meaning. The PTS timeline of a given segment type is guaranteed to be monotonic nonetheless.
@@ -172,23 +172,25 @@ The Presentation Timestamp is not monotonic in a HDMV PG stream, as each segment
 - END: merely signals the availability of the decoder.
 
 ##### DTS
-The Decoding Timestamp is strictly monotonic in a HDMV PG stream, much like
+The Decoding Timestamp is strictly monotonic in a HDMV PG stream:
 - PCS, WDS: gives the time at which a display set starts to enter the decoder.
 - ODS: gives the timestamp at which decoding may start.
 - PDS, END: N/A, instantaneously decoded.
 
 #### General principle
 
-For every incoming display set, the decoder must first clear the display area. This depends on its current state, and the flags in the said display set. The duration to clear the display is denoted $W_d$, and defined as follow:
+For every incoming display set, the decoder must first clear the display area. This depends on its current state and the flags in the said display set. The duration to clear the display is denoted $W_d$, and defined as follows:
 
 $$
-W_d = \left \lceil{\frac{90000\cdot N_{pixels}}{R_c}}\right \rceil
+W_d = \left \lceil{\frac{90000\cdot N_{\text{pixels}}}{R_c}}\right \rceil
 $$
-where $N_{pixels}$ is defined as the number of pixels that requires to be erased.
+
+where $N_{\text{pixels}}$ is defined as the number of pixels that need to be erased.
+
 $$
-N_{pixels} = \begin{cases}
+N_{\text{pixels}} = \begin{cases}
  \text{The graphics plane size} &\text{at the Epoch Start}\\
- \sum_{k=0}^{n_{windows}} E(window_k)= \sum_{k=0}^{n_{windows}}\begin{cases}Area(window_{k})&\text{if }window_k\text{ is empty}\\
+ \sum_{k=0}^{n_{\text{windows}}} E(\text{window}_k)= \sum_{k=0}^{n_{\text{windows}}}\begin{cases}\text{Area}(\text{window}_{k})&\text{if }\text{window}_k\text{ is empty}\\
 0 &\text{else}\end{cases}&\text{else}\\
 \end{cases}
 $$
@@ -196,118 +198,121 @@ $$
 The decoding time of a display set is driven by the number of pixels to decode, given all of the objects defined therein.
 
 $$
-D_{tot} = \sum_{k=0}^{n_{objects}} D_{k} = \sum_{k=0}^{n_{objects}} \left \lceil{\frac{90000\cdot Size(object_{k})}{R_{d}}}\right \rceil
+D_{\text{tot}} = \sum_{k=0}^{n_{\text{objects}}} D_{k} = \sum_{k=0}^{n_{\text{objects}}} \left \lceil{\frac{90000\cdot \text{Size}(\text{object}_{k})}{R_{d}}}\right \rceil
 $$
 
 The composition of a window starts whenever:
 - Decoding of the display set has been completed.
 - Decoding of the object referenced by the composition object targeting that window has been completed.
-- Decoding of all objects referenced by all of the composition objects targeting the said window has been completed.
+- Decoding of all objects referenced by all composition objects targeting the said window has been completed.
 
 $$
-Composition(window_k) = C_k = \begin{cases}
-\left \lceil{\frac{90000\cdot Area(window_k)}{R_c}}\right \rceil
-&\text{if }window_k\text{ is assigned}\\
+\text{Composition}(\text{window}_k) = C_k = \begin{cases}
+\left \lceil{\frac{90000\cdot \text{Area}(\text{window}_k)}{R_c}}\right \rceil
+&\text{if }\text{window}_k\text{ is assigned}\\
 0 &\text{else}\\
 \end{cases}
 $$
 
-The graphics decoder achieves full decoding of a display set prior to the composition controller finishing up the said composition. We can additionally define $DTS_{end}$, the time at which the graphics decoder can starts to decode the subsequent display set data:
+The graphics decoder achieves full decoding of a display set prior to the composition controller finishing up the said composition. We can additionally define $DTS_{\text{end}}$, the time at which the graphics decoder can start to decode the subsequent display set data:
+
 $$
-DTS_{end} = D_{d} \lt{} PTS
+DTS_{\text{end}} = D_{d} < PTS
 $$
 
 Given all of these, the latest possible decoding time of a display set, denoted DTS, can be derived from its presentation timestamp (PTS) via:
 
 $$
-DTS \le{} PTS - decoding\ duration
+DTS \le PTS - \text{decoding duration}
 $$
 
 The decoding duration is affected by the parallelized operation of the graphics decoder and composition controller. That non-linearity appears in the unspecified function $f$ below:
 
 $$
-decoding\ duration = max(f(W_d, \sum_{k=0}^{n_{objects}-1}D_{k}), D_{tot}) + C_{last\ referenced\ window}
+\text{decoding duration} = \max\left(f\left(W_d, \sum_{k=0}^{n_{\text{objects}}-1}D_{k}\right), D_{\text{tot}}\right) + C_{\text{last referenced window}}
 $$
 
 Thanks to the decoder constraints of a maximum of two composition objects, we can define $f$:
 
 $$
-f = max(W_d, D_0) + \begin{cases}C_{0_{i}} &\text{if }D_0\text{ is the only object assigned to }window_i\\
+f = \max(W_d, D_0) + \begin{cases}C_{0_{i}} &\text{if }D_0\text{ is the only object assigned to }\text{window}_i\\
 0 &\text{else}\end{cases}
 $$
 
-- If both objects are assigned to the same window, $C_{0_{i}}$ is zero, while  $C_{last\ referenced\ window}$ isn't.
-- If both objects were decoded in prior display sets and are to be re-used as is, then the decoding duration is merely the sum of the clear and composition time.
-- If a display set defines two composition with two objects, decoded a new of one of the object and re-use an existing object from the buffer, then the re-used object shall appear last in the composition list, and the decoding time $D$ associated to that specific object is zero.
+- If both objects are assigned to the same window, $C_{0_{i}}$ is zero, while $C_{\text{last referenced window}}$ is not.
+- If both objects were decoded in prior display sets and are to be reused as is, then the decoding duration is merely the sum of the clear and composition time.
+- If a display set defines two compositions with two objects, decodes a new one for one of the objects, and reuses an existing object from the buffer, then the reused object shall appear last in the composition list, and the decoding time $D$ associated with that specific object is zero.
 
-For palette-only display update:
+For a palette-only display update:
 
 $$
-DTS \lt{} PTS\text{ , in general: } DTS = PTS - \sum_{k=0}^{n_{windows}} C_{k}
+DTS < PTS\text{ , in general: } DTS = PTS - \sum_{k=0}^{n_{\text{windows}}} C_{k}
 $$
 
-In general, it's recommended to set the decoding duration of a palette-only display update to the time required to compose both windows.
+In general, it is recommended to set the decoding duration of a palette-only display update to the time required to compose both windows.
 
 Lastly:
 - Some decoding timestamps are shifted by a tick to avoid certain segments having a PTS equal to their DTS, a forbidden case according to the ITU H.222 standard.
-- the DTS shall not precede the PTS by more than one second:
+- The DTS shall not precede the PTS by more than one second:
 
 $$
-PTS - 90000 \lt{} DTS \le{} PTS - decoding\ duration
+PTS - 90000 < DTS \le PTS - \text{decoding duration}
 $$
 
 
 
 ## Encoder
-The encoder is a chain closed-loop units. Each unit performs at least a single pass on the events that compose the epoch. Some blocks may perform numerous passes for optimality.
+The encoder is a chain of closed-loop units. Each unit performs at least a single pass on the events that compose the epoch. Some blocks may perform numerous passes for optimality.
 
 ### Epochs Definitions
-Two-pass analysis process to identify groups of contiguous events that compose an epoch, given the codec constraints. The purpose is to find the smallest possible composition area, for every epoch. The code aggressively searches for epochs, as long epochs have drawbacks.
+This is a two-pass analysis process to identify groups of contiguous events that compose an epoch, given the codec constraints. The purpose is to find the smallest possible composition area for every epoch. The code aggressively searches for epochs, as long epochs have drawbacks.
 
-The first pass is high-level single-threaded and merely uses the XML metadata. The end goal is to identify groups of events close together. The second pass is refined and multi-threaded. Each thread is assigned a group:
-- The algorithm combines the alpha layer of every event (in reverse order)
-- Every feasible time gap between two events, a brute force search is performed to find the optimial layout.
-    - Given the result, a worst case decoding time can be estimated.
+The first pass is high-level, single-threaded, and merely uses the XML metadata. The end goal is to identify groups of events close together. The second pass is refined and multi-threaded. Each thread is assigned a group:
+- The algorithm combines the alpha layer of every event (in reverse order).
+- For every feasible time gap between two events, a brute force search is performed to find the optimal layout.
+    - Given the result, a worst-case decoding time can be estimated.
     - If the time gap between those two events is sufficient, an epoch is defined.
-- The process restarts with the remainder events.
-All epochs definitions are ready when all of the groups have been processed by the threads.
+
+- The process restarts with the remaining events.
+All epoch definitions are ready when all of the groups have been processed by the threads.
 
 At the end of this process, we have a list of epochs with:
-- A set of events that makes up the epoch.
+- A set of events that make up the epoch.
 - One or two windows, which are fixed for the entire epoch (the composition layout).
-- Hard minimum decoding and maximum presentation timestamps that may be used by the encoder to further optimise the datastream.
+- Hard minimum decoding and maximum presentation timestamps that may be used by the encoder to further optimize the datastream.
 
-From there on, the encoding process will be epoch to epoch.
+From there on out, the encoding process will be from epoch to epoch.
 
 ### Object detection
-To detect continuous display of a graphic, or sensibly similar graphics across numerous display updates, the object detection logic stacks the displayed content of each window. Based on two SSIM measure of prior grayscale presentations to the current display, the object detector may decide if the new display is a new object, or a continuation of the current one. This process is done in a single pass for all of the windows of the epoch. The output is a minimum list of objects (prospective objects) that should be carried in the datastream to achieve a somewhat sensible output given the input. Each prospective object is associated to a given window.
+To detect the continuous display of a graphic, or sensibly similar graphics across numerous display updates, the object detection logic stacks the displayed content of each window. Based on two SSIM measures of prior grayscale presentations to the current display, the object detector may decide if the new display is a new object, or a continuation of the current one. This process is done in a single pass for all of the windows of the epoch. The output is a minimum list of objects (prospective objects) that should be carried in the datastream to achieve a somewhat sensible output given the input. Each prospective object is associated with a given window.
 
-As a future improvement, the process shall be performed a second time for sections of the stream where only one Window is in use, to use two composition objects within the same window.
+As a future improvement, the process shall be performed a second time for sections of the stream where only one window is in use, to use two composition objects within the same window.
 
 ### Stream shaping
-Based on the events, a list of display updates ("DSNode") is created. These nodes gets references to the prospective objects that they should have in display. A node has sufficient datastream context to provide an approximate, or an exact decoding and presentation timestamps.
-To avoid buffer management complexities, SUPer sizes every object displayed within a given window to the maximum rectangle in display in that window within the epoch. Given that fixed sized, the best object placement is determined to minimize the number of forced display refreshes. The rest of the shaping depends on the user settings.
+Based on the events, a list of display updates ("DSNode") is created. These nodes get references to the prospective objects that they should have on display. A node has sufficient datastream context to provide approximate or exact decoding and presentation timestamps.
+
+To avoid buffer management complexities, SUPer sizes every object displayed within a given window to the maximum rectangle in display in that window within the epoch. Given that fixed size, the best object placement is determined to minimize the number of forced display refreshes. The rest of the shaping depends on the user settings.
 By that point, each node returns exact timestamps:
 - Time at which the decoding starts.
 - Time at which the decoding ends.
 - Time at which the node shall be displayed.
 
-Stream shaping is a multi-pass process, where the datastream is iteratively built given the detected objects, the "buffer slots" and the events timing:
+Stream shaping is a multi-pass process, where the datastream is iteratively built given the detected objects, the "buffer slots", and the event timings:
 - Find all key display updates.
 - Amend the list of display updates based on the specified user settings and the events timeline.
 
 #### Events filtering
-Given the exact decoding timestamps (start & end), short-duration nodes that prevents the display of long-standing ones are dropped to achieve a strictly monotonic decoding timeline. Concurrently, the encoder tries to see if a node may comply with the decoding timeline if it is defined as a difference from the prior displays. Filtering the timeline is done via backtracking and a variable sized window that does both lookahead and retrospection. The last step is to perform psychovisual optimisations based on the encoded timeline of events.
+Given the exact decoding timestamps (start & end), short-duration nodes that prevent the display of long-standing ones are dropped to achieve a strictly monotonic decoding timeline. Concurrently, the encoder tries to see if a node can comply with the decoding timeline if it is defined as a difference from the prior displays. Filtering the timeline is done via backtracking and a variable-sized window that does both lookahead and retrospection. The last step is to perform psychovisual optimizations based on the encoded timeline of events.
 
-To meet the decoding constraints, the encoder may shift the decoding timestamps of a few display set
+To meet the decoding constraints, the encoder may shift the decoding timestamps of a few display sets:
 - Display sets with compressed bitmaps can only be decoded earlier than intended.
 - Display sets that merely convey a palette change may have an arbitrary decoding time. It shall only precede the presentation of the palette.
 
-Each node has definitive timestamps, composition state, and objects at the end of that process.
+Each node has definitive timestamps, composition states, and objects at the end of that process.
 
 #### Encoding
-The bytestream of an epoch is generated in two nested for loop:
+The bytestream of an epoch is generated in two nested for loops:
 - The primary loop generates the Acquisition Point display sets (or Epoch Start for the first Display Set)
-- The inner loop generates the Normal Case display sets that follows, those that define the difference from a base display.
+- The inner loop generates the Normal Case display sets that follow, those that define the difference from a base display.
 
-While encoding, a dummy decoder with resources is simulated. Each referenced element (buffer slots, palettes) that shall be reserved for a period of time is obtained through that dummy model. If the preceeding steps were done incorrectly, the encoder would run out of resources and the bytestream generation would fail. The encoding step is thereby self-verifying. 
+While encoding, a dummy decoder with resources is simulated. Each referenced element (buffer slots, palettes) that shall be reserved for a period of time is obtained through that dummy model. If the preceding steps were done incorrectly, the encoder would run out of resources and the bytestream generation would fail. The encoding step is thereby self-verifying.
