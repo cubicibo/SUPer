@@ -16,10 +16,13 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 import logging
+import multiprocessing as mp
+import time
 from abc import ABC
 from contextlib import nullcontext
 from enum import IntEnum
-from typing import ClassVar, Self
+from functools import partial
+from typing import ClassVar, NoReturn, Self
 
 import numpy as np
 from PIL import Image
@@ -76,7 +79,7 @@ class TC(Timecode):
 
     def __add__(self, other: Self | int) -> Self:
         if isinstance(other, __class__):
-            assert other.fractional_fps == self.fractional_fps and self.drop_frame == other.drop_frame == False
+            assert other.fractional_fps == self.fractional_fps and self.drop_frame is False and other.drop_frame is False
             frames = other.frames
         else:
             assert isinstance(other, int)
@@ -223,7 +226,7 @@ class LogFacility:
 
     @classmethod
     def close_progress_bar(cls, logger: logging.Logger):
-        if cls._logger.get(logger.name, None) != None and cls._logpbar.get(logger.name, None) is not None:
+        if cls._logger.get(logger.name, None) is not None and cls._logpbar.get(logger.name, None) is not None:
             cls._logpbar[logger.name].close()
             cls._logpbar[logger.name] = None
 
@@ -265,3 +268,30 @@ class LogFacility:
         if cls._logrep is None:
             return
         logger.addHandler(cls._logrep)
+
+def _setup_mt_env(workers: mp.Process, disable_tqdm: bool = True) -> None:
+    import os
+    import signal
+    if disable_tqdm:
+        LogFacility.disable_tqdm()
+    def sighandler(snum, frame, workers) -> NoReturn:
+        import sys
+        for worker in workers:
+            try:
+                if worker.is_alive():
+                    worker.kill()
+            except ValueError:
+                pass
+        time.sleep(0.005)
+        for worker in workers:
+            try:
+                worker.join()
+            except (ValueError, RuntimeError, AssertionError):
+                pass
+        sys.exit(1)
+    f_term = partial(sighandler, workers=workers)
+    signal.signal(signal.SIGINT, f_term)
+    signal.signal(signal.SIGTERM, f_term)
+    if os.name == 'nt':
+        signal.signal(signal.SIGBREAK, f_term)
+####

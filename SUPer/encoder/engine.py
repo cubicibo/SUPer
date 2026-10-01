@@ -264,7 +264,6 @@ class DSNode:
     ####
 ####
 
-
 class EpochEncoderEngine:
     def __init__(self, ectx: EpochData, stream_ctx: PGStreamCtx, kwargs) -> None:
         self.ectx = ectx
@@ -272,9 +271,9 @@ class EpochEncoderEngine:
         self._codec = PGEpochContext(stream_ctx, self.ectx.windows,
                                      differentiate_palette=(not self.kwargs.get('full_palette', False)))
 
-    def analyze(self) -> tuple[...]:
+    def analyze(self, workers) -> tuple[...]:
         ssim_tol = self.kwargs.get('ssim_tol', 0)
-        detector = WindowsObjectDetector(self._codec.bd_video.fmt, self.ectx.windows, ssim_tol)
+        detector = WindowsObjectDetector(self._codec.bd_video.fmt, self.ectx.windows, ssim_tol, workers=workers)
 
         pgobjs = detector.get_objects(self.ectx.events)
 

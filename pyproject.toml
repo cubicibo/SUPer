@@ -45,7 +45,7 @@ dependencies = [
     "SSIM-PIL",
     "timecode==1.5.1",
     "siphash24",
-    'psutil ; platform_system == "Windows"',
+    "psutil",
     "piliq@git+https://github.com/cubicibo/piliq",
     "brule@git+https://github.com/cubicibo/brule",
     "guizero",
@@ -121,7 +121,7 @@ extend-exclude = ["tests"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.*" = ["F401", "F403", "N999"]
 "supergui.py" = ["BLE001", "S110", "I001"]
-"SUPer/interface.py" = ["BLE001"]
+"SUPer/interface.py" = ["BLE001", "S112", "S110"]
 "SUPer/bytestream/pgstreams.py" = ["SIM115"]
 "SUPer/bytestream/segments.py" = ["RUF023"]
 "SUPer/encoder/epochctx.py" = ["I001"]

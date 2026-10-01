@@ -16,10 +16,11 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-
+import multiprocessing as mp
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass, field
 from itertools import chain, count
+from queue import Empty
 from typing import Self
 
 import cv2
@@ -134,8 +135,7 @@ class TreeAnalyzer:
         leng.add_to_layout(0, 0, np.asarray(frame.getchannel('A')))
         cbox, reg1, reg2, is_vertical = leng.get_layout()
         leng.destroy()
-        box_factory = lambda x: Box.from_coords(x[1], x[3], x[0], x[2])
-        cbox, reg1, reg2 = tuple([box_factory(b) for b in (cbox, reg1, reg2)])
+        cbox, reg1, reg2 = tuple([Box.from_layout(b) for b in (cbox, reg1, reg2)])
         return self._validate_layout(cbox, is_vertical, reg1, reg2)
 
     def _validate_layout(self, cbox: Box, is_vertical: int, reg1: Box, reg2: Box) -> ...:
@@ -334,12 +334,74 @@ class ObjectDetector:
         return # StopIteration
 ####
 
+class WorkerObjectDetector(mp.Process):
+    def __init__(self) -> None:
+        super().__init__()
+        self._q = mp.Queue()
+        self._qo = mp.Queue()
+        self._flag = mp.Value('h')
+        self._flag.value = 1
+
+    def send(self, p: tuple[EpochEvent, Image.Image]) -> None:
+        self._q.put(p)
+
+    def get(self) -> ProspectiveObject | None:
+        return self._qo.get()
+
+    def request_stop(self) -> None:
+        self._flag.value = 0
+
+    def acquire(self) -> None:
+        assert self._flag.value == 1
+        self._flag.value = 2
+
+    def release(self) -> None:
+        assert self._flag.value == 2
+        self._flag.value = 1
+
+    def flush(self) -> None:
+        while True:
+            try:
+                self._qo.get_nowait()
+            except Empty:
+                break
+
+    def run(self) -> None:
+        detector = None
+        while self._flag.value:
+            try:
+                v = self._q.get(0.1)
+            except Empty:
+                continue
+            if isinstance(v, dict):
+                if detector:
+                    del detector
+                detector = ObjectDetector(**v).analyze()
+                next(detector)
+            elif isinstance(v, EpochEvent) or v is None:
+                try:
+                    ev_img = v.image if v else None
+                    self._qo.put(detector.send((v, ev_img)))
+                except (StopIteration, AttributeError):
+                    self._qo.put(None)
+                    detector = None
+            else:
+                break
+####
+
 class WindowsObjectDetector:
-    def __init__(self, fmt: Format, windows: Sequence[Box], ssim_tol: float = 0, nested_analysis: bool = False):
+    def __init__(self, fmt: Format, windows: Sequence[Box], ssim_tol: float = 0, workers: tuple[WorkerObjectDetector] | None = None):
         self.windows = windows
         self.fmt = fmt
         self.ssim_tol = ssim_tol
-        self.nested_analysis = nested_analysis
+        self.workers = workers
+
+    @staticmethod
+    def _add_object_log(pgobj: ProspectiveObject, wid: int, pgobjs: list[list[...]]) -> None:
+        if pgobj is not None:
+            pgobj.wid = wid
+            logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
+            pgobjs[wid].append(pgobj)
 
     def identify_primary_objects(self,
         events: list[EpochEvent],
@@ -348,9 +410,16 @@ class WindowsObjectDetector:
     ) -> list[list[ProspectiveObject]]:
         #Init the detectors
         detectors = []
-        for k, window in enumerate(self.windows):
-            detectors.append(ObjectDetector(window, ssim_threshold=ssim_threshold, ssim_offset=ssim_offset).analyze())
-            next(detectors[-1])
+        use_worker = len(self.windows) > 1 and self.workers
+        target_wid = 0 if (len(self.windows) == 1 or self.windows[0].area > self.windows[1].area) else 1
+        ls_wds = [target_wid] if len(self.windows) == 1 else [target_wid, 1 - target_wid]
+        for worker_id, wid in enumerate(ls_wds):
+            window = self.windows[wid]
+            if use_worker and worker_id < len(self.workers):
+                self.workers[worker_id].send({'window':window, 'ssim_threshold':ssim_threshold, 'ssim_offset':ssim_offset})
+            else:
+                detectors.append((wid, ObjectDetector(window, ssim_threshold=ssim_threshold, ssim_offset=ssim_offset).analyze()))
+                next(detectors[-1][1])
 
         # run the analysis on both windows, event per event. Collect all objects returned in a list, for each window
         pgobjs = [[] for k in range(len(self.windows))]
@@ -360,17 +429,20 @@ class WindowsObjectDetector:
 
         # to flush a detector, two consecutives None must be sent.
         for event in chain(events, [None]*2):
-            # load image once, regardless of the window count.
-            ev_img = event.image if event else None
-            for wid, (window, detector) in enumerate(zip(self.windows, detectors)):
-                try:
-                    pgobj = detector.send((event, ev_img))
-                except StopIteration:
-                    pgobj = None
-                if pgobj is not None:
-                    pgobj.wid = wid
-                    logger.debug(f"Window={wid} has new PGObject: f={pgobj.f}, S(mask)={len(pgobj.mask)}, mask={pgobj.mask}")
-                    pgobjs[wid].append(pgobj)
+            if use_worker:
+                for worker in self.workers:
+                    worker.send(event)
+            if len(detectors):
+                ev_img = event.image if event else None
+                for wid, detector in detectors:
+                    try:
+                        __class__._add_object_log(detector.send((event, ev_img)), wid, pgobjs)
+                    except StopIteration:
+                        pass
+            if use_worker:
+                for worker, wid in zip(self.workers, ls_wds):
+                    __class__._add_object_log(worker.get(), wid, pgobjs)
+
             if event is not None:
                 pbar.n += 1
                 if pbar.n & 0xF == 0 or pbar.n == len(events):
