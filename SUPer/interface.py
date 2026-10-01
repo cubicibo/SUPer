@@ -17,17 +17,15 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
 import multiprocessing as mp
-import os
-import signal
-import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
 from itertools import chain
 from pathlib import Path
 from queue import Empty
-from typing import Any, NoReturn, Self
+from typing import Any, Self
+
+import psutil
 
 from .bdnxml import BDNXML
 from .bytestream.pgstreams import Epoch, PesMuiWriter, SUPWriter
@@ -37,7 +35,7 @@ from .encoder.codecctx import PGStreamCtx
 from .encoder.engine import EpochEncoderEngine
 from .encoder.epochctx import EpochData, EpochFinder, EventsPreprocessor, LayoutMode
 from .encoder.imgproc import SSIMPW, BuiltinQuantizer
-from .internals import TC, LogFacility
+from .internals import TC, LogFacility, _setup_mt_env
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -114,13 +112,7 @@ class BDNEncoder:
     def _adjust_thread_count(self) -> None:
         n_threads = self._threads
         if (n_threads_auto := isinstance(n_threads, str)): # auto
-            try:
-                import psutil
-            except (ModuleNotFoundError, NameError):
-                #commonplace: logical = 2*physical cores
-                n_threads = max(1, mp.cpu_count() >> 1)
-            else:
-                n_threads = psutil.cpu_count(logical=False)
+            n_threads = psutil.cpu_count(logical=False)
 
         if n_threads_auto:
             logger.info(f"Using {n_threads} thread(s).")
@@ -143,31 +135,6 @@ class BDNEncoder:
         return output_pg_epochs
     ####
 
-    @staticmethod
-    def _setup_mt_env(workers: mp.Process) -> None:
-        LogFacility.disable_tqdm()
-        def sighandler(snum, frame, workers) -> NoReturn:
-            for worker in workers:
-                try:
-                    if worker.is_alive():
-                        worker.kill()
-                except ValueError:
-                    pass
-            time.sleep(0.005)
-            for worker in workers:
-                try:
-                    worker.join()
-                except (ValueError, RuntimeError, AssertionError):
-                    pass
-            sys.exit(1)
-        f_term = partial(sighandler, workers=workers)
-        signal.signal(signal.SIGINT, f_term)
-        signal.signal(signal.SIGTERM, f_term)
-        if os.name == 'nt':
-            signal.signal(signal.SIGBREAK, f_term)
-        logger.debug("Registered signal handlers.")
-    ####
-
     def _convert_mt(self, bd_video: BDVideo) -> list[Epoch]:
         BDNEpochWorker.reset_module()
 
@@ -175,10 +142,12 @@ class BDNEncoder:
 
         # No point in having more workers than epochs
         n_threads = min(self._threads, len(epochs_ctx))
-        as_deamon = self.kwargs.get('daemonize', True)
-        workers = [BDNEpochWorker(bd_video, self.kwargs, as_deamon) for _ in range(n_threads)]
+        as_deamon = self.kwargs.get('daemonize', False)
+        num_workers = 1 if as_deamon is False else 0
+        workers = [BDNEpochWorker(bd_video, self.kwargs, num_workers, as_deamon) for _ in range(n_threads)]
 
-        self.__class__._setup_mt_env(workers)
+        _setup_mt_env(workers, True)
+        logger.debug("Registered signal handlers.")
 
         logger.debug("Starting workers...")
         for worker in workers:
@@ -187,6 +156,8 @@ class BDNEncoder:
         while not all(worker.is_available() for worker in workers):
             time.sleep(0.2)
         ###
+
+        child_pids = [w.get() for _ in range(num_workers) for w in workers]
 
         #Orchestrator starts here
         busy_flags = {worker.iid: False for worker in workers}
@@ -247,9 +218,16 @@ class BDNEncoder:
         # referenced by the registered signal function, so clear the list.
         workers.clear()
         if not healthy:
+            for pid in child_pids:
+                if pid is not None:
+                    try:
+                        psutil.Process(pid).kill()
+                    except Exception:
+                        continue
             logger.warning("One worker had an unrecoverable error, giving up.")
             import sys
             sys.exit(1)
+
         return ep_timeline
     ####
 
@@ -257,8 +235,10 @@ class BDNEncoder:
     def _broadcast_mp_func(workers: list[mp.Process], function: Callable[[mp.Process], ...], sleep_ms: float = 0.05) -> None:
         time.sleep(0.01)
         for worker in workers:
-            try: function(worker)
-            except Exception: ...
+            try:
+                function(worker)
+            except Exception:
+                pass
     ####
 
     def encode(self) -> tuple[bool, list[Epoch]]:
@@ -413,20 +393,22 @@ class EpochEncode:
                     logger.debug(f"Event at {event.inTC} repeated {count}, {len(event.repeated_inTC)} at {event.repeated_inTC}")
         return self
 
-    def encode(self) -> Epoch:
+    def encode(self, additional_workers: tuple[mp.Process] | None = None) -> Epoch:
         engine = EpochEncoderEngine(self.epoch_data, self.pg_stream_ctx, self.kwargs)
-        ctx = engine.analyze()
+        ctx = engine.analyze(additional_workers)
         ctx = engine.plan(ctx)
         return engine.encode(ctx)
 
 class BDNEpochWorker(mp.Process):
     _instance_cnt = 0
-    def __init__(self, video_fmt: BDVideo, kwargs: dict[str, Any], daemonize: bool = True) -> None:
+    def __init__(self, video_fmt: BDVideo, kwargs: dict[str, Any], num_workers: int = 0, daemonize: bool = True) -> None:
         self._iid = __class__._instance_cnt
         __class__._instance_cnt += 1
 
         self.video_fmt = video_fmt
         self.kwargs = kwargs
+        assert 0 <= num_workers <= 2
+        self.num_workers = num_workers
 
         self._q_rx = mp.Queue()
         self._q_tx = mp.Queue()
@@ -496,8 +478,22 @@ class BDNEpochWorker(mp.Process):
 
     def run(self) -> None:
         self.setup_env()
+        if not self.daemon:
+            from .encoder.eventdetect import WorkerObjectDetector
+            detector_workers = [WorkerObjectDetector() for _ in range(self.num_workers)]
+            logger.debug("Starting detector workers...")
+            for worker in detector_workers:
+                worker.start()
+        else:
+            detector_workers = None
+
         logger.debug(f"{self._prefix} ready.")
         pg_stream_ctx = PGStreamCtx(self.video_fmt)
+
+        if detector_workers:
+            for d in detector_workers:
+                self._q_tx.put(d.pid)
+
         self._available.value = 1
         while True:
             try:
@@ -512,7 +508,7 @@ class BDNEpochWorker(mp.Process):
             logger.info(f"{self._prefix} encoding epoch {epoch_id}: {ectx.events[0].inTC}->{ectx.events[-1].outTC} with {len(ectx.events)} event(s), {len(ectx.windows)} window(s).")
             ee = EpochEncode(pg_stream_ctx, ectx, self.kwargs)
             try:
-                new_epoch = ee.preprocess().encode()
+                new_epoch = ee.preprocess().encode(detector_workers)
             except Exception as e:
                 self._print_tb_except(e)
                 self._available.value = -1
@@ -523,5 +519,11 @@ class BDNEpochWorker(mp.Process):
             self._q_tx.put((new_epoch, epoch_id))
             self._available.value = 1
         ####
+        if detector_workers:
+            logger.debug(f"Encoder {self._prefix} cleaning-up")
+            for det in detector_workers:
+                det.request_stop()
+                det.terminate()
+                det.join(0.01)
     ####
 ####
