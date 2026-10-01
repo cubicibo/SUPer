@@ -39,6 +39,7 @@ except ModuleNotFoundError:
 
 #%%
 class GraphicsDecoder:
+    BUFFER_SIZE = 4 << 20
     RD = 16000000
     RC = 32000000
     FREQ = 90000

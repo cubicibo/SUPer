@@ -144,9 +144,7 @@ def test_rx_bitrate(epochs: list[Epoch], bitrate: int, fps: float) -> bool:
 def test_diplayset(ds: DisplaySet) -> bool:
     """
     This function performs hard check on the display set
-    if its structure is bad, it raises an assertion error.
-    This is preferred over a "return false" because a bad displayset
-    will typically crash a hardware decoder and we don't want that.
+    if its structure is bad, then the stream is non-compliant.
 
     :param ds: Display Set to test for structural compliancy
     """
@@ -160,7 +158,7 @@ def test_diplayset(ds: DisplaySet) -> bool:
     if ds.wds:
         comply &= PGSegmentType.WDS == ds.wds.type
         comply &= ds.pcs.palette_update is False # "Manipulating windows on palette update (conflicting display updates)."
-        comply &= 1 <= len(ds.wds.windows) <= 2 # "Unusual window count."
+        comply &= 1 <= len(ds.wds.windows) <= 2 # "Nonsense window count."
 
     if ds.pds:
         pds_ids = set()
@@ -168,6 +166,7 @@ def test_diplayset(ds: DisplaySet) -> bool:
             comply &= pds.palette_id not in pds_ids
             pds_ids.add(pds.palette_id)
             if ds.pcs.palette_update:
+                comply &= len(ds.pcs.composition_objects) > 0, #Palette update on no composition
                 comply &= ds.pcs.palette_id == pds.palette_id # "Palette ID mismatch between PCS and PDS on palette update."
             comply &= pds.palette_id < 8 # "Using undefined palette ID."
             comply &= len(pds.palette) <= 256 # "Defining more than 256 palette entries."

@@ -104,6 +104,15 @@ class PGObjectBuffer:
     def __init__(self):
         self._slots = {}
 
+    def get_capacity(self) -> int:
+        return self.__class__.__MAX_SIZE
+
+    def get_slots(self) -> dict[int, ObjectSlot]:
+        return self._slots.copy()
+
+    def get_occupancy(self) -> int:
+        return sum(s.size() for s in self._slots.values())
+
     def get(self, shape: Shape, dts: int | None) -> tuple[int, ObjectSlot] | None:
         """
         Get a slot of matching shape that can be used to decode an object.
@@ -112,8 +121,14 @@ class PGObjectBuffer:
             if dts is None or slot.pts is None or dts > slot.pts:
                 return slot_id, slot
 
+    def get_or_allocate(self, shape: Shape, dts: int) -> tuple[int, ObjectSlot] | None:
+        sid_s = self.get(shape, dts)
+        if sid_s is None:
+            sid_s = self.allocate(shape)
+        return sid_s
+
     def allocate(self, shape: Shape) -> tuple[int, ObjectSlot] | None:
-        if sum(s.size() for s in self._slots.values()) + shape.area > self.__class__.__MAX_SIZE:
+        if self.get_occupancy() + shape.area > self.__class__.__MAX_SIZE:
             return None
         if len(self._slots) >= self.__class__.__MAX_SLOTS:
             return None
@@ -130,7 +145,7 @@ class PGObjectBuffer:
     def allocate_indexed(self, shape: Shape, slot_id: int) -> bool:
         if self._slots.get(slot_id, None) is not None:
             return False
-        if sum(s.size() for s in self._slots.values()) + shape.area > self.__class__.__MAX_SIZE:
+        if self.get_occupancy() + shape.area > self.__class__.__MAX_SIZE:
             return False
         self._slots[slot_id] = ObjectSlot(shape=shape)
         return True
