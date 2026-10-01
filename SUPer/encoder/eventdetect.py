@@ -480,9 +480,9 @@ class DualComposition:
         assert self.nestable_range.wid == self.pgobjs[0].wid == self.pgobjs[1].wid
 
 class NestedAnalyzer:
-    def __init__(self, windows: Sequence[Box], events: list[EpochEvent], video_fmt: Format, params: dict[str, Any] = {}) -> None:
+    def __init__(self, windows: Sequence[Box], events: list[EpochEvent], video_fmt: Format, params: dict[str, Any] | None = None) -> None:
         self.video_fmt = video_fmt
-        self.kwargs = params
+        self.kwargs = params or {}
         self.windows = windows
         self.events = events
         self.ranges: list[NestableRange] | None = None

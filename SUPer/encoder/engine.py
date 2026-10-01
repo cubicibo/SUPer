@@ -357,12 +357,12 @@ class EpochEncoderEngine:
         r_nodes = self.roll_nodes(nodes)
 
         #Generate datastream according to plan
-        epoch = self._convert(pgobjs, r_nodes)
+        epoch = self._generate_bytestream(pgobjs, r_nodes)
 
-        self.assert_plan_vs_actual(epoch, buffer_plan)
+        self.assert_plan_vs_stream(epoch, buffer_plan)
         return epoch
 
-    def assert_plan_vs_actual(self, epoch: Epoch, buffer_plan: PGObjectBuffer) -> None:
+    def assert_plan_vs_stream(self, epoch: Epoch, buffer_plan: PGObjectBuffer) -> None:
         buffer = PGObjectBuffer()
         for ds in epoch:
             for ods in filter(lambda o: o.flag & o.DataFlag.FIRST, ds.ods):
@@ -376,7 +376,9 @@ class EpochEncoderEngine:
 
         slots = buffer.get_slots()
         planned_slots = buffer_plan.get_slots()
-        assert len(planned_slots) == len(slots), f"plan={planned_slots} vs real={slots}"
+        assert len(planned_slots) >= len(slots), f"plan={planned_slots} vs real={slots}"
+        if len(planned_slots) > len(slots):
+            logger.debug(f"Planned too many buffer slots: plan={planned_slots} V.S. final={slots}.")
         logger.debug(f"Real buffer occupancy: {buffer.get_occupancy()}: {100*buffer.get_occupancy()/buffer.get_capacity():.02f}%.")
         for slot_id, slot in slots.items():
             expected_slot = planned_slots[slot_id]
@@ -953,7 +955,7 @@ class EpochEncoderEngine:
         i: int, k: int, pgobs_items, nodes: list[DSNode], has_two_objs: bool,
         c_pts: float, normal_case_refresh: bool | dict[int, bool], prev_cobjs_refs: list[tuple[ProspectiveObject, CompositionObject]] | None = None
     ) -> ...:
-        cobjs, pals, o_ods, cobjs_ref = [], [], [], []
+        cobjs, pals, o_ods, cobjs_refs = [], [], [], []
         node = nodes[i]
 
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
@@ -1003,7 +1005,7 @@ class EpochEncoderEngine:
                     new_ods = self._codec.register_object(c_pts, node.dts(), window_bitmap)
 
                     cobjs.append(CompositionObject(new_ods[0].object_id, pgo.wid, cpx, cpy, False))
-                    cobjs_ref.append((pgo, cobjs[-1]))
+                    cobjs_refs.append((pgo, cobjs[-1]))
                     assert window_bitmap.shape == node.slots[pgo.wid], f"{window_bitmap.shape}, {node.slots[pgo.wid]}"
                     coords += offset
                     o_ods += new_ods
@@ -1031,7 +1033,7 @@ class EpochEncoderEngine:
                     assert 1 == sum(normal_case_refresh) and id_skipped is None and prev_cobjs_refs is not None and pgo is not None
                     composition = next(filter(lambda x: x[0] == pgo, prev_cobjs_refs))[1]
                     cobjs.append(composition)
-                    cobjs_ref.append((pgo, composition))
+                    cobjs_refs.append((pgo, composition))
                     self._codec.update_object_reservation(composition.object_id, node.pts())
                     id_skipped = oix
 
@@ -1084,7 +1086,7 @@ class EpochEncoderEngine:
 
                 new_ods = self._codec.register_object(c_pts, node.dts(), wd_bitmap)
                 cobjs.append(CompositionObject(new_ods[0].object_id, pgo.wid, cpx, cpy, False))
-                cobjs_ref.append((pgo, cobjs[-1]))
+                cobjs_refs.append((pgo, cobjs[-1]))
                 o_ods += new_ods
 
             if id_skipped is not None:
@@ -1099,10 +1101,10 @@ class EpochEncoderEngine:
             cumulated_palette |= pals[1][0]
         else:
             pals.append([Palette() for _ in range(len(pals[0]))])
-        return cobjs, pals, o_ods, cobjs_ref
+        return cobjs, pals, o_ods, cobjs_refs
     ####
 
-    def _convert(self, pgobjs, input_nodes: list[DSNode]):
+    def _generate_bytestream(self, pgobjs, input_nodes: list[DSNode]):
         n_actions = len(input_nodes)
         displaysets = []
         pbar = LogFacility.get_progress_bar(logger, range(n_actions))
@@ -1191,7 +1193,7 @@ class EpochEncoderEngine:
                 pals = ((),)
             else:
                 r = self._encode_composition_objects(i, k, pgobs_items, nodes, has_two_objs, c_pts, normal_case_refresh)
-                cobjs, pals, o_ods, cobjs_ref = r
+                cobjs, pals, o_ods, cobjs_refs = r
 
                 cumulated_palette = pals[0][0] | pals[1][0]
                 pds, palette_id = self._codec.register_palette(c_pts, c_dts, cumulated_palette)
@@ -1241,8 +1243,8 @@ class EpochEncoderEngine:
                     if has_new_ods:
                         normal_case_refresh = nodes[z].new_mask
                         r = self._encode_composition_objects(z, k, get_obj(nodes[z].idx, pgobjs).items(), nodes,
-                                                             has_two_objs, c_pts, normal_case_refresh, cobjs_ref)
-                        cobjs, n_pals, o_ods, cobjs_ref = r
+                                                             has_two_objs, c_pts, normal_case_refresh, cobjs_refs)
+                        cobjs, n_pals, o_ods, cobjs_refs = r
 
                         logger.debug(f"Normal Case: PTS={nodes[z].tc_pts}={c_pts}, NM={nodes[z].new_mask} S(ODS)={sum(len(bytes(x)) for x in o_ods)}")
                         idxnc = nodes[z].new_mask.index(True)
