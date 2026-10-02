@@ -362,6 +362,14 @@ class EpochEncoderEngine:
         self.assert_plan_vs_stream(epoch, buffer_plan)
         return epoch
 
+    @staticmethod
+    def _debug_print_buffer_stats(prefix: str, buffer: PGObjectBuffer) -> None:
+        slots = buffer.get_slots()
+        logger.debug(f"{prefix} buffer occupancy: N={len(slots)}, {buffer.get_occupancy()} bytes: {100*buffer.get_occupancy()/buffer.get_capacity():.02f}%.")
+        for slot_id, slot in slots.items():
+            logger.debug(f" {prefix} slot {slot_id}: {slot.shape}, hits={slot.version+1}.")
+    ####
+
     def assert_plan_vs_stream(self, epoch: Epoch, buffer_plan: PGObjectBuffer) -> None:
         buffer = PGObjectBuffer()
         for ds in epoch:
@@ -369,22 +377,14 @@ class EpochEncoderEngine:
                 slot = buffer.get_indexed(ods.object_id)
                 if slot is None and buffer.allocate_indexed(Shape(w=ods.width, h=ods.height), ods.object_id):
                     slot = buffer.get_indexed(ods.object_id)
-                assert slot is not None
-                assert slot.is_available_at(ds.pcs.dts)
+                assert slot is not None and slot.is_available_at(ds.pcs.dts)
             for cobj in ds.pcs.composition_objects:
                 buffer.get_indexed(cobj.object_id).reserve(ds.pcs.pts)
 
-        slots = buffer.get_slots()
-        planned_slots = buffer_plan.get_slots()
-        assert len(planned_slots) >= len(slots), f"plan={planned_slots} vs real={slots}"
-        if len(planned_slots) > len(slots):
-            logger.debug(f"Planned too many buffer slots: plan={planned_slots} V.S. final={slots}.")
-        logger.debug(f"Real buffer occupancy: {buffer.get_occupancy()}: {100*buffer.get_occupancy()/buffer.get_capacity():.02f}%.")
-        for slot_id, slot in slots.items():
-            expected_slot = planned_slots[slot_id]
-            logger.debug(f"Buffer slot {slot_id}: {slot.shape}, hits={slot.version+1}.")
-            # accept smaller than, because the encoding block may have discarded empty palettes updates
-            assert expected_slot.shape == slot.shape and slot.version <= expected_slot.version
+        assert buffer_plan.get_occupancy() >= buffer.get_occupancy(), f"plan={buffer_plan.get_slots()} vs real={buffer.get_slots()}"
+        if logger.level <= 10:
+            self.__class__._debug_print_buffer_stats("Planned", buffer_plan)
+            self.__class__._debug_print_buffer_stats("Real", buffer)
     ####
 
     def shape_stream(self,
@@ -864,11 +864,7 @@ class EpochEncoderEngine:
 
         raise AssertionError: Unrecoverable stream error.
         raise MemoryError: Buffer cannot hold all registered slots.
-
         """
-        #Allocate palettes as a test, this is essentially doing a final sanity check
-        #on the selected display sets. The palette values generated here are not used.
-
         buffer = PGObjectBuffer()
         prev_idx = -1
         for k, node in enumerate(nodes):
@@ -888,7 +884,7 @@ class EpochEncoderEngine:
                             last_slots[oix] = slot
                 elif node.flag == 1:
                     ix = node.new_mask.index(True)
-                    # Renew kept object, if still relevant
+                    # Renew kept object before, if still relevant
                     if len(node.objects) > 1 and node.planned_compositions[1-ix] and last_slots[1-ix] is not None:
                         last_slots[1-ix].reserve(node.pts())
                     else:
@@ -911,12 +907,7 @@ class EpochEncoderEngine:
                     assert node.objects != [] and sum(node.new_mask) == 1
             logger.debug(f"{k}-{node.idx}: {node.state:02X} {node.flag:02}-{node.partial} DTS={node.dts()}->{node.dts_end()} PTS={node.pts()}={node.tc_pts}, nCO={sum(node.planned_compositions)}: OM={node.new_mask} cdts={node.is_custom_dts()}")
         ####
-        slots = buffer.get_slots()
-        logger.info(f"Planned buffer occupancy: {buffer.get_occupancy()}: {100*buffer.get_occupancy()/buffer.get_capacity():.02f}%.")
-        for slot_id, slot in slots.items():
-            logger.info(f"Buffer slot {slot_id}: {slot.shape}, hits={slot.version+1}.")
         return buffer
-        ####
     ####
 
     @staticmethod

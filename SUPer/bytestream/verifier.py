@@ -166,7 +166,7 @@ def test_diplayset(ds: DisplaySet) -> bool:
             comply &= pds.palette_id not in pds_ids
             pds_ids.add(pds.palette_id)
             if ds.pcs.palette_update:
-                comply &= len(ds.pcs.composition_objects) > 0, #Palette update on no composition
+                comply &= len(ds.pcs.composition_objects) > 0 # Palette update on no composition
                 comply &= ds.pcs.palette_id == pds.palette_id # "Palette ID mismatch between PCS and PDS on palette update."
             comply &= pds.palette_id < 8 # "Using undefined palette ID."
             comply &= len(pds.palette) <= 256 # "Defining more than 256 palette entries."
