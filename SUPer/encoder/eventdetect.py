@@ -142,9 +142,9 @@ class TreeAnalyzer:
         is_valid = is_vertical >= 0
         if is_valid:
             lwds = PaddingEngine(cbox, self.region).directional_pad((reg1, reg2), is_vertical)
-            is_valid &= (2 == len(lwds))
+            is_valid = (2 == len(lwds))
             #become more and more demanding on the gain to justify the split
-            is_valid &= (lwds[0].area + lwds[1].area)/self.region.area < 0.9 - self.depth/13
+            is_valid = is_valid and (lwds[0].area + lwds[1].area)/self.region.area < 0.9 - self.depth/13
         return is_valid, cbox, (lwds if is_valid else None)
 
     def _get_score(self, composite: Image.Image, frame: Image.Image) -> ...:
@@ -346,7 +346,7 @@ class WorkerObjectDetector(mp.Process):
         self._q.put(p)
 
     def get(self) -> ProspectiveObject | None:
-        return self._qo.get()
+        return self._qo.get(timeout=5.0)
 
     def request_stop(self) -> None:
         self._flag.value = 0
@@ -370,7 +370,7 @@ class WorkerObjectDetector(mp.Process):
         detector = None
         while self._flag.value:
             try:
-                v = self._q.get(0.1)
+                v = self._q.get(timeout=0.1)
             except Empty:
                 continue
             if isinstance(v, dict):

@@ -35,11 +35,15 @@ class _AllocatedVersionedResource:
     pts: int = -np.inf
     _version: int = -1
 
-    def reserve(self, pts: int) -> int:
+    def reserve(self, pts: int, increment_version: bool = True) -> int:
         assert self.pts < pts
         self.pts = pts
-        self._version += 1
+        if increment_version:
+            self._version += 1
         return self.version
+
+    def increment_version(self) -> None:
+        self._version += 1
 
     def is_available_at(self, dts: int) -> bool:
         return dts > self.pts
@@ -59,7 +63,7 @@ class DecoderPalette(_AllocatedVersionedResource):
     def __post_init__(self) -> None:
         if not isinstance(self.palette, Palette):
             self.palette = Palette(self.palette)
-        assert len(self.palette) < 256
+        assert len(self.palette) <= 256
 
     def get_difference(self, new_palette: dict[int, PaletteEntry]):
         difference = {}
@@ -146,6 +150,8 @@ class PGObjectBuffer:
         if self._slots.get(slot_id, None) is not None:
             return False
         if self.get_occupancy() + shape.area > self.__class__.__MAX_SIZE:
+            return False
+        if max(slot_id, len(self._slots)-1) >= self.__class__.__MAX_SLOTS:
             return False
         self._slots[slot_id] = ObjectSlot(shape=shape)
         return True
@@ -244,8 +250,9 @@ class PGEpochContext:
         else:
             palette_diff = palette.copy()
         # reserve anyway, even if there's no PDS to return
-        decoder_palette.reserve(pts)
+        decoder_palette.reserve(pts, False)
         if len(palette_diff) > 0 or force:
+            decoder_palette.increment_version()
             decoder_palette.palette |= palette_diff
             pds = PDS(pts=pts, dts=dts, palette_id=palette_id,
                        palette_version=decoder_palette.get_cast_version(),

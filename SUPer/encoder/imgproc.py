@@ -130,19 +130,16 @@ class PillowWrap(QuantizerWrap):
     def _palettize(cls, image: Image.Image, colors: int, ctx: dict[str, Image.Image]) -> tuple[_Palette, _Bitmap, dict[str, Any]]:
         img_out = image.quantize(colors, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
         bitmap = np.asarray(img_out, dtype=np.uint8)
-        palette = np.asarray(list(img_out.palette.colors.keys()), dtype=np.uint8)
-        return palette, bitmap, ctx | {'_pil_output_img': img_out}
+        palette = np.asarray(img_out.getpalette('RGBA'), dtype=np.uint8).reshape(-1, 4)
+        return palette, bitmap, ctx
 
     @classmethod
     def _postprocess(cls, palette: _Palette, bitmap: _Bitmap, ctx: dict[str, Image.Image]) -> tuple[_Palette, _Bitmap]:
-        img_in, img_out, colors = ctx['_pil_input_img'], ctx['_pil_output_img'], ctx['_colors']
-        #bug workaround: sometime pillow may sometimes not return all palette entries
-        pil_failed = len(img_out.palette.colors) != 1+max(img_out.palette.colors.values())
-
+        img_in = ctx['_pil_input_img']
         #When PIL fails to quantize alpha channel, there's a clear discrepancy between original and quantized image.
-        if pil_failed or SSIMPW.compare(Image.fromarray(palette[bitmap]).convert('RGBA'), img_in) < 0.95:
-            # Out of the builtin quantizer, qtzr is always the best fallback.
-            return QtzrWrap.quantize(img_in, colors)
+        if SSIMPW.compare(Image.fromarray(palette[bitmap]).convert('RGBA'), img_in) < 0.95:
+            # of the builtin quantizers, qtzr is always the best fallback.
+            palette, bitmap = QtzrWrap.quantize(img_in, ctx['_colors'])
         #no-op crop if the image was not padded
         w, h = ctx['_shape']
         return palette, bitmap[:h, :w]
@@ -217,12 +214,7 @@ class BuiltinQuantizer(Enum):
         return [q.configure(settings) for q in cls]
 
     def __call__(self, image: Image.Image, colors: int, **kwargs) -> tuple[_Palette, _Bitmap]:
-        palette, bitmap = self.value.quantize(image, colors, **kwargs)
-        # Pillow can miserably fail (internal bug), so evaluate the input again with Qtzr which
-        # is the only other builtin quantizer always supported (C+Python implementations)
-        if self == __class__.Pillow and palette is None:
-            return __class__(__class__.Qtzr)(image, colors, **kwargs)
-        return palette, bitmap
+        return self.value.quantize(image, colors, **kwargs)
 
     def quantize(self, image: Image.Image, colors: int, **kwargs) -> tuple[_Palette, _Bitmap]:
         return self(image, colors, **kwargs)
@@ -341,7 +333,7 @@ class PaletteSequenceEffect:
         #No transparency at all in this bitmap
         if 0 == len(transparent_id):
             #All colours used incl reserved transparent index. This is incorrect, requantize with colors-1
-            if np.max(bitmap) + first_index == 0xFF:
+            if np.max(bitmap) >= colors - 1:
                 logger.ldebug("Too many colours used, lowering count.")
                 bitmap, cluts = self.solve_sequence_fast(events, colors-1, **kwargs)
             palettes = self.to_ycc_palettes(cluts, entry_offset=first_index)

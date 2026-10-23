@@ -438,7 +438,7 @@ class EpochEncoderEngine:
                     nodes[k].is_palette_update = True
             if node.state > 0:
                 for zk in range(last_acq, k):
-                    nodes[zk].pos = positions
+                    nodes[zk].pos = positions.copy()
                 positions = cboxes[k].copy()
                 last_acq = k
         for zk in range(last_acq, k+1):
@@ -508,8 +508,9 @@ class EpochEncoderEngine:
             new_node.is_palette_update = False
             new_node.state = PCS.CompositionState.ACQUISITION
             new_node.objects = [o if (o is not None and o.is_visible(new_node.idx)) else None for o in last_node_with_objects.objects]
-            if len(new_node.objects) == 0:
+            if not any(new_node.objects):
                 continue
+
             min_dts = last_node_with_objects.dts_end() + 1
             min_dts_delta = new_node.dts() - min_dts
             if min_dts_delta <= 0:
@@ -557,7 +558,7 @@ class EpochEncoderEngine:
                         logger.error(f"Required to drop a PU at {node.tc_pts}={node.pts()} to ensure a monotonic DTS.")
                         node.discard = True
                         continue
-            first_possible_dts = (node.dts_end())
+            first_possible_dts = node.dts_end()
         ####for ck
     ####
 
@@ -582,7 +583,7 @@ class EpochEncoderEngine:
             drop_pal_ups_def = 0
             drop_abs_acq_def = False
             j = k
-            while (j := j-1) and (nodes[j].dts_end() >= node.dts() or nodes[j].pts() + pts_delta >= node.pts()):
+            while (j := j-1) >= 0 and (nodes[j].dts_end() >= node.dts() or nodes[j].pts() + pts_delta >= node.pts()):
                 drop_abs_acq_def |= absolutes[j]
                 drop_pal_ups_def += int(not allow_overlaps and nodes[j].is_palette_update)
 
@@ -755,7 +756,7 @@ class EpochEncoderEngine:
                         # This afaik never happen as acquisition are never placed on those nodes.
                         # But this is handy to catch bad modification upstream, and prevent a catch downstream.
                         # there's no real negative cost to doing so either
-                        logger.info("No object planned in Acq at {nodes[k].tc_pts}: adding an empty object for consistency.")
+                        logger.info(f"No object planned in Acq at {nodes[k].tc_pts}: adding an empty object for consistency.")
                     else:
                         # force object to be encoded despite having nothing visible at all
                         logger.debug(f"Adding an empty object in Acq at {nodes[k].tc_pts} due to DTS collision with a reduced ODS count.")
@@ -806,7 +807,7 @@ class EpochEncoderEngine:
             is_normal_case = normal_case_possible and dts_start_nc > dts_start and (j_nc > j or prefer_normal_case or (j_nc == 0 and nodes[j].dts_end() >= dts_start))
             j_iter = j_nc if is_normal_case else j
             dts_iter = dts_start_nc if is_normal_case else dts_start
-            dts_end_iter = nodes[max(j_iter-1, 0)].dts_end()
+            dts_end_iter = nodes[max(j_iter, 0)].dts_end()
 
             num_pcs_buffered = 0
 
@@ -869,10 +870,7 @@ class EpochEncoderEngine:
         prev_idx = -1
         for k, node in enumerate(nodes):
             assert len(node.objects) == 0 or len(node.objects) and node.idx >= prev_idx
-
             prev_idx = node.idx
-            if len(node.objects):
-                prev_idx = node.idx
 
             if node.flag >= 0:
                 if node.state > 0:
@@ -964,7 +962,7 @@ class EpochEncoderEngine:
                 a_img = Image.new('RGBA', dims, (0, 0, 0, 0))
                 for oix, pgo in compositions:
                     multiplier = np.uint8(nodes[j].flag >= 0)
-                    if len(pgo.mask[nodes[j].idx-pgo.f:nodes[j].idx+1-pgo.f]) == 1:
+                    if pgo.is_active(nodes[j].idx):
                         paste_box = (coords[0], coords[1], coords[0]+pgo.box.dx, coords[1]+pgo.box.dy)
                         crop_coords = (pgo.box.x, pgo.box.y, pgo.box.x2, pgo.box.y2)
                         last_imgs[oix] = (self.mask_event(pgo.wid, nodes[j].idx), paste_box, crop_coords)
@@ -997,7 +995,7 @@ class EpochEncoderEngine:
 
                     cobjs.append(CompositionObject(new_ods[0].object_id, pgo.wid, cpx, cpy, False))
                     cobjs_refs.append((pgo, cobjs[-1]))
-                    assert window_bitmap.shape == node.slots[pgo.wid], f"{window_bitmap.shape}, {node.slots[pgo.wid]}"
+                    assert window_bitmap.shape == node.slots[oix], f"{window_bitmap.shape}, {node.slots[oix]}"
                     coords += offset
                     o_ods += new_ods
             pals.append([Palette() for _ in range(len(pals[0]))])
@@ -1008,7 +1006,7 @@ class EpochEncoderEngine:
             n_colors = 255
             bias = 0
             if has_two_objs and normal_case_refresh:
-                assert all(filter(lambda x: x.h in range(self._codec.bd_video.fmt.height) and x.w in range(self._codec.bd_video.fmt.width), node.slots))
+                assert all((x.h in range(self._codec.bd_video.fmt.height) and x.w in range(self._codec.bd_video.fmt.width)) for x in node.slots)
                 assert sum(x is not None for x in node.slots) == 2
                 ratio_area = (node.slots[0].area - node.slots[1].area)/sum(s.area for s in node.slots)
                 bias = 0 if abs(ratio_area) < 0.5 else int(67*(ratio_area-np.sign(ratio_area)*0.25))
@@ -1043,6 +1041,7 @@ class EpochEncoderEngine:
                 cpx = self.ectx.windows[pgo.wid].x + oxl
                 cpy = self.ectx.windows[pgo.wid].y + oyl
 
+                assert nodes[i].idx >= pgo.f
                 assert len(nodes[i:k]) >= len(pgo.mask[nodes[i].idx-pgo.f:nodes[k].idx-pgo.f])
 
                 n_colors_qtz = n_colors + (-1 if oix == 1 else 1)*bias
@@ -1284,7 +1283,7 @@ class EpochEncoderEngine:
             displaysets.append(uds)
 
             #Prepare an additional display set to undraw the screen if it can fit (< self.ectx.max_pts)
-            nf_shift = max(1, int(np.ceil((final_node.write_duration()+10)*self._codec.bd_video.fps)))
+            nf_shift = max(1, int(np.ceil((final_node.write_duration()+10)*self._codec.bd_video.fps/GraphicsDecoder.FREQ)))
             tc_final_pts = self.ectx.events[-1].outTC + nf_shift
             perform_wds_end = tc_final_pts.to_pts() < self.ectx.max_pts
             final_node.tc_pts = tc_final_pts

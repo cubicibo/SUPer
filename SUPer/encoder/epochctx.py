@@ -148,8 +148,8 @@ class PaddingEngine:
                 right_pad = diff - left_pad
                 #Pad vertically (constrained)
                 diff = max(0, 8 - wd.dy)
-                top_pad = wd.y if wid == 0 and diff > 0 else 0
-                bot_pad = 0 if wid == 0 or diff == 0 else (self.box.dy - wd.y2)
+                top_pad = min(diff, wd.y) if wid == 0 else 0
+                bot_pad = min(diff, self.box.dy - wd.y2) if wid == 1 else 0
                 if top_pad + bot_pad < diff:
                     missing = (diff - top_pad - bot_pad)
                     if wid == 0:
@@ -161,8 +161,8 @@ class PaddingEngine:
                 top_pad = max(0, min(diff, wd.y + wd.dy + diff - self.box.dy))
                 bot_pad = diff - top_pad
                 diff = max(0, 8 - wd.dx)
-                left_pad = wd.x if wid == 0 and diff > 0 else 0
-                right_pad = 0 if wid == 0 or diff == 0 else (self.box.dx - wd.x2)
+                left_pad  = min(diff, wd.x) if wid == 0 else 0
+                right_pad = min(diff, self.box.dx - wd.x2) if wid == 1 else 0
                 if left_pad + right_pad < diff:
                     missing = (diff - left_pad - right_pad)
                     if wid == 0:
@@ -170,14 +170,14 @@ class PaddingEngine:
                     else:
                         left_pad += missing
             inter_margin -= missing
-            new_lwd.append(Box.from_coords(wd.x-left_pad, wd.y-top_pad, wd.x2+right_pad, wd.y2+bot_pad))
+            new_lwd.append(Box.from_coords(wd.y-top_pad, wd.y2+bot_pad, wd.x-left_pad, wd.x2+right_pad))
             # logger.debug(f"Padded window ID={wid}: {new_lwd[-1]} from {lwd[wid]}")
             assert Box(self.box.y + new_lwd[-1].y, new_lwd[-1].dy, new_lwd[-1].x + self.box.x, new_lwd[-1].dx).overlap_with(self.container) == 1.0, f"Window does not overlap with renderer container: {self.container}"
 
         #No suitable padding -> merge
         if inter_margin < 0:
             # logger.debug("No padding marging available: merge to a single window.")
-            return (Box.union(*lwd),)
+            return (__class__._pad_any_box(Box.union(*lwd), self.box, 8, 8),)
         assert Box.intersect(*new_lwd).area == 0, f"Padded windows overlap: {new_lwd} from {lwd}."
         return new_lwd
     ####
@@ -289,7 +289,7 @@ def _perform_fine_epoch_detection(
             if delta_ticks > minimum_epoch_start:
                 cwd = _find_modify_layout(layout, screen, mode)
                 if delta_ticks > _get_epoch_start_duration(cwd, screen.area):
-                    epochs.insert(0, EpochData(cwd, events_in_epoch, min_dts=ev.inTC.to_pts()+1))
+                    epochs.insert(0, EpochData(cwd, events_in_epoch, min_dts=ev.outTC.to_pts()+1))
                     events_in_epoch = []
                     layout.reset()
 
