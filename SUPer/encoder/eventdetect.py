@@ -451,7 +451,7 @@ class WindowsObjectDetector:
         return pgobjs
 
     def get_objects(self, events: list[EpochEvent]) -> list[list[ProspectiveObject]]:
-        ssim_threshold = 0.014 * min(1, max(-1, self.ssim_tol))
+        ssim_threshold = 0.1 * min(1, max(-1, self.ssim_tol))
         #Adjust slightly SSIM threshold depending of res
         ssim_score = min(0.9999, 0.9608 + self.fmt.value[1]*(0.986-0.972)/(1080-480))
 

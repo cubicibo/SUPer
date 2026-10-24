@@ -21,7 +21,7 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, product
 from pathlib import Path
 from queue import Empty
 from typing import Any, Self
@@ -178,11 +178,12 @@ class BDNEncoder:
             time.sleep(0.2)
         ###
         child_procs = []
-        for w in workers:
-            for _ in range(num_workers):
-                if (pid := w.get(timeout=0.5)) is not None:
-                    try: child_procs.append(psutil.Process(pid))
-                    except psutil.Error: pass
+        for w, _ in product(workers, range(num_workers)):
+            if (pid := w.get(timeout=0.5)) is not None:
+                try:
+                    child_procs.append(psutil.Process(pid))
+                except psutil.Error:
+                    pass
 
         #Orchestrator starts here
         busy_flags = {worker.iid: False for worker in workers}
@@ -235,7 +236,6 @@ class BDNEncoder:
         workers.clear()
         if not healthy:
             logger.warning("One worker had an unrecoverable error, giving up.")
-            import sys
             sys.exit(1)
 
         return ep_timeline
