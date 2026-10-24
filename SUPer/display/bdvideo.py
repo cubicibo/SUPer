@@ -112,7 +112,7 @@ class Format(Enum):
         for dim, enfo in cls._value2member_map_.items():
             if dim[1] == height:
                 return cls(enfo)
-        assert ValueError("Illegal BD video format.")
+        raise ValueError("Illegal BD video format.")
 
     @classmethod
     def from_string(cls, fmt: str) -> 'Format':

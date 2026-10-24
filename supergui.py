@@ -88,7 +88,6 @@ def get_kwargs() -> dict[str, Any]:
         'ssim_tol': int(ssim_tolb.value)/100,
         'redraw_period': float(acqinttb.value),
         'threads': int(threadscombo.value) if threadscombo.value.lower() != 'auto' else 'auto',
-        'daemonize': False,
         'layout_mode': int(ini_params['super_cfg'].get('layout_mode', 2)),
         'log_filename': supout.value,
         'uhd_bd': True,

@@ -336,7 +336,7 @@ class ObjectDetector:
 
 class WorkerObjectDetector(mp.Process):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(daemon=True)
         self._q = mp.Queue()
         self._qo = mp.Queue()
         self._flag = mp.Value('h')

@@ -17,6 +17,9 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 import logging
 import multiprocessing as mp
+import os
+import signal
+import sys
 import time
 from abc import ABC
 from contextlib import nullcontext
@@ -271,12 +274,9 @@ class LogFacility:
         logger.addHandler(cls._logrep)
 
 def _setup_mt_env(workers: mp.Process, disable_tqdm: bool = True) -> None:
-    import os
-    import signal
     if disable_tqdm:
         LogFacility.disable_tqdm()
     def sighandler(snum, frame, workers) -> NoReturn:
-        import sys
         for worker in workers:
             try:
                 if worker.is_alive():
