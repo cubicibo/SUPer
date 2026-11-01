@@ -16,11 +16,9 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import multiprocessing as mp
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass, field
 from itertools import chain, count
-from queue import Empty
 from typing import Any, Self
 
 import cv2
@@ -30,7 +28,7 @@ from PIL import Image
 
 from ..display.bdvideo import Format
 from ..geometry import Box
-from ..internals import LogFacility
+from ..internals import LogFacility, TaskCmdMsg, TaskableWorker
 from .epochctx import EpochEvent, PaddingEngine
 from .imgproc import SSIMPW
 
@@ -334,63 +332,30 @@ class ObjectDetector:
         return # StopIteration
 ####
 
-class WorkerObjectDetector(mp.Process):
-    def __init__(self) -> None:
-        super().__init__(daemon=True)
-        self._q = mp.Queue()
-        self._qo = mp.Queue()
-        self._flag = mp.Value('h')
-        self._flag.value = 1
+class ObjectDetectorTasks:
+    @staticmethod
+    def initialize_detector(ctx: ObjectDetector | None, kwparam: dict[str, Any]):
+        if ctx:
+            del(ctx)
+        ctx = ObjectDetector(**kwparam).analyze()
+        next(ctx)
+        return ctx, None
 
-    def send(self, p: tuple[EpochEvent, Image.Image]) -> None:
-        self._q.put(p)
+    @staticmethod
+    def run_detector(detector: ObjectDetector, event: EpochEvent | None) -> tuple[ObjectDetector, ProspectiveObject | None]:
+        try:
+            ev_img = event.image if event else None
+            result = detector.send((event, ev_img))
+        except (StopIteration, AttributeError):
+            detector = result = None
+        return detector, result
 
-    def get(self) -> ProspectiveObject | None:
-        return self._qo.get(timeout=5.0)
-
-    def request_stop(self) -> None:
-        self._flag.value = 0
-
-    def acquire(self) -> None:
-        assert self._flag.value == 1
-        self._flag.value = 2
-
-    def release(self) -> None:
-        assert self._flag.value == 2
-        self._flag.value = 1
-
-    def flush(self) -> None:
-        while True:
-            try:
-                self._qo.get_nowait()
-            except Empty:
-                break
-
-    def run(self) -> None:
-        detector = None
-        while self._flag.value:
-            try:
-                v = self._q.get(timeout=0.1)
-            except Empty:
-                continue
-            if isinstance(v, dict):
-                if detector:
-                    del detector
-                detector = ObjectDetector(**v).analyze()
-                next(detector)
-            elif isinstance(v, EpochEvent) or v is None:
-                try:
-                    ev_img = v.image if v else None
-                    self._qo.put(detector.send((v, ev_img)))
-                except (StopIteration, AttributeError):
-                    self._qo.put(None)
-                    detector = None
-            else:
-                break
-####
+    @classmethod
+    def get_tasks(cls):
+        return (cls.initialize_detector, cls.run_detector)
 
 class WindowsObjectDetector:
-    def __init__(self, fmt: Format, windows: Sequence[Box], ssim_tol: float = 0, workers: tuple[WorkerObjectDetector] | None = None):
+    def __init__(self, fmt: Format, windows: Sequence[Box], ssim_tol: float = 0, workers: tuple[TaskableWorker] | None = None):
         self.windows = windows
         self.fmt = fmt
         self.ssim_tol = ssim_tol
@@ -416,7 +381,8 @@ class WindowsObjectDetector:
         for worker_id, wid in enumerate(ls_wds):
             window = self.windows[wid]
             if use_worker and worker_id < len(self.workers):
-                self.workers[worker_id].send({'window':window, 'ssim_threshold':ssim_threshold, 'ssim_offset':ssim_offset})
+                tcm = TaskCmdMsg('initialize_detector', {'window':window, 'ssim_threshold':ssim_threshold, 'ssim_offset':ssim_offset}, False)
+                self.workers[worker_id].send(tcm)
             else:
                 detectors.append((wid, ObjectDetector(window, ssim_threshold=ssim_threshold, ssim_offset=ssim_offset).analyze()))
                 next(detectors[-1][1])
@@ -430,8 +396,9 @@ class WindowsObjectDetector:
         # to flush a detector, two consecutives None must be sent.
         for event in chain(events, [None]*2):
             if use_worker:
+                tcm = TaskCmdMsg('run_detector', event)
                 for worker in self.workers:
-                    worker.send(event)
+                    worker.send(tcm)
             if len(detectors):
                 ev_img = event.image if event else None
                 for wid, detector in detectors:
