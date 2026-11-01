@@ -18,7 +18,7 @@ along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Self
 
 import numpy as np
@@ -286,23 +286,33 @@ class DSNode(ABC):
             seg.pts, seg.dts = pts, dts
 ####
 
+@dataclass(slots=True, frozen=True)
+class NodeView:
+    """
+    Pickleable node (provide merely the overview)
+    """
+    idx: int
+    flag: int
+    pos: list[Box | None]
+    slots: list[Shape | None]
+
 @dataclass(frozen=True, slots=True)
 class PGAsset:
     i: int #start ix
     k: int #end ix
-    composition_objects: CompositionObject
+    composition_objects: list[CompositionObject]
     palettes: list[list[Palette]]
     bitmaps: list[np.ndarray[[int, int], np.uint8]]
     cobjs_refs: list[tuple[ProspectiveObject, CompositionObject]]
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class DisplayChain:
     start: int
     stop: int
     pgobjs: tuple[tuple[int, ProspectiveObject]]
     has_two_objs: bool
     normal_case_refresh: bool
-
+    repeats: list[int] = field(default_factory=list)
 
 def object_is_displayed_within(pgo: ProspectiveObject, nodes: list[DSNode], sl: slice) -> bool:
     if pgo is None:
@@ -311,7 +321,7 @@ def object_is_displayed_within(pgo: ProspectiveObject, nodes: list[DSNode], sl: 
     return next((True for node in nodes[sl] if (node.flag >= 0 and pgo.is_visible(node.idx))), False)
 
 class PGAssetEncoder:
-    def __init__(self, nodes: list[DSNode], windows: tuple[Box], events: list[EpochEvent], bd_video: BDVideo, kwargs: dict[str, Any]) -> None:
+    def __init__(self, nodes: list[NodeView], windows: tuple[Box], events: list[EpochEvent], bd_video: BDVideo, kwargs: dict[str, Any]) -> None:
         self.nodes = nodes
         self.windows = windows
         self.events = events
@@ -348,7 +358,6 @@ class PGAssetEncoder:
         pgobs_items: list[tuple[int, ProspectiveObject]],
         has_two_objs: bool,
         normal_case_refresh: bool | list[bool],
-        prev_cobjs_refs: list[tuple[ProspectiveObject, CompositionObject]] | None = None,
     ) -> ...:
         """
         Encodes the composition objects (plus its palette sequence) within interval
@@ -358,7 +367,6 @@ class PGAssetEncoder:
         normal_case_refresh: True or a list of boolean.
             True: this encodes an acquisition which is to be followed up by a normal case object refresh
             list[bool]: pair of bool (only one is True) that gives the the object to normal case refresh.
-        prev_cobjs_refs: the prior composition objects, only relevant to normal case path
         """
         cls = self.__class__
         bitmaps, cobjs, pals, cobjs_refs = [], [], [], []
@@ -413,7 +421,7 @@ class PGAssetEncoder:
                     cobjs_refs.append((pgo, cobjs[-1]))
                     assert slot_bitmap.shape == node.slots[oix], f"{bitmap.shape}, {node.slots[oix]}"
                     coords += offset
-                    bitmaps.append(slot_bitmap)
+                    bitmaps.append((oix, slot_bitmap))
             pals.append([Palette() for _ in range(len(pals[0]))])
             ####for oix, pgo
         else:
@@ -435,11 +443,9 @@ class PGAssetEncoder:
                 if not object_is_displayed_within(pgo, self.nodes, slice(i, k)):
                     continue
                 if isinstance(normal_case_refresh, list) and not normal_case_refresh[oix]:
-                    assert 1 == sum(normal_case_refresh) and id_skipped is None and prev_cobjs_refs is not None and pgo is not None
-                    composition = next(filter(lambda x: x[0] == pgo, prev_cobjs_refs))[1]
-                    cobjs.append(composition)
-                    cobjs_refs.append((pgo, composition))
+                    assert 1 == sum(normal_case_refresh) and id_skipped is None and pgo is not None
                     id_skipped = oix
+                    cobjs_refs.append((pgo, oix))
 
             for oix, pgo in pgobs_items:
                 if not object_is_displayed_within(pgo, self.nodes, slice(i, k)):
@@ -491,7 +497,7 @@ class PGAssetEncoder:
 
                 cobjs.append((pgo.wid, cpx, cpy, False))
                 cobjs_refs.append((pgo, cobjs[-1]))
-                bitmaps.append(bitmap)
+                bitmaps.append((oix, bitmap))
 
             if id_skipped is not None:
                 assert isinstance(normal_case_refresh, list)
@@ -499,6 +505,7 @@ class PGAssetEncoder:
                 # for the composition without an ODS in the current display set.
                 #The refreshed object has to come first in the composition list.
                 cobjs = cobjs[::-1]
+                cobjs_refs = cobjs_refs[::-1]
 
         cumulated_palette = pals[0][0].copy()
         if has_two_objs:

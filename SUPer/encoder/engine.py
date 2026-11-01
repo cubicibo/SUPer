@@ -15,10 +15,9 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
-from abc import ABC, abstractmethod
-from collections.abc import Sequence
+
 from itertools import chain, starmap, zip_longest
-from typing import Self
+from queue import Empty
 
 import numpy as np
 from PIL import Image
@@ -27,259 +26,15 @@ from ..bytestream.pgstreams import DisplaySet, Epoch
 from ..bytestream.segments import END, PCS, CompositionObject
 from ..display.palette import Palette, PaletteEntry
 from ..geometry import Box, Shape
-from ..internals import TC, GraphicsDecoder, LogFacility, _classproperty
+from ..internals import TaskCmdMsg, TaskableWorker, TC, GraphicsDecoder, LogFacility, _classproperty
 from .codecctx import PGEpochContext, PGObjectBuffer, PGStreamCtx
 from .epochctx import EpochData
 from .eventdetect import ProspectiveObject, WindowsObjectDetector
 from .imgproc import PaletteSequenceEffect
+from .internals import DisplayChain, DSNode, NodeView, PGAsset, PGAssetEncoderTasks, object_is_displayed_within
 
 logger = LogFacility.get_logger('SUPer')
 
-class DSNode(ABC):
-    def __init__(self,
-            objects: list[ProspectiveObject | None],
-            tc_pts: TC,
-            is_palette_update: bool = False,
-            new_mask: list[bool] | None = None
-        ) -> None:
-        if new_mask is None:
-            new_mask = []
-        else:
-            assert len(objects) == len(new_mask)
-        self.objects = objects
-        self.tc_pts = tc_pts
-        self.is_palette_update = is_palette_update
-        self.new_mask = new_mask
-
-        self.slots = [None] * len(self.objects)
-        self.pos = [None] * len(self.objects)
-        self.partial = False
-        #index in the event list space
-        self.idx = 0
-        self._state = PCS.CompositionState.NORMAL_CASE
-
-        # These fields are not copied over
-        self.parent = None
-        self.discard = False
-        self._dts = None
-        self._planned_compositions = None
-
-    @_classproperty
-    @abstractmethod
-    def windows(cls) -> Sequence[Box]:
-        pass
-
-    def copy(self) -> Self:
-        new_node = self.__class__(self.objects.copy(), self.tc_pts,
-                                  is_palette_update=self.is_palette_update, new_mask=self.new_mask.copy())
-        new_node.slots = self.slots.copy()
-        new_node.pos = self.pos.copy()
-        new_node.partial = self.partial
-        new_node.idx = self.idx
-        new_node._state = self._state
-        return new_node
-
-    @property
-    def flag(self) -> int:
-        if self.discard:
-            return -1
-        if self.partial:
-            return 1
-        return 0
-
-    @property
-    def planned_compositions(self) -> tuple[bool]:
-        if self._planned_compositions is not None:
-            return self._planned_compositions
-        return tuple(x is not None for x in self.objects)
-
-    @planned_compositions.setter
-    def planned_compositions(self, planned: tuple[bool]) -> None:
-        self._planned_compositions = planned
-
-    @property
-    def state(self) -> PCS.CompositionState:
-        return self._state
-
-    @state.setter
-    def state(self, state: PCS.CompositionState) -> None:
-        state = PCS.CompositionState(state)
-        assert state == PCS.CompositionState.NORMAL_CASE or self.is_palette_update is False
-        self._state = state
-
-    def wipe_duration(self) -> int:
-        """
-        Duration to erase the area of both windows (one operation for the decoder)
-        """
-        return int(np.ceil(sum(GraphicsDecoder.FREQ*w.area/GraphicsDecoder.RC for w in self.windows)))
-
-    def write_duration(self) -> int:
-        """
-        Duration to write both window, one after the other
-        """
-        return int(sum(np.ceil(GraphicsDecoder.FREQ*w.area/GraphicsDecoder.RC) for w in self.windows))
-
-    def set_dts(self, dts: int | None) -> None:
-        if dts is not None:
-            # we can only shift dts further away from its minimum, except for a palette update
-            assert dts <= self.dts() or (self.is_palette_update and dts < self.pts())
-            assert isinstance(dts, int)
-        self._dts = dts
-
-    def dts_end(self) -> int:
-        if self._dts is not None:
-            return (sum(self.get_dts_markers()[1]) + self._dts)
-        decode_ts, t_dec = self.get_dts_markers()
-        return (decode_ts + sum(t_dec))
-
-    def dts(self) -> int:
-        if self._dts is not None:
-            return self._dts
-        return self.get_dts_markers()[0]
-
-    def delta_dts(self) -> int:
-        return sum(self.get_dts_markers()[1])
-
-    def pts(self) -> int:
-        return self.tc_pts.to_pts()
-
-    def is_custom_dts(self) -> bool:
-        return self._dts is not None
-
-    def get_decode_duration(self) -> tuple[int, int]:
-        t_decoding = []
-
-        if not self.is_palette_update:
-            assert any(self.objects)
-            target_windows = [o.wid for o in filter(lambda o: o is not None, self.objects)]
-            assigned_wids = set(target_windows)
-            if self.state == PCS.CompositionState.EPOCH_START:
-                decode_duration = int(np.ceil(self.plane.area * GraphicsDecoder.FREQ / GraphicsDecoder.RC))
-            else:
-                decode_duration = int(sum([np.ceil(self.windows[wid].dy*self.windows[wid].dx*GraphicsDecoder.FREQ/GraphicsDecoder.RC) for wid in range(len(self.windows)) if wid not in assigned_wids]))
-
-            #writing twice to the same window?
-            delay_write = 2 == len(target_windows) and 1 == len(assigned_wids)
-
-            t_other_copy = 0
-            for oix, obj in filter(lambda o: o[1] is not None, enumerate(self.objects)):
-                write = self.windows[obj.wid].area*GraphicsDecoder.FREQ
-                if self.slots[oix] is not None:
-                    read = self.slots[oix].area*GraphicsDecoder.FREQ
-                else:
-                    logger.error(f"Node at {self.tc_pts} lacks an object slot, assuming windows-size.")
-                    read = write
-                if not self.partial or (self.partial and self.new_mask[oix]):
-                    t_decoding.append(int(np.ceil(read/GraphicsDecoder.RD)))
-                elif self.partial and not self.new_mask[oix]:
-                    #the other object is copied at the end.
-                    assert sum(self.new_mask) == 1 and t_other_copy == 0
-                    t_other_copy = int(np.ceil(write/GraphicsDecoder.RC))
-                    continue
-
-                decode_duration = max(decode_duration, sum(t_decoding)) + int(np.ceil(write/GraphicsDecoder.RC))*int(not delay_write)
-            ####
-            if delay_write:
-                write_duration = int(np.ceil(write/GraphicsDecoder.RC))
-                assert t_other_copy == 0 or write_duration == t_other_copy
-                decode_duration += write_duration
-            else:
-                assert t_other_copy == 0 or self.partial
-                decode_duration += t_other_copy
-            decode_duration = max(decode_duration, self.write_duration() + 1)
-        else:
-            decode_duration = self.write_duration() + 1
-        return (decode_duration, t_decoding)
-
-    def get_dts_markers(self) -> tuple[int, int]:
-        decode_duration, t_decoding = self.get_decode_duration()
-        return (self.pts() - decode_duration, t_decoding)
-    ####
-
-    def set_pts_dts_sc(self, ds: DisplaySet, buffer: PGObjectBuffer) -> list[tuple[int, int]]:
-        """
-        This function generates the timestamps (PTS and DTS) associated to a given DisplaySet.
-
-        :param ds: DisplaySet, PTS of PCS must be set to the right value.
-        :param buffer: Object buffer that supports allocation and returning a size of allocated slots.
-        :return: Pairs of timestamps in ticks for each segment in the displayset.
-        """
-        ddurs = {}
-        for ods in ds.ods:
-            if ods.flag & ods.DataFlag.FIRST:
-                object_shape = Shape(h=ods.height, w=ods.width)
-                assert ods.object_id not in ddurs, f"Object {ods.object_id} defined twice in DS."
-                if (slot := buffer.get_indexed(ods.object_id)) is not None:
-                    assert object_shape == slot.shape, "Dimension mismatch, buffer corruption."
-                else:
-                    # Allocate a buffer slot for this object
-                    assert buffer.allocate_indexed(object_shape, ods.object_id) is True, "Critical error: object buffer overflow."
-                    slot = buffer.get_indexed(ods.object_id)
-                # make sure the encoder has reserved this object ID up to PTS.
-                assert not slot.is_available_at(ds.pcs.pts)
-
-                ddurs[ods.object_id] = int(np.ceil(ods.height*ods.width*GraphicsDecoder.FREQ/GraphicsDecoder.RD))
-        t_decoding = 0
-        decode_duration = 0
-        wipe_duration = self.wipe_duration()
-
-        if ds.pcs.composition_state == ds.pcs.CompositionState.EPOCH_START:
-            decode_duration = int(np.ceil(ds.pcs.width*ds.pcs.height*GraphicsDecoder.FREQ/GraphicsDecoder.RC))
-        else:
-            assigned_windows = [x.window_id for x in ds.pcs.composition_objects]
-            unassigned_windows = [wd for wid, wd in enumerate(self.windows) if wid not in assigned_windows]
-            decode_duration = int(sum(np.ceil(wd.area*GraphicsDecoder.FREQ/GraphicsDecoder.RC) for wd in unassigned_windows))
-
-        object_decode_duration = ddurs.copy()
-
-        if not ds.pcs.palette_update:
-            #For every composition object, compute the transfer time
-            for k, cobj in enumerate(ds.pcs.composition_objects):
-                assert buffer.get_indexed(cobj.object_id) is not None, "Object does not exist in buffer."
-                t_dec_obj = object_decode_duration.pop(cobj.object_id, 0)
-                t_decoding += t_dec_obj
-
-                # Same window -> patent claims a window is written only once after the two cobj are processed.
-                if k == 0 and ds.pcs.num_composition_objects > 1 and ds.pcs.composition_objects[1].window_id == cobj.window_id:
-                    continue
-                copy_dur = np.ceil(self.windows[cobj.window_id].area*GraphicsDecoder.FREQ/GraphicsDecoder.RC)
-                decode_duration = max(decode_duration, t_decoding) + int(copy_dur)
-
-        #Prevent PTS(WDS) = DTS(WDS) (a WDS shall have a DTS and it shall differ from the PTS)
-        decode_duration = max(decode_duration, self.write_duration() + 1)
-
-        dts = int(ds.pcs.pts - decode_duration)
-        assert self.pts() == ds.pcs.pts, f"{self.pts()}, {ds.pcs.pts}, {self.idx}, {self.tc_pts}"
-
-        if self.is_custom_dts():
-            new_dts = self.dts()
-            assert new_dts <= dts or ds.pcs.palette_update, f"new={new_dts}, min={dts}, {self.tc_pts}"
-            dts = new_dts
-        elif ds.pcs.composition_state != PCS.CompositionState.EPOCH_START:
-            assert self.dts() == dts, f"node {self.tc_pts}: expected: {self.dts()}, actual={dts}, n_objs: {len(ds.pcs.composition_objects)}, PU={ds.pcs.palette_update}, nno={sum(o is not None for o in self.objects)}."
-
-        #PCS always exist
-        ts_pairs = [(ds.pcs.pts, dts)]
-
-        if ds.wds:
-            ts_pairs.append((int(ds.pcs.pts - wipe_duration), dts))
-        for pds in ds.pds:
-            ts_pairs.append((dts, dts))
-
-        for ods in ds.ods:
-            ods_pts = int(dts + ddurs.get(ods.object_id))
-            ts_pairs.append((ods_pts, dts))
-            if ods.flag & ods.DataFlag.LAST:
-                dts = ods_pts
-        ts_pairs.append((dts, dts))
-        return ts_pairs
-    ####
-
-    @classmethod
-    def apply_pts_dts(cls, ds: DisplaySet, ts: tuple[int, int]) -> None:
-        assert len(ds) == len(ts), "Timestamps-DS size mismatch."
-        for seg, (pts, dts) in zip(ds, ts):
-            seg.pts, seg.dts = pts, dts
 
 def _get_dsnode_builder(ectx: EpochData, stream_ctx: PGStreamCtx) -> type[DSNode]:
     class DSNodeEpoch(DSNode):
@@ -290,22 +45,21 @@ def _get_dsnode_builder(ectx: EpochData, stream_ctx: PGStreamCtx) -> type[DSNode
         def plane(cls):
             return stream_ctx.bd_video.fmt
     return DSNodeEpoch
-
-    ####
 ####
 
 class EpochEncoderEngine:
-    def __init__(self, ectx: EpochData, stream_ctx: PGStreamCtx, kwargs) -> None:
+    def __init__(self, ectx: EpochData, stream_ctx: PGStreamCtx, kwargs, workers: tuple[TaskableWorker] | None = None) -> None:
         self.ectx = ectx
         self.kwargs = kwargs
         self._codec = PGEpochContext(stream_ctx, self.ectx.windows,
                                      differentiate_palette=(not self.kwargs.get('full_palette', False)))
 
+        self.workers = workers
         self._DSN = _get_dsnode_builder(ectx, stream_ctx)
 
-    def analyze(self, workers) -> tuple[...]:
+    def analyze(self) -> tuple[...]:
         ssim_tol = self.kwargs.get('ssim_tol', 0)
-        detector = WindowsObjectDetector(self._codec.bd_video.fmt, self.ectx.windows, ssim_tol, workers=workers)
+        detector = WindowsObjectDetector(self._codec.bd_video.fmt, self.ectx.windows, ssim_tol, workers=self.workers)
 
         pgobjs = detector.get_objects(self.ectx.events)
 
@@ -356,8 +110,13 @@ class EpochEncoderEngine:
         pgobjs, nodes, buffer_plan = ctx
         r_nodes = self.roll_nodes(nodes)
 
+        bs_plan = self._plan_bytestream(pgobjs, r_nodes)
+        bs_assets = self._encode_assets(bs_plan, r_nodes)
+
+        epoch = self._generate_bytestream2(bs_plan, bs_assets, r_nodes)
+
         #Generate datastream according to plan
-        epoch = self._generate_bytestream(pgobjs, r_nodes)
+        epoch = self._generate_bytestream(bs_assets, pgobjs, r_nodes)
 
         self.assert_plan_vs_stream(epoch, buffer_plan)
         return epoch
@@ -718,8 +477,6 @@ class EpochEncoderEngine:
         k = len(nodes)
         last_dts = self.ectx.max_pts
 
-        cls = self.__class__
-
         while (k := k - 1) > 0:
             if nodes[k].flag < 0:
                 logger.debug(f"Not analyzing event at {nodes[k].tc_pts} due to filtering (f={absolutes[k]}, a={nodes[k].flag}).")
@@ -731,7 +488,7 @@ class EpochEncoderEngine:
             #look-up to next acquisition to see which objects are relevant in our case
             zk = k
             while (zk := zk + 1) < len(nodes) and (nodes[zk].state == PCS.CompositionState.NORMAL_CASE or nodes[zk].flag == -1): pass
-            dec_objs = [obj if cls._object_is_relevant(obj, nodes, slice(k, zk)) else None for obj in nodes[k].objects]
+            dec_objs = [obj if object_is_displayed_within(obj, nodes, slice(k, zk)) else None for obj in nodes[k].objects]
             n_valid_obj = sum(x is not None for x in dec_objs)
             n_objs_planned = sum(x is not None for x in nodes[k].objects)
             diff = n_objs_planned - n_valid_obj
@@ -908,22 +665,6 @@ class EpochEncoderEngine:
         return buffer
     ####
 
-    @staticmethod
-    def _get_stack_direction(*box) -> tuple[np.ndarray[tuple[int, int], np.uint8], tuple[int, int]]:
-        widths = [b.dx for b in box]
-        heights = [b.dy for b in box]
-
-        if max(heights)*sum(widths) <= max(widths)*sum(heights):
-            return np.array([widths[0], 0], np.int32), (sum(widths), max(heights))
-        return np.array([0, heights[0]], np.int32), (max(widths), sum(heights))
-
-    @staticmethod
-    def _object_is_relevant(pgo: ProspectiveObject, nodes: list[DSNode], sl: slice) -> bool:
-        if pgo is None:
-             return False
-        assert len(nodes) >= len(pgo.mask)
-        return next((True for node in nodes[sl] if (node.flag >= 0 and pgo.is_visible(node.idx))), False)
-
     def mask_event(self, wid: int, event_id: int) -> np.ndarray[tuple[int, int, int], np.uint8]:
         event = self.ectx.events[event_id]
         wd = self.ectx.windows[wid]
@@ -950,7 +691,7 @@ class EpochEncoderEngine:
         #In this mode, we re-combine the two objects in a smaller areas than in the original box
         # and then pass that to the optimiser. Colors are efficiently distributed on the objects.
         if has_two_objs and normal_case_refresh is False:
-            compositions = [(oix, pgo) for oix, pgo in pgobs_items if __class__._object_is_relevant(pgo, nodes, slice(i, k))]
+            compositions = [(oix, pgo) for oix, pgo in pgobs_items if object_is_displayed_within(pgo, nodes, slice(i, k))]
             assert len(compositions) == 2
             #todo: stack using slot dimensions?
             offset, dims = self.__class__._get_stack_direction(*[x[1].box for x in compositions])
@@ -979,7 +720,7 @@ class EpochEncoderEngine:
 
             coords = np.zeros((2,), np.int32)
             for oix, pgo in pgobs_items:
-                if __class__._object_is_relevant(pgo, nodes, slice(i, k)):
+                if object_is_displayed_within(pgo, nodes, slice(i, k)):
                     #get bitmap
                     window_bitmap = 0xFF*np.ones((self.ectx.windows[pgo.wid].dy, self.ectx.windows[pgo.wid].dx), np.uint8)
                     nx, ny = coords
@@ -1016,7 +757,7 @@ class EpochEncoderEngine:
 
             id_skipped = None
             for oix, pgo in pgobs_items:
-                if not __class__._object_is_relevant(pgo, nodes, slice(i, k)):
+                if not object_is_displayed_within(pgo, nodes, slice(i, k)):
                     continue
                 if isinstance(normal_case_refresh, list) and not normal_case_refresh[oix]:
                     assert 1 == sum(normal_case_refresh) and id_skipped is None and prev_cobjs_refs is not None and pgo is not None
@@ -1027,7 +768,7 @@ class EpochEncoderEngine:
                     id_skipped = oix
 
             for oix, pgo in pgobs_items:
-                if not __class__._object_is_relevant(pgo, nodes, slice(i, k)):
+                if not object_is_displayed_within(pgo, nodes, slice(i, k)):
                     if normal_case_refresh:
                         #An object may be suggested but it is masked for the entire acquisition and
                         # subsequent normal cases: pad palette as it won't be in the composition list.
@@ -1094,7 +835,288 @@ class EpochEncoderEngine:
         return cobjs, pals, o_ods, cobjs_refs
     ####
 
-    def _generate_bytestream(self, pgobjs, input_nodes: list[DSNode]):
+    @staticmethod
+    def get_objects_at(frame: int, pgobjs: dict[int, list[ProspectiveObject]]) -> dict[int, ProspectiveObject | None]:
+        objs = {}
+        for ix, pgobjl in enumerate(pgobjs):
+            objs[ix] = None
+            for obj in pgobjl:
+                if obj.is_active(frame):
+                    assert objs[ix] is None
+                    objs[ix] = obj
+        return tuple(objs.items())
+
+    def _plan_bytestream(self, pgobjs, nodes: list[DSNode]) -> list[DisplayChain]:
+        """
+        Prepare a list of display chains. A display chain is one or more display set encoded
+        together to produce one or more continuous display update on the PG object(s)
+        present at index i.
+
+        The display chains are definitive. They are dispatched to subworkers
+        for parallel encoding.
+        """
+        n_actions = len(nodes)
+
+        bs_plan = []
+        last_chain = None
+        i = next(filter(lambda n: n[1].state == PCS.CompositionState.EPOCH_START, enumerate(nodes)))[0]
+        while i < n_actions:
+            if nodes[i].flag < 0:
+                logger.debug(f"Skipping discarded event at PTS={nodes[i].tc_pts}")
+                i += 1
+                continue
+
+            # Find the chain end node
+            assert nodes[i].state != PCS.CompositionState.NORMAL_CASE
+            normal_case_refresh = False
+            for k in range(i+1, n_actions+1):
+                if k < n_actions:
+                    normal_case_refresh |= (nodes[k].flag == 1)
+                if k == n_actions or nodes[k].state != PCS.CompositionState.NORMAL_CASE:
+                    break
+
+            active_pgobjs = self.__class__.get_objects_at(nodes[i].idx, pgobjs)
+            num_objs_visible = sum(object_is_displayed_within(pgo, nodes, slice(i, k)) for _, pgo in active_pgobjs)
+            has_two_objs = normal_case_refresh or num_objs_visible > 1
+
+            steps = k - i
+            if steps == 1 and last_chain is not None and nodes[i].idx == nodes[last_chain.start].idx == nodes[i-1].idx:
+                last_chain.repeats.append(i)
+            else:
+                bs_plan.append(DisplayChain(i, k, active_pgobjs, has_two_objs, normal_case_refresh))
+                last_chain = None if steps > 1 else bs_plan[-1]
+
+                if normal_case_refresh:
+                    for zk in filter(lambda x: nodes[x].flag == 1, range(i+1, k)):
+                        nc_objs = self.__class__.get_objects_at(nodes[zk].idx, pgobjs)
+                        bs_plan.append(DisplayChain(zk, k, nc_objs, True, nodes[zk].new_mask.copy()))
+            i = k
+        return bs_plan
+
+
+    def _encode_assets(self, bs_plan: list[DisplayChain], input_nodes: list[DSNode]) -> list[PGAsset]:
+        """
+        Encode all PG assets at once, sharing the work with the companion worker if any.
+        Once all assets are encoded, the bytestream can be generated nearly instantly.
+        """
+        hln = [NodeView(n.idx, n.flag, n.pos.copy(), n.slots.copy()) for n in input_nodes]
+        hln += [NodeView(input_nodes[-1].idx, 0, [], [])]
+
+        pbar = LogFacility.get_progress_bar(logger, range(bs_plan))
+        pbar.set_description("Encoding", False)
+        pbar.reset(len(bs_plan))
+
+        ctx = PGAssetEncoderTasks.initialize_encoder(None, (hln, self.ectx, self._codec.bd_video, self.kwargs))[0]
+
+        # if we have threads, enqueue the bs_plan to a mp queue and have everyone pull from it.
+        if self.workers is not None and len(self.workers) > 0 and len(bs_plan) > 1:
+            worker = self.workers[0]
+            queue = worker.get_input_queue()
+
+            assert len(self.workers) == 1
+            cmd = TaskCmdMsg('initialize_encoder', (hln, self.ectx, self._codec.bd_video, self.kwargs))
+            queue.put_nowait(cmd)
+            # check the worker is ready and we can dump the queue.
+            assert worker.get(timeout=1.0) is True
+
+            for dc in bs_plan:
+                queue.put_nowait(TaskCmdMsg('encode_chain', dc))
+
+            assets = []
+            queue_empty = False
+            while len(assets) < len(bs_plan) and worker.is_alive():
+                if not queue_empty:
+                    try:
+                        dc = queue.get(timeout=0.05)
+                    except Empty:
+                        queue_empty = True
+                    assets.append(PGAssetEncoderTasks.encode_chain(ctx, dc.param)[1])
+                    pbar += 1
+                    pbar.update()
+
+                try:
+                    dca = worker.get(timeout=0.1)
+                except Empty:
+                    continue
+                assets.append(dca)
+                pbar += 1
+                pbar.update()
+            if len(assets) < len(bs_plan):
+                raise RuntimeError("Worker crashed while encoding PG assets.")
+        else:
+            assets = []
+            for dc in bs_plan:
+                assets.append(PGAssetEncoderTasks.encode_chain(ctx, dc)[1])
+                pbar.n += 1
+                pbar.updae()
+
+        LogFacility.close_progress_bar(logger)
+        return sorted(assets, key=lambda dc: dc.i)
+
+    def _generate_bytestream2(self, bs_plan, assets, input_nodes: list[DSNode]) -> Epoch:
+        n_actions = len(input_nodes)
+        displaysets = []
+
+        i = next(filter(lambda n: n[1].state == PCS.CompositionState.EPOCH_START, enumerate(input_nodes)))[0]
+        cobjs_refs = []
+        final_node = self._DSN([], self.ectx.events[-1].outTC, is_palette_update=True)
+        final_node.idx = input_nodes[-1].idx
+        nodes = input_nodes + [final_node]
+
+        #Do we have time to redraw the window (with some margin)?
+        perform_wds_end = (self.ectx.events[-1].outTC.frames - self.ectx.events[-1].inTC.frames)
+        perform_wds_end = (perform_wds_end*GraphicsDecoder.FREQ / self._codec.bd_video.fps) >= np.ceil(final_node.write_duration() + 10)
+
+        last_asset = last_acquisition_displayset = None
+
+        g_assets = iter(zip(bs_plan, assets))
+        #Generate datastream according to assets
+        while i < n_actions:
+            if nodes[i].parent is not None:
+                assert i > 0
+                w_pts = self.ectx.events[nodes[i].idx-1].outTC.to_pts()
+                assert nodes[i].parent.pts() == w_pts
+
+                wds_doable = (nodes[i].parent.write_duration() + 5) < int(GraphicsDecoder.FREQ/self._codec.bd_video.fps)
+                if wds_doable and not nodes[i].parent.is_custom_dts():
+                    uds = self._codec.get_undisplay_wds_ds(w_pts, nodes[i].parent.dts(), displaysets[-1].pcs.palette_id)
+                    DSNode.apply_pts_dts(uds, nodes[i].parent.set_pts_dts_sc(uds, self._codec.buffer))
+                    logger.debug(f"Writing screen clear with WDS at PTS={self.ectx.events[nodes[i].idx-1].outTC} before an acquisition.")
+                else:
+                    uds = self._codec.get_undisplay_pds_ds(w_pts, nodes[i].parent.dts(), [x[1] for x in cobjs_refs], 255)
+                    DSNode.apply_pts_dts(uds, nodes[i].parent.set_pts_dts_sc(uds, self._codec.buffer))
+                    logger.debug(f"Writing screen clear with palette update before an acquisition at PTS={self.ectx.events[nodes[i].idx-1].outTC}")
+                displaysets.append(uds)
+
+            if nodes[i].flag == -1:
+                logger.debug(f"Skipping discarded event at PTS={nodes[i].tc_pts}")
+                i+=1
+                continue
+
+            assert nodes[i].state != PCS.CompositionState.NORMAL_CASE
+            normal_case_refresh = False
+            for k in range(i+1, n_actions+1):
+                if k < n_actions:
+                    normal_case_refresh |= (nodes[k].flag == 1)
+                if k == n_actions or nodes[k].state != PCS.CompositionState.NORMAL_CASE:
+                    break
+            assert k > i
+
+            c_pts = nodes[i].tc_pts.to_pts()
+            c_dts = nodes[i].dts()
+
+            # Acquisition: palettes are flushed
+            self._codec.flush()
+
+            if last_acquisition_displayset is not None and nodes[i].idx == nodes[i-1].idx and k-i == 1:
+                assert i in last_asset.repeats
+                # overwrite the state because we could have copied the epoch start PCS.
+                # the shifting done with c_pts is not sufficient, so we recompute the PTS and DTS unconditionally.
+                nds = last_acquisition_displayset.copy(c_pts)
+                nds.pcs.composition_state = nodes[i].state
+
+                for ods in filter(lambda o: o.flag & o.DataFlag.FIRST, nds.ods):
+                    assert self._codec.update_object_reservation(ods.object_id, c_pts, c_dts)
+                assert self._codec.update_palette_reservation(nds.pcs.palette_id, c_pts, c_dts)
+                pals = ((),)
+            else:
+                ds_plan, asset = next(g_assets)
+                pals = asset.palettes
+
+                l_ods = []
+                l_cobjs = []
+                for bitmap, cobj in zip(asset.bitmaps, asset.composition_objects):
+                    l_newods = self._codec.register_object(c_pts, c_dts, bitmap)
+                    l_ods += l_newods
+                    l_cobjs.append(CompositionObject(l_newods[0].object_id, cobj[0], cobj[1], cobj[2]))
+
+                cumulated_palette = pals[0][0] | pals[1][0]
+                pds, palette_id = self._codec.register_palette(c_pts, c_dts, cumulated_palette)
+                pcs = self._codec.register_composition(c_pts, c_dts, nodes[i].state, palette_id, False, l_cobjs)
+                wds = self._codec.get_window_definition_segment(c_pts, c_dts)
+
+                nds = DisplaySet([pcs, wds, pds] + l_ods + [END(dts=c_pts, pts=c_pts)])
+                last_acquisition_displayset = nds
+
+            DSNode.apply_pts_dts(nds, nodes[i].set_pts_dts_sc(nds, self._codec.buffer))
+            displaysets.append(nds)
+
+            logger.debug(f"Acquisition: PTS={nodes[i].tc_pts}={c_pts}, 2OBJs={asset.has_two_objs}, NC={asset.normal_case_refresh} Npalups={len(pals[0])-1} S(ODS)={sum(len(bytes(x)) for x in l_ods)}, L(ODS)={len(l_cobjs)}, n={i}->{k}, e={nodes[i].idx}->{nodes[k].idx}, comp_num={nds.pcs.composition_number}")
+
+            # This Display Set is followed by normal cases
+            if len(pals[0]) > 1:
+                last_acquisition_displayset = None
+                # Pad palette chains
+                if not normal_case_refresh:
+                    zip_length = max(map(len, pals))
+                    if len(pals[0]) < zip_length:
+                        pals[0] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[0][0].palette), max(pals[0][0].palette)+1)})]
+                    if has_two_objs and len(pals[1]) < zip_length:
+                        pals[1] += [Palette({k: PaletteEntry(16, 128, 128, 0) for k in range(min(pals[1][0].palette), max(pals[1][0].palette)+1)})]
+                pals[0] += [Palette() for _ in range(k-i - len(pals[0]))]
+                pals[1] += [Palette() for _ in range(k-i - len(pals[1]))]
+
+                for z, (p1, p2) in enumerate(zip_longest(pals[0][1:], pals[1][1:], fillvalue=Palette()), i+1):
+                    c_pts = nodes[z].tc_pts.to_pts()
+                    c_dts = nodes[z].dts()
+                    assert nodes[z].state == PCS.CompositionState.NORMAL_CASE
+
+                    cumulated_palette |= (p1 | p2)
+                    #Is there a know screen clear in the chain? then use palette screen clear here
+                    if nodes[z].parent is not None:
+                        logger.debug(f"Writing screen wipe in palette update chain at PTS={nodes[z].parent.tc_pts}={nodes[z].parent.tc_pts.to_pts()}")
+                        # z-1: refer to the undisplay timestamp of the prior event
+                        uds = self._codec.get_undisplay_pds_ds(nodes[z].parent.tc_pts.to_pts(), nodes[z].parent.dts(), cobjs, max(cumulated_palette)+1)
+                        DSNode.apply_pts_dts(uds, nodes[z].parent.set_pts_dts_sc(uds, self._codec.buffer))
+                        displaysets.append(uds)
+
+                    if nodes[z].flag == -1:
+                        logger.debug(f"Skipped discarded event at PTS={nodes[z].tc_pts}={c_pts}.")
+                        continue
+
+                    has_new_ods = nodes[z].flag == 1
+                    if has_new_ods:
+                        normal_case_refresh = nodes[z].new_mask
+                        r = self._encode_composition_objects(z, k, get_obj(nodes[z].idx, pgobjs).items(), nodes,
+                                                             has_two_objs, c_pts, normal_case_refresh, cobjs_refs)
+                        cobjs, n_pals, o_ods, cobjs_refs = r
+
+                        logger.debug(f"Normal Case: PTS={nodes[z].tc_pts}={c_pts}, NM={nodes[z].new_mask} S(ODS)={sum(len(bytes(x)) for x in o_ods)}")
+                        idxnc = nodes[z].new_mask.index(True)
+                        assert nodes[z].objects[idxnc] is not None
+                        assert len(n_pals[idxnc][0]) > 0
+                        for nz, new_p in enumerate(n_pals[idxnc], z):
+                            pals[idxnc][nz-i] = new_p
+                    ###if has_
+                    p_write = (pals[0][z-i] | pals[1][z-i])
+                    cumulated_palette |= p_write
+
+                    #Skip empty palette updates
+                    if len(p_write) == 0 and not has_new_ods and nodes[z].parent is None:
+                        logger.debug(f"Skipped empty palette update at PTS={nodes[z].tc_pts}={c_pts}.")
+                        continue
+
+                    pds, palette_id = self._codec.register_palette(c_pts, nodes[z].dts(), p_write, force=True)
+                    if has_new_ods:
+                        pcs = self._codec.register_composition(c_pts, nodes[z].dts(), nodes[z].state, pds.palette_id, False, cobjs)
+                        wds_upd = [self._codec.get_window_definition_segment(c_pts, c_dts)]
+                        ods_upd = o_ods
+                    else:
+                        pcs = self._codec.register_composition(c_pts, c_dts, nodes[z].state, palette_id, True, cobjs)
+                        wds_upd, ods_upd = [], []
+                        for cobj in cobjs:
+                            self._codec.update_object_reservation(cobj.object_id, c_pts)
+                    pds = [] if pds is None else [pds]
+                    nds = DisplaySet([pcs] + wds_upd + pds + ods_upd +[END(dts=c_dts, pts=c_pts)])
+                    DSNode.apply_pts_dts(nds, nodes[z].set_pts_dts_sc(nds, self._codec.buffer))
+                    displaysets.append(nds)
+
+                    if z+1 == k:
+                        break
+                assert z+1 == k
+
+
+    def _generate_bytestream(self, pgobjs, input_nodes: list[DSNode]) -> Epoch:
         n_actions = len(input_nodes)
         displaysets = []
         pbar = LogFacility.get_progress_bar(logger, range(n_actions))
@@ -1162,7 +1184,7 @@ class EpochEncoderEngine:
             pgobs_items = get_obj(nodes[i].idx, pgobjs).items()
             has_two_objs = 0
             for _, pgo in pgobs_items:
-                if __class__._object_is_relevant(pgo, nodes, slice(i, k)):
+                if object_is_displayed_within(pgo, nodes, slice(i, k)):
                     has_two_objs += 1
 
             # A Normal Case display update conveys the difference, so there are two objects at some point in the chain
