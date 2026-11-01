@@ -23,9 +23,11 @@ import sys
 import time
 from abc import ABC
 from contextlib import nullcontext
+from dataclasses import dataclass
 from enum import IntEnum
 from functools import partial
-from typing import ClassVar, NoReturn, Self
+from queue import Empty
+from typing import Any, Callable, ClassVar, NoReturn, Self
 
 import numpy as np
 from PIL import Image
@@ -92,6 +94,79 @@ class TC(Timecode):
         tc.drop_frame = self.drop_frame
         tc.frames = self.frames + frames
         return tc
+
+@dataclass(frozen=True, slots=True)
+class TaskCmdMsg:
+    cmd: str
+    param: Any
+    return_result: bool = True
+
+class TaskableWorker(mp.Process):
+    def __init__(self, tasks: dict[str, Callable[[Any], Any]]):
+        super().__init__(daemon=True)
+        self._q = mp.Queue()
+        self._qo = mp.Queue()
+        self._flag = mp.Value('h')
+        self._flag.value = 1
+        self._tasks = tasks
+
+    def send(self, p: tuple[str, Any]) -> None:
+        """
+        Send a command and associated arguments to the worker.
+        """
+        self._q.put(p)
+
+    def get(self, timeout: float = 5.0) -> Any:
+        """
+        Get the result from the worker.
+        """
+        return self._qo.get(timeout=timeout)
+
+    def get_input_queue(self) -> mp.Queue:
+        """
+        Get the input queue of the worker.
+        """
+        return self._q
+
+    def request_stop(self) -> None:
+        self._flag.value = 0
+
+    @staticmethod
+    def _flush_q(q: mp.Queue) -> None:
+        while True:
+            try:
+                q.get_nowait()
+            except Empty:
+                break
+
+    def flush(self) -> None:
+        self.__class__._flush_q(self._qo)
+        self.__class__._flush_q(self._q)
+
+    def run(self) -> None:
+        """
+        runner executing -task- given cmd+param as provided by the caller.
+        the task must be pre-registered at the worker instantiation
+        """
+        signal.signal(signal.SIGTERM, lambda *args: sys.exit(0))
+        # some opaque context, caller must ensure it won't be erased across calls
+        ctx = None
+        while self._flag.value:
+            try:
+                v = self._q.get(timeout=0.1)
+            except Empty:
+                continue
+            assert isinstance(v, TaskCmdMsg)
+
+            if v.cmd not in self._tasks:
+                break
+            ctx, res = self._tasks[v.cmd](ctx, v.param)
+            if v.return_result:
+                self._qo.put(res)
+        ####
+        self.flush()
+    ####
+####
 
 class _Masks(IntEnum):
     W39 = 0x7FFFFFFFFF
