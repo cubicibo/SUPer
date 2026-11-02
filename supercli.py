@@ -156,7 +156,7 @@ def main():
         if not args.palette:
             logger.warning("PES output requires --palette, forcefully enabling this flag.")
             args.palette = True
-        if args.pes_mux_offset.count(':') != 3 or not all(x.is_numeric() for x in args.pes_mux_offset.split(':')):
+        if args.pes_mux_offset.count(':') != 3 or not all(x.isnumeric() for x in args.pes_mux_offset.split(':')):
             exit_msg(f"PES mux offset is not a valid timecode, got '{args.pes_mux_offset}'.")
     elif args.pes_mux_offset != '00:00:00:00':
         logger.warning("PES mux offset provided but PES output is not specified. Ignored.")
