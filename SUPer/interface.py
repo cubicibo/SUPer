@@ -216,8 +216,15 @@ class BDNEncoder:
         time.sleep(0.2)
 
         while any(busy_flags.values()) and healthy:
-            for worker in workers:
+            for worker in workers.copy():
+                # terminate early idling epoch workers
                 if not busy_flags[worker.iid]:
+                    try:
+                        worker.send(None)
+                    except (ValueError, OSError):
+                        pass
+                    worker.join(0.5)
+                    workers.pop(workers.index(worker))
                     continue
                 if not worker.is_healthy() or not worker.is_alive():
                     healthy = False
@@ -229,7 +236,8 @@ class BDNEncoder:
 
         if healthy:
             logger.debug("All workers finished, cleaning-up.")
-
+        else:
+            logger.warning("One worker had an unrecoverable error, giving up.")
         __class__._shutdown_workers(workers, child_procs)
 
         # referenced by the registered signal function, so clear the list.
