@@ -123,8 +123,8 @@ class CompositionObject(_SlotSegmentData):
         forced_flag = bool((flags >> 6) & 0b1)
         if cropped_flag:
             crop_obj_x, crop_obj_y, crop_obj_w, crop_obj_h = struct.unpack(">HHHH", bs[8:16])
-            cls(object_id, window_id, h_pos, v_pos, cropped_flag, forced_flag,
-                crop_obj_x, crop_obj_y, crop_obj_w, crop_obj_h)
+            return cls(object_id, window_id, h_pos, v_pos, cropped_flag, forced_flag,
+                       crop_obj_x, crop_obj_y, crop_obj_w, crop_obj_h)
         return cls(object_id, window_id, h_pos, v_pos, forced_flag=forced_flag)
 
 class PCS(GraphicSegment):
