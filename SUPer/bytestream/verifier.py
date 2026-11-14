@@ -334,12 +334,13 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
 
                         #Hypothesis: the graphic controller processes one RLE command (byte) per Rd tick
                         # To avoid decode time > object write time, RLE line must be smaller or equal to width + marker.
-                        try:
-                            dec_bitmap = Brule.decode(ods_data, width=ods_width, height=ods_height, check_rle=True)
-                        except AssertionError:
-                            dec_bitmap = Brule.decode(ods_data, width=ods_width, height=ods_height, check_rle=False)
-                            logger.warning(f"ODS at {to_tc(current_pts)} has too long RLE line(s). Older decoders may have issues.")
-                            warnings += 1
+                        # SUPer can not generate such faulty bitmaps, just skip this check.
+                        #try:
+                        dec_bitmap = Brule.decode(ods_data)
+                        #except AssertionError:
+                        #    dec_bitmap = Brule.decode(ods_data)
+                        #    logger.warning(f"ODS at {to_tc(current_pts)} has too long RLE line(s). Older decoders may have issues.")
+                        #    warnings += 1
 
                         for pe in np.unique(dec_bitmap):
                             if pe != 0xFF and pe not in pals[ds.pcs.palette_id]:
