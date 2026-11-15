@@ -246,10 +246,64 @@ class BuiltinQuantizer(Enum):
         return enum
 ####
 
+def _nearest_kept(kept: np.ndarray, rest: np.ndarray) -> np.ndarray:
+    """
+    Take the distance of a chunk of unfittable sequences to the references (kept)
+    and return the best fit for each
+    kept: (K, N, 4) float64
+    rest: (R, N, 4) float64
+    """
+    n_frames = kept.shape[1]
+    err = np.zeros((len(rest), len(kept)))
+    zeros = np.zeros((len(rest), len(kept)))
+    for n in range(n_frames):
+        a, b = rest[:, n], kept[:, n]
+        d2 = (a * a).sum(1)[:, None] + (b * b).sum(1)[None, :] - 2.0 * (a @ b.T)
+        np.maximum(d2, 0, out=d2)
+        err += np.sqrt(d2)
+        zeros += (d2 == 0)
+    return (err * (1 + 1 / (1 + zeros))).argmin(axis=1)
+ 
+ 
+def solve_sequences(sequences: np.ndarray, colors: int, chunk: int = 4096) -> tuple[np.ndarray, np.ndarray]:
+    """
+    :param sequences: (H, W, N, 4) uint8, the RGBA colour of every pixel in each of the N frames.
+    :param colors: number of sequences (palette entries) to keep.
+    :return: bitmap (H, W) uint8 and kept sequences (<=colors, N, 4) uint8.
+    """
+    h, w, n, c = sequences.shape
+    flat = np.ascontiguousarray(sequences.reshape(h * w, n * c))
+    keys = flat.view(np.dtype((np.void, n * c))).ravel()
+    _, first, inverse, counts = np.unique(keys, return_index=True, return_inverse=True, return_counts=True)
+ 
+    # most common first; ties keep first-occurrence (raster) order, as the original dict did
+    order = np.lexsort((first, -counts))
+    rank = np.empty_like(order)
+    rank[order] = np.arange(len(order))
+    uniq = flat[first[order]].reshape(-1, n, c)
+ 
+    lut = np.arange(len(uniq))
+    if len(uniq) > colors:
+        kept = uniq[:colors].astype(np.float64)
+        rest = uniq[colors:].astype(np.float64)
+        for s in range(0, len(rest), chunk):  # chunking bounds memory to chunk*colors floats
+            lut[colors + s:colors + s + chunk] = _nearest_kept(kept, rest[s:s + chunk])
+ 
+    bitmap = lut[rank[inverse.ravel()]].reshape(h, w).astype(np.uint8)
+    return bitmap, uniq[:colors].astype(np.uint8)
+
 class PaletteSequenceEffect:
     def __init__(self, quantizer: QuantizerWrap, matrix: Matrix) -> None:
         self.quantizer = quantizer
         self.matrix = matrix
+
+    def quantize_and_stack(self, events: list[Image.Image], colors: int, **kwargs):
+        sequences = np.zeros((len(events), *events[0].size[::-1], 4), np.uint8)
+        for ke, event in enumerate(events):
+            clut, img = self.quantizer.quantize(event, colors, single_bitmap=False, **kwargs)
+            sequences[ke, :, :, :] = clut[img]
+        sequences = np.moveaxis(sequences, 0, 2)
+        return sequences
 
     def solve_sequence_fast(self, events: list[Image.Image], colors: int, **kwargs):
         """
@@ -260,16 +314,22 @@ class PaletteSequenceEffect:
 
         :return: bitmap, sequence of palette update to obtain the said input animation.
         """
-
         if 1 == len(events):
             clut, img = self.quantizer.quantize(events[0], colors, single_bitmap=True, **kwargs)
             return img.copy(), np.expand_dims(clut, 1).copy()
 
-        sequences = np.zeros((len(events), *events[0].size[::-1], 4), np.uint8)
-        for ke, event in enumerate(events):
-            clut, img = self.quantizer.quantize(event, colors, single_bitmap=False, **kwargs)
-            sequences[ke, :, :, :] = clut[img]
-        sequences = np.moveaxis(sequences, 0, 2)
+        sequences = self.quantize_and_stack(events, colors, **kwargs)        
+        return solve_sequences(sequences, colors)
+
+    def solve_sequence_slow(self, events: list[Image.Image], colors: int, **kwargs):
+        """
+        Reference implementation for debugging.
+        """
+        if 1 == len(events):
+            clut, img = self.quantizer.quantize(events[0], colors, single_bitmap=True, **kwargs)
+            return img.copy(), np.expand_dims(clut, 1).copy()
+
+        sequences = self.quantize_and_stack(events, colors, **kwargs)        
 
         #catalog the sequences
         seq_occ: dict[int, tuple[int, np.ndarray]] = {}
@@ -392,4 +452,3 @@ class PaletteSequenceEffect:
             palettes.append(new_palette)
         return palettes
 ####
-
