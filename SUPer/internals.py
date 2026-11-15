@@ -101,6 +101,7 @@ class TaskCmdMsg:
     cmd: str
     param: Any
     return_result: bool = True
+    no_context: bool = False
 
 class TaskableWorker(mp.Process):
     def __init__(self, tasks: dict[str, Callable[[Any], Any]]):
@@ -161,7 +162,10 @@ class TaskableWorker(mp.Process):
 
             if v.cmd not in self._tasks:
                 break
-            ctx, res = self._tasks[v.cmd](ctx, v.param)
+            if v.no_context:
+                res = self._tasks[v.cmd](v.param)
+            else:
+                ctx, res = self._tasks[v.cmd](ctx, v.param)
             if v.return_result:
                 self._qo.put(res)
         ####

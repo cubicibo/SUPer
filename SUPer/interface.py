@@ -37,7 +37,7 @@ from .encoder.codecctx import PGStreamCtx
 from .encoder.engine import EpochEncoderEngine
 from .encoder.epochctx import EpochData, EpochFinder, EventsPreprocessor, LayoutMode
 from .encoder.imgproc import SSIMPW, BuiltinQuantizer
-from .internals import TC, LogFacility, TaskableWorker, _setup_mt_env
+from .internals import TC, LogFacility, TaskableWorker, TaskCmdMsg, _setup_mt_env
 
 logger = LogFacility.get_logger('SUPer')
 
@@ -66,13 +66,8 @@ class BDNEncoder:
 
         str_kwa = ':'.join([f"{k}={v}" for k, v in self.kwargs.items() if not isinstance(v, dict)])
 
-        if self.kwargs.get('quantize_lib', None) is None:
-            self.kwargs['quantize_lib'] = BuiltinQuantizer.Qtzr
-        else:
-            for v, n, qtz in BuiltinQuantizer.get_all():
-                if self.kwargs['quantize_lib'] == qtz or v == self.kwargs['quantize_lib']:
-                    self.kwargs['quantize_lib'] = qtz
-            assert not isinstance(self.kwargs['quantize_lib'], int)
+        libs_params = self.kwargs.get('ini_opts', {})
+        self.kwargs = _setup_quantizer(self.kwargs, libs_params.get('quant', {}))
 
         if self.kwargs.get('log_to_file', False) < 0 and log_filename:
             LogFacility.add_file_report(logger, str(log_filename) + ".txt")
@@ -162,8 +157,10 @@ class BDNEncoder:
         from .encoder.eventdetect import ObjectDetectorTasks
         from .encoder.internals import PGAssetEncoderTasks
 
-        return {n.__name__: n for n in chain(ObjectDetectorTasks.get_tasks(),
-                                             PGAssetEncoderTasks.get_tasks())}
+        tasks = {n.__name__: n for n in chain(ObjectDetectorTasks.get_tasks(),
+                                              PGAssetEncoderTasks.get_tasks())}
+        tasks |= {'init_backends': _cfg_worker}
+        return tasks
 
     def _convert_mt(self, bd_video: BDVideo) -> list[Epoch]:
         BDNEpochWorker.reset_module()
@@ -387,6 +384,33 @@ class BDNEncoder:
     ####def
 ####
 
+def _setup_quantizer(kw_cfg, quant_kwcfg, silent: bool = False):
+    if kw_cfg.get('quantize_lib', None) is None:
+        kw_cfg['quantize_lib'] = BuiltinQuantizer.Qtzr
+    else:
+        for v, n, qtz in BuiltinQuantizer.get_all():
+            if kw_cfg['quantize_lib'] == qtz or v == kw_cfg['quantize_lib']:
+                kw_cfg['quantize_lib'] = qtz
+        assert not isinstance(kw_cfg['quantize_lib'], int)
+
+    requested_qtz = kw_cfg['quantize_lib']
+    if requested_qtz == BuiltinQuantizer.LIQ and not BuiltinQuantizer.LIQ.value.configure(quant_kwcfg):
+        kw_cfg['quantize_lib'] = BuiltinQuantizer.Qtzr
+        lf = logger.debug if silent else logger.warning
+        lf("Failed to configure PNG/ImageQuant, using Qtzr as a fallback.")
+    return kw_cfg
+
+def _cfg_worker(kwg):
+    libs_params = kwg.get('ini_opts', {})
+    logger.debug(f"INI parameters: {libs_params}")
+
+    kwg = _setup_quantizer(kwg, libs_params.get('quant', {}), silent=True)
+
+    if (sup_params := libs_params.get('super_cfg', None)) is not None:
+        SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
+    logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
+    return kwg
+
 class EpochEncode:
     def __init__(self, pg_stream_ctx: PGStreamCtx, epoch_data: EpochData, kwargs: dict[str, Any]) -> None:
         super().__init__()
@@ -454,16 +478,7 @@ class BDNEpochWorker(mp.Process):
             LogFacility.set_file_log(logger, logfile, file_logging_level)
             LogFacility.set_logger_level(logger.name, file_logging_level)
 
-        libs_params = self.kwargs.get('ini_opts', {})
-        logger.debug(f"INI parameters: {libs_params}")
-        requested_qtz = self.kwargs['quantize_lib']
-        if requested_qtz == BuiltinQuantizer.LIQ and not BuiltinQuantizer.LIQ.value.configure(libs_params.get('quant', {})):
-            self.kwargs['quantize_lib'] = BuiltinQuantizer.Qtzr
-            logger.warning("Failed to configure PNG/ImageQuant, using Qtzr as a fallback.")
-
-        if (sup_params := libs_params.get('super_cfg', None)) is not None:
-            SSIMPW.use_gpu = bool(int(sup_params.get('use_gpu', True)))
-        logger.debug(f"OpenCL enabled: {SSIMPW.use_gpu}.")
+        self.kwargs = _cfg_worker(self.kwargs)
     ####
 
     def is_available(self) -> bool:
@@ -499,17 +514,18 @@ class BDNEpochWorker(mp.Process):
             tb = next_tb
         logger.error(f"Encoder {self._prefix} died: {type(e).__name__}@{tb.tb_frame.f_code.co_name}::L{tb.tb_lineno}" + (f" - {e}." if len(e.args) else "."))
 
-    def _terminate_helper(self, workers: list[TaskableWorker]) -> None:
-        for det in workers:
-            det.request_stop()
-        for det in workers:
-            det.join(1.0)
-            if det.is_alive():
-                det.terminate()
-                det.flush()
-                det.join(0.5)
+    def _terminate_helper(self, workers: list[TaskableWorker], cancel_join: bool = True) -> None:
+        for w in workers:
+            w.request_stop()
+        for w in workers:
+            w.join(1.0)
+            if w.is_alive():
+                w.terminate()
+                w.flush()
+                w.join(0.5)
         workers.clear()
-        self._q_tx.cancel_join_thread()
+        if cancel_join:
+            self._q_tx.cancel_join_thread()
 
     def run(self) -> None:
         workers = [TaskableWorker(cfg) for cfg in self.workers_cfg]
@@ -523,8 +539,20 @@ class BDNEpochWorker(mp.Process):
             pg_stream_ctx = PGStreamCtx(self.video_fmt)
 
             if workers:
-                for d in workers:
-                    self._q_tx.put(d.pid)
+                cmd = TaskCmdMsg('init_backends', self.kwargs, no_context=True)
+                for w in workers.copy():
+                    w.send(cmd)
+                    self._q_tx.put(w.pid)                    
+                    try:
+                        wcfg = w.get(timeout=30.0)
+                    except Empty:
+                        self._available.value = -1
+                        raise RuntimeError("Companion worker did not start.")
+                    assert isinstance(wcfg, dict)
+                    if wcfg['quantize_lib'] != self.kwargs['quantize_lib']:
+                        logger.warning(f"{self._prefix}: companion worker could not load {self.kwargs['quantize_lib'].name}, encoding assets without it.")
+                        self._terminate_helper([w], cancel_join=False)
+                        workers.remove(w)
 
             self._available.value = 1
             while True:
