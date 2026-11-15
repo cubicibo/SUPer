@@ -26,12 +26,21 @@ from ..bytestream.pgstreams import DisplaySet, Epoch
 from ..bytestream.segments import END, PCS, CompositionObject
 from ..display.palette import Palette, PaletteEntry
 from ..geometry import Box, Shape
-from ..internals import TaskCmdMsg, TaskableWorker, TC, GraphicsDecoder, LogFacility, _classproperty
+from ..internals import TC, GraphicsDecoder, LogFacility, TaskableWorker, TaskCmdMsg, _classproperty
 from .codecctx import PGEpochContext, PGObjectBuffer, PGStreamCtx
 from .epochctx import EpochData
 from .eventdetect import ProspectiveObject, WindowsObjectDetector
 from .imgproc import PaletteSequenceEffect
-from .internals import DisplayChain, DSNode, NodeView, PGAsset, PGAssetEncoderTasks, PGAssetObject, PGKeptObject, object_is_displayed_within
+from .internals import (
+    DisplayChain,
+    DSNode,
+    NodeView,
+    PGAsset,
+    PGAssetEncoderTasks,
+    PGAssetObject,
+    PGKeptObject,
+    object_is_displayed_within,
+)
 
 logger = LogFacility.get_logger('SUPer')
 

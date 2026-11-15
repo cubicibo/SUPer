@@ -20,12 +20,12 @@ import multiprocessing as mp
 import signal
 import sys
 import time
-from collections.abc import Hashable
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from itertools import chain, product
 from pathlib import Path
 from queue import Empty
-from typing import Any, Callable, Self
+from typing import Any, Self
 
 import psutil
 
@@ -37,7 +37,7 @@ from .encoder.codecctx import PGStreamCtx
 from .encoder.engine import EpochEncoderEngine
 from .encoder.epochctx import EpochData, EpochFinder, EventsPreprocessor, LayoutMode
 from .encoder.imgproc import SSIMPW, BuiltinQuantizer
-from .internals import TaskableWorker, TC, LogFacility, _setup_mt_env
+from .internals import TC, LogFacility, TaskableWorker, _setup_mt_env
 
 logger = LogFacility.get_logger('SUPer')
 

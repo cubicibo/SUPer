@@ -22,12 +22,13 @@ import signal
 import sys
 import time
 from abc import ABC
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from enum import IntEnum
 from functools import partial
 from queue import Empty
-from typing import Any, Callable, ClassVar, NoReturn, Self
+from typing import Any, ClassVar, NoReturn, Self
 
 import numpy as np
 from PIL import Image

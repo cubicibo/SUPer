@@ -22,20 +22,18 @@ from dataclasses import dataclass, field
 from typing import Any, Self
 
 import numpy as np
-
 from PIL import Image
 
 from ..bytestream.pgstreams import DisplaySet
-from ..bytestream.segments import PCS, CompositionObject
-from ..display.palette import Palette, PaletteEntry
+from ..bytestream.segments import PCS
 from ..display.bdvideo import BDVideo
+from ..display.palette import Palette, PaletteEntry
 from ..geometry import Box, Shape
 from ..internals import TC, GraphicsDecoder, LogFacility, _classproperty
 from .codecctx import PGObjectBuffer
 from .epochctx import EpochEvent
 from .eventdetect import ProspectiveObject
 from .imgproc import PaletteSequenceEffect
-
 
 logger = LogFacility.get_logger('SUPer')
 

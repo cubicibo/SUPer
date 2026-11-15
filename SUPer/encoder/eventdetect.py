@@ -28,7 +28,7 @@ from PIL import Image
 
 from ..display.bdvideo import Format
 from ..geometry import Box
-from ..internals import LogFacility, TaskCmdMsg, TaskableWorker
+from ..internals import LogFacility, TaskableWorker, TaskCmdMsg
 from .epochctx import EpochEvent, PaddingEngine
 from .imgproc import SSIMPW
 
