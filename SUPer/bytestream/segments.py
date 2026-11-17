@@ -45,7 +45,7 @@ class _SlotSegmentData:
         slot_str = ''
         for k, v in self._get_slots_and_vals().items():
             slot_str += f"{k}={v}, "
-        return f"{self.__class__.__name__}({slot_str[:-2]})"        
+        return f"{self.__class__.__name__}({slot_str[:-2]})"
 
     def copy(self) -> object:
         data = self._get_slots_and_vals()
@@ -53,6 +53,11 @@ class _SlotSegmentData:
             if (f_copy := getattr(v, 'copy', None)) and callable(f_copy):
                 data[k] = f_copy()
         return self.__class__(**data)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, self.__class__):
+            return NotImplemented
+        return self._get_slots_and_vals() == other._get_slots_and_vals()
 
 class GraphicSegment(ABC, _SlotSegmentData):
     __slots__ = 'pts', 'dts'

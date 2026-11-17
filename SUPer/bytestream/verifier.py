@@ -215,7 +215,7 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
             compliant = False
 
         epoch_ctx = PGEpochContext(None, lwdb)
-
+        last_composition_objects = []
         last_ds = []
         for kd, ds in enumerate(epoch.ds):
             if not test_diplayset(ds):
@@ -263,6 +263,16 @@ def is_compliant(epochs: list[Epoch], fps: float) -> bool:
                     if not epoch_ctx.update_palette_reservation(seg.palette_id, seg.pts, seg.dts) and len(seg.composition_objects) and len(ds.pds) == 0:
                         logger.error("Cannot decode to the specified palette, it is taken by a preceding display set.")
                         compliant = False
+
+                    if seg.palette_update:
+                        n_cobjs = len(seg.composition_objects)
+                        if n_cobjs == 0 or n_cobjs != len(last_composition_objects) or\
+                            seg.composition_objects[0] != last_composition_objects[0] or\
+                            (n_cobjs == 2 and seg.composition_objects[1] != last_composition_objects[1]):
+                            logger.warning(f"Composition objects of a palette update DS differ from the last plane composition at {to_tc(current_pts)}.")
+                            warnings += 1
+                    else:
+                        last_composition_objects = seg.composition_objects
 
                 elif seg.type == PGSegmentType.WDS:
                     for w in seg.windows:
