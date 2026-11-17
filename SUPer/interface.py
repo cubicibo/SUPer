@@ -107,7 +107,7 @@ class BDNEncoder:
     def _adjust_thread_count(self) -> None:
         n_threads = self._threads
         if (n_threads_auto := isinstance(n_threads, str)): # auto
-            n_threads = psutil.cpu_count(logical=False) or 1
+            n_threads = int(0.8*psutil.cpu_count(logical=False) + 0.4) or 1
 
         if n_threads_auto:
             logger.info(f"Using {n_threads} thread(s).")
@@ -172,12 +172,15 @@ class BDNEncoder:
         worker_tasks = (__class__._get_subtasks(), ) * 1
         workers = [BDNEpochWorker(bd_video, self.kwargs, worker_tasks=worker_tasks) for _ in range(n_threads)]
 
-        _setup_mt_env(workers, True)
+        _setup_mt_env(workers, False)
         logger.debug("Registered signal handlers.")
 
         logger.debug("Starting workers...")
         for worker in workers:
             worker.start()
+
+        pbar = LogFacility.get_progress_bar(logger, self.bdn.events, log_level=21)
+        pbar.set_description("Encoding", True)
 
         while not all(worker.is_available() for worker in workers):
             time.sleep(0.2)
@@ -203,6 +206,7 @@ class BDNEncoder:
                 if (epoch_data := free_worker.get()) is not None:
                     ep_timeline[epoch_data[1]] = epoch_data[0]
                     busy_flags[free_worker.iid] = False
+                    pbar.update(len(epochs_ctx[epoch_data[1]].events))
                 if busy_flags[free_worker.iid] is False:
                     group_id, group_data = next(g_epochs)
                     if group_data is not None:
@@ -237,8 +241,11 @@ class BDNEncoder:
                 if worker.is_available() and (epoch_data := worker.get()) is not None:
                     ep_timeline[epoch_data[1]] = epoch_data[0]
                     busy_flags[worker.iid] = False
+                    pbar.update(len(epochs_ctx[epoch_data[1]].events))
             time.sleep(0.05)
 
+        pbar.update(1)
+        LogFacility.close_progress_bar(logger)
         if healthy:
             logger.debug("All workers finished, cleaning-up.")
         else:

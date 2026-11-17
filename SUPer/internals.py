@@ -315,13 +315,17 @@ class LogFacility:
             cls._logpbar[logger.name] = None
 
     @classmethod
-    def get_progress_bar(cls, logger: logging.Logger, tot: ...) -> tqdm | None:
+    def get_progress_bar(cls,
+        logger: logging.Logger,
+        total: ...,
+        log_level: int = logging.INFO,
+    ) -> tqdm | None:
         if cls._logger.get(logger.name, None) is None:
             return None
         if cls._logpbar.get(logger.name, None) is not None:
             return cls._logpbar[logger.name]
-        if logger.getEffectiveLevel() >= logging.INFO and not cls._tqdm_off:
-            pbar = tqdm(tot)
+        if logger.getEffectiveLevel() >= max(log_level, logging.INFO) and not cls._tqdm_off:
+            pbar = tqdm(total)
         else:
             pbar = nullcontext()
             pbar.n = 0
