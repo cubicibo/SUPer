@@ -16,7 +16,7 @@ You should have received a copy of the GNU General Public License
 along with SUPer.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from itertools import chain, starmap, zip_longest
+from itertools import chain, zip_longest
 from queue import Empty
 
 import numpy as np
@@ -89,27 +89,28 @@ class EpochEncoderEngine:
         nodes = self.create_displaysets_nodes([objs.copy() for objs in pgobjs])
         return pgobjs, nodes, nested_compositions
 
-    # def decide_buffer_slots(self, pgobjs) -> tuple[Shape, ...]:
-    #     primary_slots = [None] * len(pgobjs)
-    #     slots_windows = [None] * len(pgobjs)
+    @staticmethod
+    def get_buffer_slots(pgobjs: list[list[ProspectiveObject]]) -> list[Shape]:
+        """
+        Compute slots for the object, but only return the primary ones for now.
+        """
+        primary_slots = [None] * len(pgobjs)
+        slots_windows = [None] * len(pgobjs)
 
-    #     #slot_per_object: dict[ProspectiveObject, Shape] = {}
-    #     for wid, window_objects in enumerate(pgobjs):
-    #         slots_in_window = {obj: Shape.union(*[b.shape for b in obj.boxes]) for obj in window_objects}
-    #         #slot_per_object |= slots_in_window
+        slot_per_object: dict[ProspectiveObject, Shape] = {}
+        for wid, window_objects in enumerate(pgobjs):
+            slots_in_window = {obj: Shape.union(Shape(8, 8), *[b.shape for b in obj.boxes]) for obj in window_objects}
+            slot_per_object |= slots_in_window
 
-    #         slots_windows[wid] = slots_in_window
-    #         primary_slots[wid] = Shape.union(*slots_in_window.values())
-    #     return tuple(primary_slots)
+            slots_windows[wid] = slots_in_window
+            primary_slots[wid] = Shape.union(*slots_in_window.values())
+        return list(primary_slots)
 
     def plan(self, ctx: tuple[...]) -> tuple[...]:
         pgobjs, nodes, _ = ctx
 
-        #slots = self.decide_buffer_slots(pgobjs)
-        #shapes = [slots for _ in range(len(nodes))]
-
         #Plan datastream
-        buffer_plan = self.shape_stream(nodes)
+        buffer_plan = self.shape_stream(nodes, pgobjs)
 
         #Set-up datastructures for bytestream generation
         self.set_pgobjects_extended_visibilities(nodes)
@@ -155,11 +156,20 @@ class EpochEncoderEngine:
 
     def shape_stream(self,
          nodes: list[DSNode],
+         pgobjs: list[list[ProspectiveObject]],
     ) -> PGObjectBuffer:
         allow_normal_case = self.kwargs.get('allow_normal_case', False)
         allow_overlaps = self.kwargs.get('allow_overlaps', False)
 
-        absolutes, margins, bslots, cboxes = self.find_acqs(nodes)
+        def boxes_at(node: DSNode, length: int) -> list[Box | None]:
+            """Box of each window's object at this node; None for an empty window or a palette update."""
+            if node.is_palette_update:
+                return [None] * length
+            return [pgo.get_bbox_at(node.idx) if pgo is not None else None for pgo in node.objects]
+
+        slots = self.__class__.get_buffer_slots(pgobjs)
+        slots = [slots.copy() for _ in nodes]
+        absolutes, margins = self.find_acqs(nodes, slots)
 
         nodes[0].state = PCS.CompositionState.EPOCH_START
         drought = 0
@@ -168,20 +178,22 @@ class EpochEncoderEngine:
         dthresh = self.kwargs.get('dquality_factor', 0.035)
         refresh_rate = max(0, min(self.kwargs.get('refresh_rate', 1.0), 1.0))
 
-        positions = cboxes[0].copy()
+        length_mgt = len(pgobjs)
+        positions = boxes_at(nodes[0], length=length_mgt)
+
         k = last_acq = 0
         prev_event_id = 0
         for k, (forced, margin, node) in enumerate(zip(absolutes[1:], margins[1:], nodes[1:]), 1):
             frame_step = node.idx - prev_event_id
             prev_event_id = node.idx
+            node_boxes = boxes_at(node, length=length_mgt)
             if not node.is_palette_update:
-                for oix in range(len(node.objects)):
-                    box_assets = list(filter(lambda x: x is not None, [positions[oix], cboxes[k][oix]]))
-                    if len(box_assets) > 0:
+                for oix, cbox in enumerate(node_boxes):
+                    box_assets = list(filter(lambda x: x is not None, [positions[oix], cbox]))
+                    if box_assets:
                         cont = Box.union(*box_assets)
-
-                        if cont.dx > bslots[oix].w or cont.dy > bslots[oix].h:
-                            assert cboxes[k][oix] is not None
+                        if cont.dx > node.slots[oix].w or cont.dy > node.slots[oix].h:
+                            assert cbox is not None
                             node.state = PCS.CompositionState.ACQUISITION
                             absolutes[k] = True
                             node.new_mask[oix] = True #For possible Normal case update
@@ -205,7 +217,7 @@ class EpochEncoderEngine:
             if node.state > 0:
                 for zk in range(last_acq, k):
                     nodes[zk].pos = positions.copy()
-                positions = cboxes[k].copy()
+                positions = node_boxes.copy()
                 last_acq = k
         for zk in range(last_acq, k+1):
             nodes[zk].pos = positions
@@ -1188,47 +1200,20 @@ class EpochEncoderEngine:
 
     def find_acqs(self,
         nodes: list[DSNode],
-        #shapes: list[tuple[Shape, ...]]
+        shapes: list[list[Shape, ...]],
     ) -> tuple[list[bool], list[float]]:
         """
         Assign the decided slot to each node, and make a first rough estimate
         of the decoding time we have at each node (dtl)
-        also returns the list of mandatory object definition events for display consistency.
         """
         dtl = np.zeros((len(nodes)), dtype=float)
-        absolutes = [False] * len(nodes)
-
-        chain_boxes = []
-        min_boxes = 8*np.ones((len(self.ectx.windows), 2), np.int32)
-
-        running_bbox = [None, None]
-        for k, node in enumerate(nodes):
-            boxes = [None] * len(self.ectx.windows)
-            #NC (screen wipes at this stage of the encoding process) don't need to know
-            if node.is_palette_update is False:
-                for oix, obj in filter(lambda x: x[1] is not None, enumerate(node.objects)):
-                    if node.objects[oix].is_visible(node.idx):
-                        bbox = node.objects[oix].get_bbox_at(node.idx)
-                        min_boxes[oix] = np.max((min_boxes[oix], (bbox.dy, bbox.dx)), axis=0)
-                        running_bbox[oix] = bbox
-                    # impossible at this stage of the encode process, an object is always visible on its first frame.
-                    # however after "shift_forward_overlay" is executed this may no longer be true.
-                    elif node.objects[oix].is_active(node.idx):
-                        assert (k > 0) and (running_bbox[oix] is not None)
-                        bbox = running_bbox[oix]
-                    else:
-                        raise RuntimeError("Critical encoding error, getting bbox of object that is neither visible or active.")
-                    boxes[oix] = bbox
-            ####!is_palette_update
-            chain_boxes.append(boxes)
-            absolutes[k] = any(node.new_mask)
+        absolutes = [any(node.new_mask) for node in nodes]
 
         write_duration = nodes[0].write_duration()
-        min_boxes = list(starmap(Shape, min_boxes))
         prev_node_pts = 0
         for k, node in enumerate(nodes):
             if not node.is_palette_update:
-                node.slots = min_boxes.copy()
+                node.slots = shapes[k]
             if k == 0:
                 prev_pts = prev_dts = -np.inf
             else:
@@ -1238,7 +1223,7 @@ class EpochEncoderEngine:
             is_valid = (node.dts() > prev_dts) and (node.pts() - prev_pts > write_duration)
             dtl[k] = ((node.dts() - prev_dts)/margin) if (is_valid and k > 0) else (-1 + 2*int(k==0))
             prev_node_pts = node.tc_pts.to_pts()
-        return absolutes, dtl, min_boxes, chain_boxes
+        return absolutes, dtl
     ####
 
     def create_displaysets_nodes(self, pgobjs_proc: list[list[ProspectiveObject]]) -> list[DSNode]:
